@@ -23,7 +23,7 @@ def run_aider(
     target_model = model or get_model_name("aider")
     no_auto_commits = aider_cfg.get("no_auto_commits", True)
 
-    cmd = ["aider", "--model", target_model]
+    cmd = ["aider", "--model", target_model, "--yes-always"]
 
     if no_auto_commits:
         cmd.append("--no-auto-commits")
