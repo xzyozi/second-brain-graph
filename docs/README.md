@@ -32,6 +32,7 @@ SBOSの仕様書は、役割ごとに以下の文書コード体系で分類さ�
 
 ### 2.2 セットアップ・環境ガイド (docs/setup/)
 - **[environment_setup_guide.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/setup/environment_setup_guide.md)**: 環境構築総合ガイド
+- **[oss_license_policy.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/setup/oss_license_policy.md)**: OSSライセンス・モデル利用規約管理ポリシー
 - **[dependency_management.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/setup/dependency_management.md)**: uvによる依存関係管理仕様
 - **[toml_project_setup.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/setup/toml_project_setup.md)**: pyproject.toml / ruff / mypy 設定ガイド
 
