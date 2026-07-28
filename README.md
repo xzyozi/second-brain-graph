@@ -106,3 +106,4 @@ uv run python tools/orchestrator_graph.py --auto
 - **[環境構築仕様書 (SBOS-ENV-001)](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/04_%E7%222%E6%A7%87%E7%AF%81%E4%BB%95%E6%A7%98%E6%9B%B8_SBOS-ENV-001.md)**: パッケージ管理および環境変数規定
 - **[運用詳細設計書 (SBOS-OP-001)](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/05_%E9%81%8B%E7%94%A8%E8%A1%B3%E7%B4%B0%E8%A8%AD%E8%A8%88%E6%9B%B8_SBOS-OP-001.md)**: 日次バッチと監査ログ運用
 - **[複数リポジトリ差分設計書 (SBOS-MULTI-001)](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/06_%E8%A4%87%E6%95%B0%E3%83%AA%E3%83%9D%E3%82%B8%E3%83%88%E3%83%AA_%E5%B7%AE%E5%88%86%E8%A8%AD%E8%A8%88%E6%9B%B8_SBOS-MULTI-001.md)**: 母艦×衛星のGit隔離と中央台帳仕様
+- **[課題・矛盾点一覧 (SBOS-PM-005)](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/07_%E8%AA%B2%E9%A1%8C%E7%9F%9B%E7%9B%BE%E4%B8%80%E8%A6%A7_SBOS-PM-005.md)**: 仕様書間の矛盾解消・課題トラッキングマトリクス
