@@ -223,4 +223,6 @@ __marimo__/
 /tools/bin/
 /tools/reviewdog/
 /tools/.cache/*
+/tmp/
+
 
