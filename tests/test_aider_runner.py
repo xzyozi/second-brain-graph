@@ -40,4 +40,5 @@ def test_run_aider_mock(mock_run) -> None:
     assert cmd[0] == "aider"
     assert "--model" in cmd
     assert "ollama/gemma-4-py_coder:latest" in cmd
+    assert "--yes-always" in cmd
     assert "--no-auto-commits" in cmd
