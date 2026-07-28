@@ -3,32 +3,36 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-# プロジェクト固有の情報（ここだけ書き換えればOK）
-name = "my-awesome-project"  
+name = "second-brain-graph"
 version = "0.1.0"
-description = "A modern Python project template"
+description = "LLMマルチエージェント × ナレッジグラフ統括・自律タスク実行基盤"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 
-# 必須のパッケージ
+# 必須パッケージ (SBOS-ENV-001 仕様準拠)
 dependencies = [
-    # 例: "requests>=2.31.0",
-    # 例: "pydantic>=2.0.0"
+    "langgraph>=0.1.0",
+    "litellm>=1.30.0",
+    "aider-chat>=0.30.0",
+    "pydantic>=2.0.0",
+    "pytest-json-report>=1.5.0",
 ]
 
 [project.optional-dependencies]
-# 開発・テスト環境専用のパッケージ（共通デファクトスタンダード）
+# 開発・テスト環境専用パッケージ
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.4.0",
-    "mypy>=1.0.0"
+    "mypy>=1.0.0",
 ]
 
 # ==========================================
 # Linter & Formatter (Ruff)
 # ==========================================
 [tool.ruff]
-line-length = 120
+line-length = 100
+target-version = "py310"
 exclude = [
     ".git",
     "__pycache__",
@@ -36,24 +40,22 @@ exclude = [
     "dist",
     "venv",
     ".venv",
-    "htmlcov"
+    "tools/.cache",
+    "projects"
 ]
 
 [tool.ruff.lint]
-# E: pycodestyle errors, F: Pyflakes, W: pycodestyle warnings, I: isort
-select = ["E", "F", "W", "I"]
-ignore = []
+select = ["E", "F", "W", "I", "N", "B"]
+ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-# 自分のプロジェクトのパッケージ名を指定（自動ソート時にローカルパッケージとして認識させるため）
-known-first-party = ["src", "app"]
+known-first-party = ["tools"]
 
 # ==========================================
 # Type Checker (Mypy)
 # ==========================================
 [tool.mypy]
 python_version = "3.10"
-# 基本的に厳しめの設定（Strict）にしておくのがモダンな手法
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -61,7 +63,6 @@ disallow_untyped_defs = true
 check_untyped_defs = true
 no_implicit_optional = true
 strict_optional = true
-# サードパーティ製ライブラリの型定義が見つからない際のエラーを抑制
 ignore_missing_imports = true
 
 # ==========================================
