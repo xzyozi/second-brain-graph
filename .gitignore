@@ -224,5 +224,7 @@ __marimo__/
 /tools/reviewdog/
 /tools/.cache/*
 /tmp/
+.aider*
+
 
 
