@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Second Brain System Rules
+/projects/*
+!/projects/.project-registry.json
+/tools/bin/
+/tools/reviewdog/
+/tools/.cache/*
+
