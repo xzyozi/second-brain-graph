@@ -4,10 +4,10 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                      |
-| 版数     | Rev.4.4（CLIエントリポイント仕様明記・完全整合版） |
-| 改訂日   | 2026年7月28日                                                     |
+| 版数     | Rev.4.5（補助関数契約・Aider API実物整合版） |
+| 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.3）、SBOS-MULTI-001 Rev.2.1、SBOS-OP-001 Rev.4.1、SBOS-OSS-001/002 |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.4）、SBOS-MULTI-001 Rev.2.2、SBOS-OP-001 Rev.4.2、SBOS-ENV-001 Rev.4.3、SBOS-PM-005 Rev.1.9 |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
 
 ---
@@ -110,22 +110,41 @@ def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool 
 
 ```python
 #!/usr/bin/env python3
-"""tools/aider_runner.py - Aiderサブプロセス起動 (F1修正済み)"""
+"""tools/aider_runner.py - Aider CLI サブプロセス制御エンジン (実物整合)"""
 import os, subprocess, logging
-from pathlib import Path
+from typing import List, Optional
+from tools.config_loader import get_model_name, load_model_config
 
-def run_aider(project_path: Path, message: str, model: str = "ollama/qwen2.5-coder:7b-16k", timeout: int = 600) -> str:
+logger = logging.getLogger("aider_runner")
+
+def run_aider(
+    instruction: str,
+    target_files: List[str],
+    model: Optional[str] = None,
+    cwd: Optional[str] = None,
+) -> bool:
+    """Aider CLI を非対話バッチモードで起動し指定ファイルへ差分編集を非破壊適用する"""
+    config = load_model_config()
+    aider_cfg = config.get("aider", {})
+    target_model = model or get_model_name("aider")
+    no_auto_commits = aider_cfg.get("no_auto_commits", True)
+
+    cmd = ["aider", "--model", target_model, "--yes-always"]
+    if no_auto_commits:
+        cmd.append("--no-auto-commits")
+    cmd.extend(["--message", instruction])
+    cmd.extend(target_files)
+
     env = os.environ.copy()
-    env["OLLAMA_API_BASE"] = "http://localhost:11434"
-    # [F1修正] 正しい Aider CLI フラグは --no-auto-commits (複数形)
-    cmd = ["aider", "--message", message, "--model", model, "--no-auto-commits", "--yes-always", "--no-stream"]
-    res = subprocess.run(cmd, cwd=str(project_path), env=env, capture_output=True, text=True, timeout=timeout)
-    if res.returncode != 0:
-        raise RuntimeError(f"Aider failed: {res.stderr}")
-    return get_git_diff(project_path)
+    api_base = config.get("api_base", "http://localhost:11434")
+    env["OLLAMA_API_BASE"] = api_base
 
-def get_git_diff(project_path: Path) -> str:
-    return subprocess.run(["git", "diff", "HEAD"], cwd=str(project_path), capture_output=True, text=True).stdout
+    try:
+        res = subprocess.run(cmd, cwd=cwd, env=env, check=True)
+        return res.returncode == 0
+    except Exception as e:
+        logger.error(f"[AiderRunner] Aider execution failed: {e}")
+        return False
 ```
 
 ---

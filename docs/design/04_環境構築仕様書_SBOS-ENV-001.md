@@ -8,7 +8,7 @@
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | インフラエンジニア / システム管理者 / 開発環境構築担当エンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.1）、SBOS-DD-003（詳細設計書 Rev.4.2）、SBOS-OP-001（運用詳細設計書 Rev.3.4）、SBOS-PM-005（矛盾点一覧） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.4）、SBOS-DD-003（詳細設計書 Rev.4.5）、SBOS-OP-001（運用詳細設計書 Rev.4.2）、SBOS-PM-005（課題一覧 Rev.1.9） |
 
 ---
 
@@ -47,25 +47,29 @@
 
 ```json
 {
+  "api_base": "http://localhost:11434",
+  "default_provider": "ollama",
   "models": {
-    "aider": {
-      "name": "ollama/<実在のコード用ローカルモデル名>",
-      "parameters": {
-        "temperature": 0.2
-      }
-    },
     "planner": {
-      "name": "ollama/<実在の汎用ローカルモデル名>",
-      "parameters": {
-        "temperature": 0.7
-      }
+      "model_name": "ollama/<実在の汎用ローカルモデル名>",
+      "temperature": 0.2,
+      "max_tokens": 35000
+    },
+    "coder": {
+      "model_name": "ollama/<実在のコード用ローカルモデル名>",
+      "temperature": 0.1,
+      "max_tokens": 35000
     },
     "reviewer": {
-      "name": "ollama/<実在の汎用ローカルモデル名>",
-      "parameters": {
-        "temperature": 0.2
-      }
+      "model_name": "ollama/<実在の汎用ローカルモデル名>",
+      "temperature": 0.1,
+      "max_tokens": 35000
     }
+  },
+  "aider": {
+    "model_name": "ollama/<実在のコード用ローカルモデル名>",
+    "no_auto_commits": true,
+    "edit_format": "diff"
   }
 }
 ```
@@ -133,9 +137,10 @@ uv pip install langgraph litellm aider-chat ruff pytest pytest-json-report
 # 2. Reviewdog のインストール
 # Linux / macOS の場合:
 bash scripts/linux/setup_reviewdog.sh
+tools/bin/reviewdog -version
+
 # Windows Native の場合 (PowerShell):
 .\scripts\windows\setup_reviewdog.ps1
-reviewdog -version
 
 # 3. ruff 設定ファイル (ruff.toml) の配置
 cat << 'EOF' > ruff.toml
