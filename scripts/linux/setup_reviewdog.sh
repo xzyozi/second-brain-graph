@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_DIR="${SCRIPT_DIR}/../tools/bin"
+BIN_DIR="${SCRIPT_DIR}/../../tools/bin"
 
 mkdir -p "${BIN_DIR}"
 

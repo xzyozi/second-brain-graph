@@ -1,6 +1,6 @@
 # Reviewdog Automated Git Clone & Setup Script (PowerShell for Windows)
 Param (
-    [string]$CloneDir = "$PSScriptRoot\..\tools\reviewdog"
+    [string]$CloneDir = "$PSScriptRoot\..\..\tools\reviewdog"
 )
 
 $ErrorActionPreference = "Stop"
