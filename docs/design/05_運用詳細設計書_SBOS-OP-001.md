@@ -4,11 +4,11 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-OP-001 |
-| 版数     | Rev.4.3（B7正本判定・復旧手順完全整合版）|
+| 版数     | Rev.4.4（review_rounds 監査ログ構造連携完全整合版）|
 | 改訂日   | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.6）、SBOS-ENV-001（環境構築仕様書 Rev.4.4）、SBOS-PM-005（課題一覧 Rev.2.5） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.7）、SBOS-ENV-001（環境構築仕様書 Rev.4.5）、SBOS-PM-005（課題一覧 Rev.2.6） |
 
 ---
 
@@ -112,8 +112,8 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 ### ケース5: レビュー/テスト/lint試行上限到達 (B7 ブロッカー)
 - **症状:** 朝の自動スキャンバッチで `tools/.cache/blocked.json` に `B7` ブロッカーとして登録される。
 - **監査項目:**
-  - `projects/<target-project>/tasks.md` 内の該当 Issue 直下に記録されたメタデータコメント `<!-- round:3 max_round:3 status:FAILED_B7 -->` を確認。
-  - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。
+  - `metadata/projects/<project-key>/tasks.md` 内の該当 Issue 直下に記録されたメタデータコメント `<!-- round:3 max_round:3 status:FAILED_B7 -->` を確認。
+  - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行コメントは `review_rounds: [{round, verdict, comments}]` 配列から時系列で監査・追跡する。
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
   2. `max_round:3` は変更せずに、`tasks.md` 内のメタデータを `<!-- round:0 max_round:3 status:PENDING -->` へ手動リセットする。

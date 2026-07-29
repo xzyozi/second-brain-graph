@@ -4,11 +4,11 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-ENV-001 |
-| 版数 | Rev.4.4（metadata/.project-registry.json 設定追従完全整合版） |
+| 版数 | Rev.4.5（metadata/.project-registry.json 設定追従完全整合版） |
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | インフラエンジニア / システム管理者 / 開発環境構築担当エンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.6）、SBOS-OP-001（運用詳細設計書 Rev.4.3）、SBOS-PM-005（課題一覧 Rev.2.5） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.7）、SBOS-OP-001（運用詳細設計書 Rev.4.4）、SBOS-PM-005（課題一覧 Rev.2.6） |
 
 ---
 

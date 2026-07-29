@@ -1,13 +1,13 @@
-# 差分設計書 (複数リポジトリ対応モデル) Rev.2.4
+# 差分設計書 (複数リポジトリ対応モデル) Rev.2.5
 **「第二の脳」母艦 × 衛星アーキテクチャ 拡張仕様**
 
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-MULTI-001 |
-| 版数 | Rev.2.4（台帳ネスト構造スコアリング整合 PM-028 完全整合版） |
+| 版数 | Rev.2.5（Step4台帳確認パス修整 PM-033 完全整合版） |
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年6月26日 |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.6）、SBOS-OP-001（運用詳細設計書 Rev.4.3）、SBOS-PM-005（課題一覧 Rev.2.5） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.7）、SBOS-OP-001（運用詳細設計書 Rev.4.4）、SBOS-PM-005（課題一覧 Rev.2.6） |
 
 ---
 
@@ -207,7 +207,7 @@ with open(reg_path, 'w', encoding='utf-8') as f:
 "
 
 # 4. 登録確認
-python3 -c "import json; print(json.load(open('projects/.project-registry.json')))"
+python3 -c "import json; print(json.load(open('metadata/.project-registry.json')))"
 
 # 5. スコアリングを手動実行し、新規衛星が検出されることを確認
 uv run python tools/score-issues.py

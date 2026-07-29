@@ -4,10 +4,10 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                      |
-| 版数     | Rev.4.6（Typing修整・get_git_diff契約・マッピング明記統合版） |
+| 版数     | Rev.4.7（review_rounds 履歴配列構造追加・完全整合版） |
 | 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-MULTI-001 Rev.2.4、SBOS-OP-001 Rev.4.3、SBOS-ENV-001 Rev.4.4、SBOS-PM-005 Rev.2.5 |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-MULTI-001（差分設計書 Rev.2.5）、SBOS-OP-001（運用詳細設計書 Rev.4.4）、SBOS-ENV-001（環境構築仕様書 Rev.4.5）、SBOS-PM-005（課題一覧 Rev.2.6） |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
 
 ---
@@ -343,14 +343,26 @@ def record_execution_history(
   "records": [
     {
       "timestamp": "2026-07-29T15:00:00Z",
-      "issue_id": "EC-012",
+      "issue_id": "EC-0001",
       "project_path": "projects/ec-site",
       "final_status": "FAILED_B7",
       "actual_round": 3,
       "max_round": 3,
       "lint_round": 3,
       "test_round": 1,
-      "review_round": 0,
+      "review_round": 2,
+      "review_rounds": [
+        {
+          "round": 1,
+          "verdict": "changes_requested",
+          "comments": [{"file": "main.py", "line": 15, "message": "型アノテーション不足"}]
+        },
+        {
+          "round": 2,
+          "verdict": "changes_requested",
+          "comments": [{"file": "main.py", "line": 20, "message": "例外処理ハンドラ未考慮"}]
+        }
+      ],
       "history_summary": {
         "lint_passed": false,
         "test_passed": true,

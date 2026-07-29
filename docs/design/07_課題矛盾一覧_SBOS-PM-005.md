@@ -1,7 +1,7 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.5
+# 課題・矛盾点一覧 (Problem Management) Rev.2.6
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.5  
+版数: Rev.2.6  
 改訂日: 2026年7月29日  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 
@@ -46,8 +46,11 @@
 | **PM-028** | MULTI-001 §2④ / §4 | 🔴 高 | 台帳 `metadata/.project-registry.json` のネスト構造 (`projects`) と `score-issues.py` 概念パースコードの不一致 | `SBOS-MULTI-001 §2④` の概念コードを `registry.get("projects", {})` でネスト解釈する実装へ統一修整完了 | 🟢 解決済み |
 | **PM-029** | BD-002 §4.1 | 🟠 中 | BD-002 §4.1 に旧 `.gitignore` 記述 (`!/projects/.project-registry.json`) が残存 | BD-002 §4.1 の記述を PM-027 確定後の完全遮断ルール (`/projects/*`, `/projects/.*`, `!.gitignore`) へ更新修整完了 | 🟢 解決済み |
 | **PM-030** | ENV-001 Step 2 / §7 | 🟠 中 | ENV-001 の Step 2 および §7 診断スクリプト内台帳パスが旧パス (`projects/.project-registry.json`) のまま残存 | ENV-001 Step 2 および §7 診断スクリプト内台帳パスを `metadata/.project-registry.json` へ追従修整完了 | 🟢 解決済み |
-| **PM-031** | 全設計書 (BD/DD/ORCH/ENV/OP/MULTI/PM) | 🟡 低 | 関連文書ヘッダーの Rev 表記が過去版数のまま一部未追従 | 全 7 設計書の関連文書ヘッダー版数表記を最新確定 Rev (BD Rev.4.5, DD Rev.4.6, ORCH Rev.3.3, ENV Rev.4.4, OP Rev.4.3, MULTI Rev.2.4, PM Rev.2.5) に完全整合統一完了 | 🟢 解決済み |
+| **PM-031** | 全設計書 (BD/DD/ORCH/ENV/OP/MULTI/PM) | 🟡 低 | 関連文書ヘッダーの Rev 表記が過去版数のまま一部未追従 | 全 7 設計書の関連文書ヘッダー版数表記を最新確定 Rev (BD Rev.4.5, DD Rev.4.7, ORCH Rev.3.4, ENV Rev.4.5, OP Rev.4.4, MULTI Rev.2.5, PM Rev.2.6) に完全整合統一完了 | 🟢 解決済み |
 | **PM-032** | DD-003 §2, §3.2, §4.1.1 / tools/ | 🟡 低 | DD-003 の `Optional` インポート漏れ、`tools/aider_runner.py` 内 `get_git_diff()` 未存在、マッピング未明記 | Typing 修正、`aider_runner.py` へ `get_git_diff()` 本実装 & テスト追加、`round` → `review_round` マッピング注記を追記完了 | 🟢 解決済み |
+| **PM-033** | MULTI-001 §5 Step 4 | 🟠 中 | MULTI-001 §5 Step 4 の登録確認コマンドが旧台帳パス (`projects/.project-registry.json`) のまま残存 | Step 4 の確認コマンドパスを `metadata/.project-registry.json` に修整完了 | 🟢 解決済み |
+| **PM-034** | BD-002 ヘッダー | 🟡 低 | BD-002 ヘッダーの関連文書表記で `SBOS-MULTI-001 Rev.2.4）` と開き括弧が欠落していたタイポ | `SBOS-MULTI-001（差分設計書 Rev.2.5）` へ正確に修整完了 | 🟢 解決済み |
+| **PM-035** | DD-003 §4.1.1 / OP-001 §2.1, §3.5 | 🟠 中 | `execution_history.json` 内レビュー指摘履歴構造の記述 (OP-001) と正本 JSON スキーマ例 (DD-003) の不一致 | `DD-003 §4.1.1` の正本 JSON スキーマ例に `review_rounds: [{round, verdict, comments}]` 履歴配列構造を追加定義し OP-001 と三者完全統合完了 | 🟢 解決済み |
 
 ---
 
@@ -109,6 +112,7 @@
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.2.6)**: PM-033 (MULTI-001 §5 Step 4 台帳確認パス修整), PM-034 (BD-002 ヘッダーカッコタイポ修整), PM-035 (DD-003 §4.1.1 への review_rounds レビュー指摘履歴配列追加定義および OP-001 三者整合) をすべて解決済みに更新。
 - **2026/07/29 (Rev.2.5)**: PM-028 (台帳ネスト構造パース整合), PM-029 (.gitignore 旧記述修整), PM-030 (ENV-001 台帳パス追従), PM-031 (全設計書 Rev 統一), PM-032 (DD-003 Typing & get_git_diff 契約 & マッピング明記) をすべて解決済みに更新。
 - **2026/07/29 (Rev.2.4)**: PM-026 (衛星メタデータの母艦階層分離) および PM-027 (projects/ 完全 Git 遮断) の設計確定・反映完了に伴い解決済みに更新。
 - **2026/07/29 (Rev.2.3)**: PM-005 (OrchestratorState への error_category 追加および LangGraph 条件付きエッジマッピング) を確定し解決済みに更新。
