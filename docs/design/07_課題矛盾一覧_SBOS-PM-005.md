@@ -1,7 +1,7 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.0
+# 課題・矛盾点一覧 (Problem Management) Rev.2.1
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.0  
+版数: Rev.2.1  
 改訂日: 2026年7月29日  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 
@@ -41,6 +41,8 @@
 | **PM-023** | README / docs/ | 🟢 | 絶対 `file:///` リンクが特定環境パス (`c:/Users/xzyoi/...`) を指しリンク切れリスク | ドキュメント内の絶対 `file:///` リンクを標準的な相対パスリンク `[text](relative/path)` へ変換完了 | 🟢 解決済み |
 | **PM-024** | oss_license_policy.md / models.json | 🟢 | ライセンスポリシー文書 (`oss_license_policy.md`) の利用中モデル表記が旧 Qwen 系のまま不一致 | `oss_license_policy.md` のモデル記載を現行の Gemma 4 系 (Gemma 4 12B IT, Gemma 4 Py Coder) へ修整完了 | 🟢 解決済み |
 | **PM-025** | 全設計書 (BD/ORCH/ENV/OP/MULTI) | 🟢 | 設計書間の関連文書欄および本文中の他ドキュメント Rev バージョン表記の乖離 | 全設計書のヘッダー・関連文書欄の Rev 表記を最新確定バージョンへ一括整合修整完了 | 🟢 解決済み |
+| **PM-026** | MULTI-001 / DD-003 | 🔴 高 | 衛星リポジトリ内への `project.json` / `tasks.md` 配置による衛星コードベース汚染 | 母艦側 `metadata/projects/<project-key>/` 階層へメタデータを引き上げ管理する構成への移行設計 | 🟡 新規課題・要設計策定 |
+| **PM-027** | MULTI-001 / .gitignore | 🔴 高 | `projects/` ディレクトリ内部の安全かつ完全な Git 除外・遮断ルールの確立 | 台帳を `metadata/.project-registry.json` に配置転換し `projects/*` を完全除外する構成への設計 | 🟡 新規課題・要設計策定 |
 
 ---
 
@@ -80,20 +82,29 @@
   2. `scripts/windows/setup_reviewdog.ps1` は `$PROFILE` を直接変更せず、設定の有無を点検して未設定時に案内コードを出力する安全な非変更モードへ改修。
   3. `docs/setup/reviewdog_setup_guide.md` の記述・パスを最新のスクリプト構造と UTF-8 導線に合わせて修正。
 
-### PM-017 〜 PM-025: 横断的設計・ドキュメント不一致の修復完了
-* **対応内容**:
-  1. **PM-017**: `README.md` 内の CLI 起動例を `orchestrate` および `execute --issue-id` へ更新。
-  2. **PM-018 & PM-019**: `dependency_management.md` / `toml_project_setup.md` / `pyproject.toml` を `uv` + `pyproject.toml` 仕様へ完全修整。
-  3. **PM-020**: Reviewdog 検証案内を OS 別の実体コマンドへ修整。
-  4. **PM-021**: ENV-001 §2.2 の `models.json` 構成例を `model_name`, `temperature`, `max_tokens` の実物スキーマへ更新。
-  5. **PM-022**: DD-003 §3.2 の `run_aider` コードを実物 `tools/aider_runner.py` シグネチャと完全一致化。
-  6. **PM-023**: `README.md` および `docs/README.md` 内の全 `file:///` 絶対パスを相対パスへ修整。
-  7. **PM-024**: `oss_license_policy.md` の利用中モデルを Gemma 4 系列 (Gemma License) に更新。
-  8. **PM-025**: 全設計書 (BD-002 Rev.4.4, DD-003 Rev.4.5, ORCH-001 Rev.3.2, ENV-001 Rev.4.3, OP-001 Rev.4.2, MULTI-001 Rev.2.2) の関連文書版数を最新化。
+### PM-026: 衛星メタデータ (`project.json`, `tasks.md`) の母艦階層分離設計
+* **背景・動機**: 衛星プロダクト直下に `project.json` や `tasks.md` を配置すると、衛星ソースリポジトリの Git ログやコードツリーが汚染される。
+* **解決案（`metadata/projects/<project-key>/` 階層管理）**:
+  * 母艦側に `metadata/projects/` ディレクトリを新設。
+  * `metadata/projects/EC/project.json` および `metadata/projects/EC/tasks.md` のように、プロジェクトキーごとの専用フォルダで一括管理。
+* **検討項目・懸念点**:
+  1. 汎用ファイル名の衝突回避: `metadata/projects/<KEY>/` 構造により解決。
+  2. スコアリング・オーケストレーターのパス解決ロジック修正。
+  3. Aider 実行作業ディレクトリ (`cwd`) とメタデータ更新パスの分離維持。
+
+### PM-027: `projects/` ディレクトリ内部の完全 Git 管理除外設計
+* **背景・動機**: 母艦リポジトリ (`second-brain-graph`) から `projects/` 内部の全コード・Git 履歴を完全に遮断・分断する。
+* **解決案（中央台帳の移動と除外ルールの単純化）**:
+  * 中央台帳 `.project-registry.json` を `projects/` 直下から `metadata/.project-registry.json` へ移動。
+  * 母艦の `.gitignore` を `/projects/*` および `/projects/.*` の完全遮断ルールに簡略化。
+* **検討項目・懸念点**:
+  1. 空ディレクトリ保持 (`projects/.gitkeep`) または環境構築時の自動ディレクトリ生成。
+  2. 開発者が新規マシン構築時の衛星クローン手順の明確化。
 
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.2.1)**: 新規課題 PM-026 (衛星メタデータの母艦階層分離) および PM-027 (projects/ 完全 Git 除外) を追加登録。
 - **2026/07/29 (Rev.2.0)**: 横断的不一致課題 (PM-017〜PM-025) のドキュメント・設定修整完了に伴いステータスを解決済みに更新。
 - **2026/07/29 (Rev.1.9)**: リポジトリ全体の整合性検証により抽出された課題 10 件 (PM-016〜PM-025) を追加登録。
 - **2026/07/29 (Rev.1.8)**: PM-013 (補助関数契約/履歴スキーマ), PM-014 (B7メタデータ正本書式/復旧手順), PM-015 (PowerShell UTF-8 $PROFILE 永続設定正本化/setup_reviewdog.ps1非変更確認化) をすべて解決済みに更新。
