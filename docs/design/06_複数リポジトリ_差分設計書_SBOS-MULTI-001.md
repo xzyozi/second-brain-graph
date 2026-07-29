@@ -1,50 +1,41 @@
-# 差分設計書 (複数リポジトリ対応モデル) Rev.2.1
+# 差分設計書 (複数リポジトリ対応モデル) Rev.2.3
 **「第二の脳」母艦 × 衛星アーキテクチャ 拡張仕様**
 
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-MULTI-001 |
-| 版数 | Rev.2.2（EC-001正本統一・全仕様書整合版） |
+| 版数 | Rev.2.3（メタデータ母艦階層分離 PM-026 / 完全 Git 遮断 PM-027 対応版） |
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年6月26日 |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.4）、SBOS-OP-001（運用詳細設計書 Rev.4.2）、SBOS-PM-005（課題一覧 Rev.1.9） |
-
----
-
-## 0. Rev.2.0からの修正差分一覧
-
-| # | 箇所 | Rev.2.0の問題 | Rev.2.1での修正 |
-| --- | --- | --- | --- |
-| E1 | §3③ / §4④ | プロジェクトキー→フォルダの解決方法が同一文書内で2通り（中央台帳方式 / glob分散スキャン方式）定義され、決着していなかった | **中央台帳方式（`.project-registry.json`）に一本化**。実物`tools/score-issues.py`（SBOS-OP-001 §5.1で確定）と一致させた |
-| E2 | §4 | `score-issues.py`概念ロジックがglob方式で書かれており、確定済み実装と食い違っていた | `.project-registry.json`を読む実装に書き換え |
-| E3 | §4 出力例 | キャッシュ例のフィールド名`"project"`（フォルダ名）が実物の`"project_key"`（プロジェクトキー）と不一致 | `"project_key"`に統一。フォルダ名が必要な場面のために`"project_dir"`も併記する形に変更 |
-| E4 | 文書全体 | 新規衛星を`.project-registry.json`に登録する手順が未定義 | §5「新規衛星プロジェクトの登録手順」を新設 |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.4）、SBOS-DD-003（詳細設計書 Rev.4.5）、SBOS-OP-001（運用詳細設計書 Rev.4.2）、SBOS-PM-005（課題一覧 Rev.2.3） |
 
 ---
 
 ## 1. アーキテクチャ設計方針
 本システムでは **Git Submodule を一切使用しない**。LLMはサブモジュールのポインタ更新やDetached HEADの概念を正確に扱えず、リポジトリを破壊するためである。
-代わりに **「母艦の `.gitignore` による完全遮断 × 台帳インデックスによる動的パス探索」** を採用する。
+代わりに **「母艦の `.gitignore` による完全遮断 × メタデータ階層分離 (`metadata/projects/`) × 中央台帳 (`metadata/.project-registry.json`)」** を採用する。
 
-* **母艦 (`~/second-brain/`)**：システムOS。ルール・プロンプト・自動化ツールのみを管理する。
-* **衛星 (`projects/<name>/`)**：独立したプロダクト。各自が独立した `.git` を持つ通常のリポジトリ。
+* **母艦 (`~/second-brain/`)**：システムOS。ルール・プロンプト・自動化ツール・衛星メタデータを管理する。
+* **衛星 (`projects/<name>/`)**：独立したプロダクト。各自が独立した `.git` を持つ通常のリポジトリ（ソースコード専用）。
+* **衛星メタデータ (`metadata/projects/<project-key>/`)**：母艦側で管理する各衛星の定義 (`project.json`) およびタスク定義 (`tasks.md`)。
 
-> **（E1関連の設計上の注意）** 衛星の発見方法は、後述の通り**`.project-registry.json`という中央台帳を正**とする。「`project.json`さえ配置すれば自動的にスコアリング対象になる」という誤解が生じやすいため、§5の登録手順を必ず併読すること。
+> **（PM-026/PM-027 設計決定）** 衛星ソースコードツリーの汚染を防止するため、`project.json` や `tasks.md` は衛星配下ではなく母艦側 `metadata/projects/<project-key>/` に一括保存する。また、衛星発見は中央台帳 **`metadata/.project-registry.json`** を正とする。
 
 ---
 
 ## 2. コア仕様の4大変更点
 
-### ① 母艦側 `.gitignore` によるGitスコープ分断
+### ① 母艦側 `.gitignore` による完全 Git スコープ遮断 (PM-027)
 `~/second-brain/.gitignore` に以下を規定する。
 ```text
 /projects/*
-!/projects/.project-registry.json
+/projects/.*
+!.gitignore
 ```
 
-これにより、AIエージェントが `projects/project-a/` の内部で `git commit` を実行しても、母艦側のGitツリーにはいかなる差分も検知されない。
+これにより、衛星リポジトリ (`projects/<name>/`) の Git ツリー・コミット履歴・差分は母艦側から完全に分断遮断される。
 
-> **補足：** `tools/score-issues.py`や`tools/orchestrator.py`が`projects/*/project.json`や`projects/*/tasks.md`を読み書きする処理は、Pythonの通常のファイルI/O（`open()` / `glob`）で行われており、`.gitignore`の影響を受けない。`.gitignore`はあくまで**母艦側のgit管理対象**を制御するものであり、Pythonスクリプトのファイルアクセス可否とは無関係である。
+> **補足：** `tools/score-issues.py`や`tools/orchestrator.py`が`metadata/projects/<key>/project.json`や`metadata/projects/<key>/tasks.md`を読み書きする処理は、Pythonの通常のファイルI/Oで行われる。`.gitignore`は母艦の Git トラッキング対象を制御するのみであり、スクリプトのファイルアクセスには影響しない。
 
 ### ② Issue ID スキーマ拡張仕様（4桁連番・サブタスク A〜Z・名前空間制）
 
@@ -68,8 +59,16 @@
 * **オーバーフロー時のタスク分解ルール:**
   `Z` を超えるような複雑かつ肥大化したタスクは、無制限に階層を深めるのではなく、要件定義・分解フェーズの段階で複数の独立した親タスクへ分割するか、先行実装部分などを切り離して新規親タスク（例: `EC-0002`）として追加定義する。
 
-各プロジェクト直下には必ず識別メタデータ `project.json` を配置する。
+#### 4. メタデータ配置階層 (PM-026 確定仕様)
+各衛星のメタデータ (`project.json`) およびタスク定義 (`tasks.md`) は、衛星ソースツリー汚染防止のため、母艦側の **`metadata/projects/<PROJECT_KEY>/`** 階層に一括配置する。
 
+```text
+metadata/projects/EC/
+├── project.json
+└── tasks.md
+```
+
+`metadata/projects/<PROJECT_KEY>/project.json`:
 ```json
 {
   "name": "自社ECサイトリニューアル",
@@ -82,28 +81,25 @@
 
 ### ③ スラッシュコマンドの動的ディレクトリ移管ロジック
 
-#### `/work <ISSUE_ID>` （例: `/work EC-004`）
+#### `/work <ISSUE_ID>` （例: `/work EC-0001`）
 
 1. `sisyphus` がプレフィックス `EC` を抽出。
-2. 母艦の `projects/.project-registry.json` を引き、キー `EC` に対応するフォルダ（`projects/ec-site/`）を特定。
+2. 母艦の `metadata/.project-registry.json` を引き、キー `EC` に対応するソースフォルダ（`projects/ec-site/`）およびメタデータフォルダ（`metadata/projects/EC/`）を特定。
 3. **エージェントの作業カレントディレクトリを `~/second-brain/projects/ec-site/` へ動的に切り替えてから** `executor` および `coder` を起動する。
-
-> **（E1修正の確認）** この「`.project-registry.json`を引く」という解決方法が、本書全体を通じて唯一の正式な方式である。④のスコアリングスクリプトも同じ方式に統一した。
+4. 進捗・チェックボックス更新は母艦側の `metadata/projects/EC/tasks.md` へ行う。
 
 ### ④ スコアリング (`score-issues.py`) の全横断スキャン化
 
-日次バッチが叩くスコアリングスクリプトは、母艦から全衛星を動的に舐めるロジックへ改修する。
-
-**（E2修正：glob方式ではなく`.project-registry.json`を読む方式に統一。実物実装（SBOS-OP-001 §5.1）と一致させた）**
+日次バッチが叩くスコアリングスクリプトは、母艦の中央台帳 `metadata/.project-registry.json` を参照し全衛星のメタデータを舐めるロジックへ改修する。
 
 ```python
 # score-issues.py 概念ロジック（実物実装と整合させたもの。詳細はSBOS-OP-001 §5.1を正とする）
 import os, json
 
 def load_registry(root_dir: str) -> dict:
-    """projects/.project-registry.json を読み込む。
-    形式: {"EC": "projects/ec-site", "MOB": "projects/mobile-app", ...}"""
-    reg_path = os.path.join(root_dir, "projects", ".project-registry.json")
+    """metadata/.project-registry.json を読み込む。
+    形式: {"EC": {"dir": "projects/ec-site", "meta": "metadata/projects/EC"}, ...}"""
+    reg_path = os.path.join(root_dir, "metadata", ".project-registry.json")
     if not os.path.exists(reg_path):
         return {}
     with open(reg_path, encoding="utf-8") as f:
@@ -111,8 +107,9 @@ def load_registry(root_dir: str) -> dict:
 
 all_issues = []
 registry = load_registry(root_dir=".")
-for project_key, rel_path in registry.items():
-    tasks_path = os.path.join(rel_path, "tasks.md")
+for project_key, info in registry.items():
+    meta_dir = os.path.join("metadata", "projects", project_key)
+    tasks_path = os.path.join(meta_dir, "tasks.md")
     if not os.path.exists(tasks_path):
         continue
     # tasks.md をパースし、各Issueに project_key を付与してスコアリング
@@ -147,48 +144,64 @@ save_to_cache("tools/.cache/priority-cache.json", top_issues)
 
 ---
 
-## 4. `.project-registry.json` のスキーマ
+## 4. `metadata/.project-registry.json` のスキーマ
 
 ```json
 {
-  "EC": "projects/ec-site",
-  "MOB": "projects/mobile-app",
-  "FX": "projects/fx-backtest"
+  "version": "1.0",
+  "projects": {
+    "EC": {
+      "name": "自社ECサイトリニューアル",
+      "dir": "projects/ec-site",
+      "meta": "metadata/projects/EC"
+    },
+    "MOB": {
+      "name": "モバイルアプリ開発",
+      "dir": "projects/mobile-app",
+      "meta": "metadata/projects/MOB"
+    }
+  }
 }
 ```
 
-キーがIssue IDのプレフィックス（`project.json`内の`key`と一致させること）、値が母艦ルートから見た相対パス。
+キーがIssue IDのプレフィックス（`project.json`内の`key`と一致させる）、`dir` がソースコードパス、`meta` がメタデータ格納パスである。
 
 ---
 
 ## 5. 新規衛星プロジェクトの登録手順（⭐E4：新設）
 
-新しい衛星を追加してスコアリング・Issue実行の対象にするには、以下の手順を**必ず**実施する。`project.json`の配置だけでは不十分である点に注意。
+新しい衛星を追加してスコアリング・Issue実行の対象にするには、以下の手順を実施する。
 
 ```bash
 cd ~/second-brain
 
-# 1. 衛星ディレクトリを作成し project.json を配置
+# 1. 衛星ソースコードツリーの作成 (または git clone)
 mkdir -p projects/new-service
-cat > projects/new-service/project.json << 'EOF'
+
+# 2. 母艦側にメタデータフォルダを作成し project.json と tasks.md を配置
+mkdir -p metadata/projects/NEW
+cat > metadata/projects/NEW/project.json << 'EOF'
 {
   "name": "新規サービス",
   "key": "NEW",
-  "created_at": "2026-07-28"
+  "created_at": "2026-07-29"
 }
 EOF
 
-# 2. tasks.md の雛形を配置
-echo "# タスク一覧" > projects/new-service/tasks.md
+echo "# タスク一覧" > metadata/projects/NEW/tasks.md
 
-# 3. .project-registry.json にキーを登録（手動編集、または以下のワンライナー）
+# 3. metadata/.project-registry.json に登録
 python3 -c "
 import json
-reg_path = 'projects/.project-registry.json'
+reg_path = 'metadata/.project-registry.json'
 with open(reg_path) as f:
     registry = json.load(f)
-registry['NEW'] = 'projects/new-service'
-with open(reg_path, 'w') as f:
+registry.setdefault('projects', {})['NEW'] = {
+    'name': '新規サービス',
+    'dir': 'projects/new-service',
+    'meta': 'metadata/projects/NEW'
+}
+with open(reg_path, 'w', encoding='utf-8') as f:
     json.dump(registry, f, indent=2, ensure_ascii=False)
 "
 

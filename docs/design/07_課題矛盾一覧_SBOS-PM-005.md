@@ -1,7 +1,7 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.3
+# 課題・矛盾点一覧 (Problem Management) Rev.2.4
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.3  
+版数: Rev.2.4  
 改訂日: 2026年7月29日  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 
@@ -41,8 +41,8 @@
 | **PM-023** | README / docs/ | 🟢 | 絶対 `file:///` リンクが特定環境パス (`c:/Users/xzyoi/...`) を指しリンク切れリスク | ドキュメント内の絶対 `file:///` リンクを標準的な相対パスリンク `[text](relative/path)` へ変換完了 | 🟢 解決済み |
 | **PM-024** | oss_license_policy.md / models.json | 🟢 | ライセンスポリシー文書 (`oss_license_policy.md`) の利用中モデル表記が旧 Qwen 系のまま不一致 | `oss_license_policy.md` のモデル記載を現行の Gemma 4 系 (Gemma 4 12B IT, Gemma 4 Py Coder) へ修整完了 | 🟢 解決済み |
 | **PM-025** | 全設計書 (BD/ORCH/ENV/OP/MULTI) | 🟢 | 設計書間の関連文書欄および本文中の他ドキュメント Rev バージョン表記の乖離 | 全設計書のヘッダー・関連文書欄の Rev 表記を最新確定バージョンへ一括整合修整完了 | 🟢 解決済み |
-| **PM-026** | MULTI-001 / DD-003 | 🔴 高 | 衛星リポジトリ内への `project.json` / `tasks.md` 配置による衛星コードベース汚染 | 母艦側 `metadata/projects/<project-key>/` 階層へメタデータを引き上げ管理する構成への移行設計 | 🟡 新規課題・要設計策定 |
-| **PM-027** | MULTI-001 / .gitignore | 🔴 高 | `projects/` ディレクトリ内部の安全かつ完全な Git 除外・遮断ルールの確立 | 台帳を `metadata/.project-registry.json` に配置転換し `projects/*` を完全除外する構成への設計 | 🟡 新規課題・要設計策定 |
+| **PM-026** | MULTI-001 / DD-003 | 🟢 | 衛星リポジトリ内への `project.json` / `tasks.md` 配置による衛星コードベース汚染 | 母艦側 `metadata/projects/<project-key>/` 階層へメタデータを引き上げ管理する構成へ移行完了 | 🟢 解決済み |
+| **PM-027** | MULTI-001 / .gitignore | 🟢 | `projects/` ディレクトリ内部の安全かつ完全な Git 除外・遮断ルールの確立 | 台帳を `metadata/.project-registry.json` に配置転換し `.gitignore` で `projects/*` を完全除外設定完了 | 🟢 解決済み |
 
 ---
 
@@ -104,6 +104,7 @@
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.2.4)**: PM-026 (衛星メタデータの母艦階層分離) および PM-027 (projects/ 完全 Git 遮断) の設計確定・反映完了に伴い解決済みに更新。
 - **2026/07/29 (Rev.2.3)**: PM-005 (OrchestratorState への error_category 追加および LangGraph 条件付きエッジマッピング) を確定し解決済みに更新。
 - **2026/07/29 (Rev.2.2)**: PM-009 (Issue ID 4桁化、サブタスク ID A〜Z 表記およびオーバーフロー時の分解原則) を確定し解決済みに更新。
 - **2026/07/29 (Rev.2.1)**: 新規課題 PM-026 (衛星メタデータの母艦階層分離) および PM-027 (projects/ 完全 Git 除外) を追加登録。

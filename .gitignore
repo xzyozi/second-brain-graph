@@ -219,7 +219,9 @@ __marimo__/
 
 # Second Brain System Rules
 /projects/*
-!/projects/.project-registry.json
+/projects/.*
+!/projects/.gitkeep
+!.gitignore
 /tools/bin/
 /tools/reviewdog/
 /tools/.cache/*
