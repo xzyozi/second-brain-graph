@@ -4,7 +4,12 @@ Param (
 )
 
 $ErrorActionPreference = "Stop"
-Write-Host "=== Setting up Reviewdog via Git Clone ===" -ForegroundColor Cyan
+Write-Host "=== Setting up Windows Environment & Reviewdog ===" -ForegroundColor Cyan
+
+# 0. Ensure git core.autocrlf setting (PM-012)
+Write-Host "Setting git core.autocrlf to 'input'..." -ForegroundColor Cyan
+git config --global core.autocrlf input
+Write-Host "✓ Git core.autocrlf configured to input." -ForegroundColor Green
 
 # 1. Check existing git clone
 if (Test-Path $CloneDir) {

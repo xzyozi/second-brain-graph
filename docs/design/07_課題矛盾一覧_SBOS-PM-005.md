@@ -27,7 +27,7 @@
 | **PM-009** | MULTI-001 §2② | 🟡 中 | Issue ID プレフィックス決定ルール、連番4桁化 (`0001`〜`9999`)、およびサブタスク階層化の設計 | プレフィックス策定ルールおよび4桁化・サブタスク表現（例: `EC-0001-1`）の設計策定 | 🟡 今後実施する別タスク |
 | **PM-010** | ENV-001 §2.1 / config/models.json | 🟢 | ENV-001 §2.1 のモデル記載 (`qwen` 系) が現行 `config/models.json` と乖離していた | モデル定義を `config/models.json` に一元管理し、仕様書内の特定モデル名直書きを排除・参照統一 | 🟢 解決済み |
 | **PM-011** | DD-003 §3.1 / ENV-001 §2.2 / config/models.json | 🔴 高 | `llm_client.py` の `MODEL_MAP` がコード内にハードコードされており、`config/models.json` との二重管理 (SSOT 崩壊) が発生している | `llm_client.py` が `config_loader.py` 経由で `models.json` を読み込む設計に変更（PM-007 と連動） | 🟡 未解決・設計中 |
-| **PM-012** | BD-002 §5 / scripts/ | 🟡 中 | `git config core.autocrlf input` の強制設定が環境構築スクリプト (`setup_reviewdog.ps1`) に未組み込み | `scripts/windows/setup_reviewdog.ps1` の冒頭に `git config --global core.autocrlf input` を追加 | 🟡 未解決・要スクリプト修正 |
+| **PM-012** | BD-002 §5 / scripts/ | 🟢 | `git config core.autocrlf input` の強制設定が環境構築スクリプトに未組み込みであった | `scripts/windows/setup_reviewdog.ps1` の冒頭に `git config --global core.autocrlf input` 組み込み完了 | 🟢 解決済み |
 | **PM-013** | DD-003 §4.1 | 🟡 中 | `escalate_node` から呼ぶ `update_task_metadata()` / `record_execution_history()` のシグネチャ・仕様・保存形式が未定義 | 両関数のシグネチャ・引数・戻り値・書き込み先スキーマを DD-003 に追記定義 | 🟡 未解決・設計欠落 |
 | **PM-014** | DD-003 §4.1 / OP-001 §3.5 | 🔴 高 | `tasks.md` 内の B7 ブロッカー判定基準 `round:N` メタデータの書式（記載位置・フォーマット）が未定義 | `tasks.md` の Issue メタデータブロック書式 (`round:N`, `max_round:N`) を正式に仕様化 | 🟡 未解決・設計欠落 |
 | **PM-015** | BD-002 §5 / scripts/windows/ | 🟠 中低 | PowerShell の UTF-8 強制設定 (`$OutputEncoding`) の適用タイミング・対象スコープが未規定 (`$PROFILE` への追記 vs スクリプト内設定) | `$PROFILE` への追記を正本手順とし、`scripts/windows/setup_reviewdog.ps1` 末尾に確認ステップを追加 | 🟡 未解決・要手順規定 |
@@ -52,6 +52,9 @@
 ### PM-010: ドキュメント内モデル名直書きの排除と `config/models.json` 一元管理化
 * **対応内容**: ドキュメント（SBOS-ENV-001 等）およびモジュール内における特定モデル名の直書き・ハードコードを廃止。モデル定義は `config/models.json` にて一元管理（SSOT）し、ドキュメント上は役割定義 (`planner`, `coder`, `reviewer`, `aider`) および参照形式へと統一完了。
 
+### PM-012: スクリプト内への `git config core.autocrlf input` 自動設定の組み込み
+* **対応内容**: Windows Native 環境での Aider 改行コードバグ対策として、`scripts/windows/setup_reviewdog.ps1` の実行プロセス冒頭に `git config --global core.autocrlf input` の自動設定処理を組み込み完了。
+
 ### PM-011: `llm_client.py` の MODEL_MAP ハードコード廃止と `models.json` への一本化
 * **背景**: 現状は `llm_client.py` 内の `MODEL_MAP` と `config/models.json` の 2 箇所を手動で同期する必要がある。
 * **対応計画**: PM-007 のハイパーパラメータ結合設計と並行して、`llm_client.py` の初期化時に `config_loader.get_model_name()` を呼び出すよう変更する。
@@ -71,6 +74,7 @@
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.1.6)**: PM-012 (setup_reviewdog.ps1 への git autocrlf input 自動設定組み込み) を解決済みに更新。
 - **2026/07/29 (Rev.1.5)**: PM-010 (モデルのドキュメント直書き排除・config/models.json 一元管理参照化) を解決済みに更新。
 - **2026/07/29 (Rev.1.4)**: 横断的仕様書精査により新たに発見した設計上の懸念点 6 件 (PM-010〜PM-015) を追加。重要度列をマトリクスに追加。
 - **2026/07/29 (Rev.1.3)**: PM-006 (`EC-001` 統一) および PM-008 (OS別配置構造分離) を解決済みに更新。新規検討タスク PM-009 (4桁化・サブタスク・プレフィックスルール) を追記。
