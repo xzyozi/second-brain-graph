@@ -241,9 +241,72 @@ def escalate_node(state: OrchestratorState) -> OrchestratorState:
     actual_round = max(state.get("round", 0), state.get("lint_round", 0), state.get("test_round", 0))
     logger.error(f"Issue {state['issue_id']} がリトライ上限 ({actual_round}/{state['max_round']}) に達しました。B7ブロッカー化します。")
     # [F2/III.2修正] tasks.md 内の round メタデータを動的更新し、B7 判定を成立させる
-    update_task_metadata(state["project_path"], state["issue_id"], round_num=actual_round)
+    update_task_metadata(state["project_path"], state["issue_id"], round_num=actual_round, status="FAILED_B7")
     record_execution_history(state, final_status="FAILED_B7", actual_round=actual_round)
     return state
+```
+
+### 4.1.1 補助関数契約および履歴スキーマ仕様 (PM-013 / PM-014)
+
+#### 1. `tasks.md` メタデータ正本書式
+`tasks.md` 内の Issue 項目の直下に以下の HTML コメント形式でメタデータを書き込み・保持する。`check-blockers.py` はこの形式を正の SSOT としてパースする。
+
+```markdown
+- [ ] EC-012: 決済例外処理ロールバックハンドラ
+  <!-- round:3 max_round:3 status:FAILED_B7 -->
+```
+
+#### 2. `update_task_metadata()` 関数の契約
+```python
+def update_task_metadata(
+    project_path: Union[str, Path],
+    issue_id: str,
+    round_num: int,
+    status: str = "FAILED_B7",
+    max_round: Optional[int] = None
+) -> None:
+    """
+    指定された Issue ID の直下に <!-- round:N max_round:M status:STATUS --> タグを探索・更新する。
+    存在しない場合は Issue 行の直下に挿入し、tasks.md を上書き保存する。
+    """
+```
+
+#### 3. `record_execution_history()` 関数と `history_path` スキーマ
+* **保存パス (`history_path`)**: `tools/.cache/execution_history.json`
+
+```python
+def record_execution_history(
+    state: OrchestratorState,
+    final_status: str,
+    actual_round: int
+) -> None:
+    """
+    tools/.cache/execution_history.json へ実行完了・エスカレーション結果をアトミックに追記保存する。
+    """
+```
+
+**`execution_history.json` スキーマ仕様:**
+```json
+{
+  "records": [
+    {
+      "timestamp": "2026-07-29T15:00:00Z",
+      "issue_id": "EC-012",
+      "project_path": "projects/ec-site",
+      "final_status": "FAILED_B7",
+      "actual_round": 3,
+      "max_round": 3,
+      "lint_round": 3,
+      "test_round": 1,
+      "review_round": 0,
+      "history_summary": {
+        "lint_passed": false,
+        "test_passed": true,
+        "review_verdict": "changes_requested"
+      }
+    }
+  ]
+}
 ```
 
 ---

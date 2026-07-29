@@ -109,11 +109,15 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   git clean -fd
   ```
 
-### ケース5: レビュー上限到達 (B7 ブロッカー)
-- **症状:** 翌朝のバッチで `blocked.json` に `B7` として記録される。
-- **対処:**
-  - `tasks.md` 内の該当 Issue のメタデータ `round:3` を確認。
-  - 要件定義を修正後、手動で `round:0` にリセットして再実行する。
+### ケース5: レビュー/テスト/lint試行上限到達 (B7 ブロッカー)
+- **症状:** 朝の自動スキャンバッチで `tools/.cache/blocked.json` に `B7` ブロッカーとして登録される。
+- **監査項目:**
+  - `projects/<target-project>/tasks.md` 内の該当 Issue 直下に記録されたメタデータコメント `<!-- round:3 max_round:3 status:FAILED_B7 -->` を確認。
+  - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。
+- **復旧手順:**
+  1. 人間が原因コード・要件定義・テストコードを修復する。
+  2. `max_round:3` は変更せずに、`tasks.md` 内のメタデータを `<!-- round:0 max_round:3 status:PENDING -->` へ手動リセットする。
+  3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
 ---
 
