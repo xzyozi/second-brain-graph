@@ -11,17 +11,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "planner": {
             "model_name": "ollama/gemma4-12b-it-Q4_K_M:latest",
             "temperature": 0.2,
-            "max_tokens": 8192,
+            "max_tokens": 35000,
         },
         "coder": {
             "model_name": "ollama/gemma-4-py_coder:latest",
             "temperature": 0.1,
-            "max_tokens": 8192,
+            "max_tokens": 35000,
         },
         "reviewer": {
             "model_name": "ollama/gemma4-12b-it-Q4_K_M:latest",
             "temperature": 0.1,
-            "max_tokens": 8192,
+            "max_tokens": 35000,
         },
     },
     "aider": {
@@ -64,3 +64,16 @@ def get_model_name(role: str) -> str:
         return str(models[role].get("model_name", "ollama/gemma-4-py_coder:latest"))
 
     return "ollama/gemma-4-py_coder:latest"
+
+
+def get_model_params(role: str) -> Dict[str, Any]:
+    """Get all configured model parameters (temperature, max_tokens, etc.) for a specific role."""
+    config = load_model_config()
+    models = config.get("models", {})
+    if role in models and isinstance(models[role], dict):
+        params = dict(models[role])
+        # Return parameters excluding metadata descriptions
+        params.pop("description", None)
+        return params
+
+    return {"model_name": "ollama/gemma-4-py_coder:latest", "temperature": 0.1, "max_tokens": 35000}

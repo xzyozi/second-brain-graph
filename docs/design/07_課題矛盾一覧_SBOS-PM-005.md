@@ -22,11 +22,11 @@
 | **PM-004** | MULTI-001 §5 | 🟡 中 | 新規衛星を `.project-registry.json` へ手動登録する手順はあるが、CLIツール化されていない | `tools/add-project.py` CLIスクリプトの開発（今後実施予定） | 🟡 未解決・タスク化 |
 | **PM-005** | ORCH-001 / DD-003 | 🟡 中 | 旧 ORCH-001 のエラー分類器・再試行上限ロジックと LangGraph ノード遷移のマッピングが未定義 | `OrchestratorState` にエラーカテゴリとカウントを持たせ、LangGraph 条件エッジで判定 | 🟡 未解決・設計中 |
 | **PM-006** | MULTI-001 / DD-003 | — | Issue ID フォーマット（カッコ記法 `[EC-001]` vs カッコなし `EC-001`）の表記が全仕様書で不一致 | 内部処理キーおよび正本表記としてはカッコなし `EC-001` に確定・統一 | 🟢 解決済み |
-| **PM-007** | DD-003 §3.1 / models.json | 🔴 高 | `config/models.json` の `temperature`, `max_tokens` が `llm_client.py` シグネチャに未結合 | `llm_client.call_llm` に `**kwargs` を受け渡す共通ラッパー仕様を適用 | 🟡 未解決・設計中 |
-| **PM-008** | OP-001 §5.1 | — | OS別 (Windows Native vs Linux/WSL2) 自動バッチスクリプト (.ps1 vs .sh) の配置手順が混在 | `scripts/windows/` と `scripts/linux/` にスクリプト配置構造を明確に分離 | 🟢 解決済み |
+| **PM-007** | DD-003 §3.1 / models.json | 🟢 | `config/models.json` の `temperature`, `max_tokens` (35000) を LiteLLM 呼び出しへ動的結合 | `tools/llm_client.py` 経由で `get_model_params` を呼び出し `litellm.completion` へ完全結合・検証完了 | 🟢 解決済み |
+| **PM-008** | OP-001 §5.1 | 🟢 | OS別 (Windows Native vs Linux/WSL2) 自動バッチスクリプト (.ps1 vs .sh) の配置手順が混在 | `scripts/windows/` と `scripts/linux/` にスクリプト配置構造を明確に分離 | 🟢 解決済み |
 | **PM-009** | MULTI-001 §2② | 🟡 中 | Issue ID プレフィックス決定ルール、連番4桁化 (`0001`〜`9999`)、およびサブタスク階層化の設計 | プレフィックス策定ルールおよび4桁化・サブタスク表現（例: `EC-0001-1`）の設計策定 | 🟡 今後実施する別タスク |
 | **PM-010** | ENV-001 §2.1 / config/models.json | 🟢 | ENV-001 §2.1 のモデル記載 (`qwen` 系) が現行 `config/models.json` と乖離していた | モデル定義を `config/models.json` に一元管理し、仕様書内の特定モデル名直書きを排除・参照統一 | 🟢 解決済み |
-| **PM-011** | DD-003 §3.1 / ENV-001 §2.2 / config/models.json | 🔴 高 | `llm_client.py` の `MODEL_MAP` がコード内にハードコードされており、`config/models.json` との二重管理 (SSOT 崩壊) が発生している | `llm_client.py` が `config_loader.py` 経由で `models.json` を読み込む設計に変更（PM-007 と連動） | 🟡 未解決・設計中 |
+| **PM-011** | DD-003 §3.1 / ENV-001 §2.2 / config/models.json | 🟢 | `llm_client.py` の `MODEL_MAP` ハードコードによる二重管理 (SSOT 崩壊) | `tools/llm_client.py` 内で `config_loader` を参照しモデル名を動的取得（PM-007 と同時統合完了） | 🟢 解決済み |
 | **PM-012** | BD-002 §5 / scripts/ | 🟢 | `git config core.autocrlf input` の強制設定が環境構築スクリプトに未組み込みであった | `scripts/windows/setup_reviewdog.ps1` の冒頭に `git config --global core.autocrlf input` 組み込み完了 | 🟢 解決済み |
 | **PM-013** | DD-003 §4.1 | 🟡 中 | `escalate_node` から呼ぶ `update_task_metadata()` / `record_execution_history()` のシグネチャ・仕様・保存形式が未定義 | 両関数のシグネチャ・引数・戻り値・書き込み先スキーマを DD-003 に追記定義 | 🟡 未解決・設計欠落 |
 | **PM-014** | DD-003 §4.1 / OP-001 §3.5 | 🔴 高 | `tasks.md` 内の B7 ブロッカー判定基準 `round:N` メタデータの書式（記載位置・フォーマット）が未定義 | `tasks.md` の Issue メタデータブロック書式 (`round:N`, `max_round:N`) を正式に仕様化 | 🟡 未解決・設計欠落 |
@@ -49,15 +49,14 @@
   2. 連番表記の 4 桁化 (`0001` 〜 `9999`)。
   3. サブタスク（例: `EC-0001-1` または `EC-0001-A`）のデータ構造・依存関係定義。
 
+### PM-007 & PM-011: `models.json` ハイパーパラメータ (`max_tokens: 35000`) 動的結合および二重管理 (SSOT 崩壊) の解消
+* **対応内容**: `config/models.json` にて全モデルの `max_tokens` を `35000` に設定更新。`tools/config_loader.py` に `get_model_params()` を追加し、`tools/llm_client.py` 経由で LiteLLM (`litellm.completion`) へモデル名・`temperature`・`max_tokens` を動的自動結合する実装を完了。二重管理・不一致問題を完全に解消。
+
 ### PM-010: ドキュメント内モデル名直書きの排除と `config/models.json` 一元管理化
 * **対応内容**: ドキュメント（SBOS-ENV-001 等）およびモジュール内における特定モデル名の直書き・ハードコードを廃止。モデル定義は `config/models.json` にて一元管理（SSOT）し、ドキュメント上は役割定義 (`planner`, `coder`, `reviewer`, `aider`) および参照形式へと統一完了。
 
 ### PM-012: スクリプト内への `git config core.autocrlf input` 自動設定の組み込み
 * **対応内容**: Windows Native 環境での Aider 改行コードバグ対策として、`scripts/windows/setup_reviewdog.ps1` の実行プロセス冒頭に `git config --global core.autocrlf input` の自動設定処理を組み込み完了。
-
-### PM-011: `llm_client.py` の MODEL_MAP ハードコード廃止と `models.json` への一本化
-* **背景**: 現状は `llm_client.py` 内の `MODEL_MAP` と `config/models.json` の 2 箇所を手動で同期する必要がある。
-* **対応計画**: PM-007 のハイパーパラメータ結合設計と並行して、`llm_client.py` の初期化時に `config_loader.get_model_name()` を呼び出すよう変更する。
 
 ### PM-013: `escalate_node` 補助関数のシグネチャ定義追記
 * **背景**: `update_task_metadata(project_path, issue_id, round_num)` および `record_execution_history(state, final_status, actual_round)` という呼び出しが仕様書コードサンプルに存在するが、その実装仕様が宙に浮いている。
@@ -74,6 +73,7 @@
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.1.7)**: PM-007 (max_tokens: 35000 結合) および PM-011 (llm_client.py ハードコード完全削除) を解決済みに更新。
 - **2026/07/29 (Rev.1.6)**: PM-012 (setup_reviewdog.ps1 への git autocrlf input 自動設定組み込み) を解決済みに更新。
 - **2026/07/29 (Rev.1.5)**: PM-010 (モデルのドキュメント直書き排除・config/models.json 一元管理参照化) を解決済みに更新。
 - **2026/07/29 (Rev.1.4)**: 横断的仕様書精査により新たに発見した設計上の懸念点 6 件 (PM-010〜PM-015) を追加。重要度列をマトリクスに追加。

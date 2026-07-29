@@ -62,31 +62,38 @@ class OrchestratorState(TypedDict):
 
 ```python
 #!/usr/bin/env python3
-"""tools/llm_client.py - LiteLLM経由でのLLM呼び出し"""
+"""tools/llm_client.py - LiteLLM経由での動的LLM呼び出し (PM-007, PM-011対応)"""
 import json, re, logging, litellm
-from typing import Optional
+from typing import Optional, Dict, Any
+from tools.config_loader import get_model_params, load_model_config
 
 logger = logging.getLogger("llm_client")
-# [MODEL_MAP明記] ENV-001 と完全整合させるため coder キーを明記
-MODEL_MAP = {
-    "planner": "ollama/qwen2.5-coder:14b",
-    "coder": "ollama/qwen2.5-coder:7b-16k",
-    "reviewer": "ollama/qwen3:32b",
-}
 
-def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool = False, timeout: int = 300) -> dict:
-    model = MODEL_MAP.get(role, "ollama/qwen2.5-coder:7b-16k")
+def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool = False, timeout: int = 300, **kwargs: Any) -> dict:
+    config = load_model_config()
+    api_base = config.get("api_base", "http://localhost:11434")
+    
+    # [PM-007/PM-011修正] config/models.json から動的にパラメータ(model_name, temperature, max_tokens: 35000等)を取得
+    role_params = get_model_params(role)
+    model_name = role_params.get("model_name", "ollama/gemma-4-py_coder:latest")
+    temperature = kwargs.get("temperature", role_params.get("temperature", 0.1))
+    max_tokens = kwargs.get("max_tokens", role_params.get("max_tokens", 35000))
+
     try:
         response = litellm.completion(
-            model=model,
+            model=model_name,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            timeout=timeout, api_base="http://localhost:11434"
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            api_base=api_base,
+            **{k: v for k, v in kwargs.items() if k not in ("temperature", "max_tokens")}
         )
     except Exception as e:
-        logger.error(f"LiteLLM Error ({role}): {e}")
+        logger.error(f"LiteLLM Error ({role} / {model_name}): {e}")
         raise
 
-    raw_output = response.choices[0].message.content
+    raw_output = response.choices[0].message.content or ""
     if not expect_json:
         return {"raw": raw_output}
 
