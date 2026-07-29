@@ -1,7 +1,7 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.1.8
+# 課題・矛盾点一覧 (Problem Management) Rev.1.9
 
 文書番号: SBOS-PM-005  
-版数: Rev.1.8  
+版数: Rev.1.9  
 改訂日: 2026年7月29日  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 
@@ -31,6 +31,16 @@
 | **PM-013** | DD-003 §4.1 | 🟢 | `escalate_node` から呼ぶ `update_task_metadata()` / `record_execution_history()` のシグネチャ・仕様が未定義 | DD-003 §4.1.1 を新設し、関数契約・`history_path` スキーマを正式追記定義 | 🟢 解決済み |
 | **PM-014** | DD-003 §4.1 / OP-001 §3.5 | 🟢 | `tasks.md` 内の B7 ブロッカー判定メタデータ書式が未定義であった | `tasks.md` 内 Issue 直下の `<!-- round:N max_round:N status:STATUS -->` タグ形式に確定し OP-001 に統一手順反映 | 🟢 解決済み |
 | **PM-015** | BD-002 §5 / ENV-001 §5.1 / scripts/windows/ | 🟢 | PowerShell UTF-8 設定 (`$OutputEncoding`) の適用タイミングおよび対象スコープが未規定であった | ENV-001 §5.1 で `$PROFILE` 永続設定手順を正本化。`setup_reviewdog.ps1` を非変更確認モードに改修 | 🟢 解決済み |
+| **PM-016** | README / ENV-001 / OP-001 | 🔴 高 | オーケストレーター／スコアリング関連コード (`orchestrator_graph.py`, `score-issues.py` 等) が `tools/` に未存在 | 今後のモジュール実装フェーズにて `tools/` 配下へ段階的に実装予定 | 🟡 未解決・コード実装対象 |
+| **PM-017** | README / DD-003 / OP-001 | 🔴 高 | README の CLI 例文 (`--auto`) が詳細・運用設計書 (`orchestrate` / `execute`) と不一致 | README.md の CLI 案内コマンドを `orchestrate` / `execute --issue-id` に修整 | 🟡 未解決・要文書修正 |
+| **PM-018** | docs/setup/ | 🔴 高 | 依存管理方式のドキュメント記述が 3 系統に分裂 (`dependency_management.md` / `toml_project_setup.md`) | ドキュメントを現行の `pyproject.toml` + `uv` 仕様に統一・整理 | 🟡 未解決・要文書修正 |
+| **PM-019** | pyproject.toml / docs/ | 🔴 高 | `uv sync` 後の品質確認・開発依存関係 (`ruff`, `pytest`, `pip-licenses` 等) が不足 | `pyproject.toml` に開発用依存パッケージを追加し `uv sync` 一発で揃うよう修整 | 🟡 未解決・要設定更新 |
+| **PM-020** | reviewdog_setup_guide.md / ENV-001 | 🔴 高 | Reviewdog セットアップおよび検証手順コマンドが OS 別実スクリプト動作と不一致 | ガイドおよび ENV-001 の検証コマンドを Linux/Windows それぞれの実体（`tools/bin/` 等）へ修整 | 🟡 未解決・要文書修正 |
+| **PM-021** | ENV-001 §2.2 / config/models.json | 🔴 高 | ENV-001 の `models.json` 構成サンプルが `config_loader.py` の実キー (`model_name` 等) と非互換 | ENV-001 §2.2 の JSON 構成例を `model_name`, `temperature`, `max_tokens` の実スキーマに修整 | 🟡 未解決・要文書修正 |
+| **PM-022** | DD-003 §3.2 / tools/aider_runner.py | 🔴 高 | DD-003 の `run_aider` API 引数契約・戻り値型が実物 `tools/aider_runner.py` と非互換 | DD-003 §3.2 のコードサンプルを実物 `run_aider(instruction, target_files, model, cwd)` 仕様に修整 | 🟡 未解決・要文書修正 |
+| **PM-023** | README / docs/ | 🟡 中 | 絶対 `file:///` リンクが特定環境パス (`c:/Users/xzyoi/...`) を指しリンク切れリスク | ドキュメント内の絶対 `file:///` リンクを標準的な相対パスリンク `[text](relative/path)` へ修整 | 🟡 未解決・要文書修正 |
+| **PM-024** | oss_license_policy.md / models.json | 🟡 中 | ライセンスポリシー文書 (`oss_license_policy.md`) の利用中モデル表記が旧 Qwen 系のまま不一致 | `oss_license_policy.md` のモデル記載を現行の Gemma 4 系 (Gemma 4 12B IT, Gemma 4 Py Coder) へ修整 | 🟡 未解決・要文書修正 |
+| **PM-025** | 全設計書 (BD/ORCH/ENV/OP/MULTI) | 🔵 低 | 設計書間の関連文書欄および本文中の他ドキュメント Rev バージョン表記の乖離 | 全設計書のヘッダー・関連文書欄の Rev 表記を最新確定バージョンへ一括整合修整 | 🟡 未解決・要文書修正 |
 
 ---
 
@@ -70,9 +80,21 @@
   2. `scripts/windows/setup_reviewdog.ps1` は `$PROFILE` を直接変更せず、設定の有無を点検して未設定時に案内コードを出力する安全な非変更モードへ改修。
   3. `docs/setup/reviewdog_setup_guide.md` の記述・パスを最新のスクリプト構造と UTF-8 導線に合わせて修正。
 
+### PM-016 〜 PM-025: 全体整合性・不一致の修復方針
+* **PM-017 (README CLI)**: `README.md` 内の起動コマンド例を `orchestrate` および `execute --issue-id <ID>` に修整。
+* **PM-018 (依存ドキュメント)**: `docs/setup/dependency_management.md` と `docs/setup/toml_project_setup.md` を現行の `pyproject.toml` + `uv` 仕様に完全同期。
+* **PM-019 (pyproject.toml)**: `pyproject.toml` に `ruff`, `mypy`, `pytest-json-report`, `pip-licenses` を `[project.optional-dependencies] dev` またはメイン依存に追加。
+* **PM-020 (Reviewdog ガイド)**: Linux での `tools/bin/reviewdog` パス記述と Windows での検証手順を最新動作環境に統一。
+* **PM-021 (models.json スキーマサンプル)**: ENV-001 §2.2 の設定例を `model_name`, `temperature`, `max_tokens` の実物キーに修整。
+* **PM-022 (Aider API 仕様)**: DD-003 §3.2 の `run_aider` サンプルコードを実物 `tools/aider_runner.py` (`run_aider(instruction, target_files, model, cwd) -> bool`) と一致させる。
+* **PM-023 (file:/// 絶対パス)**: `README.md` および `docs/README.md` 内の `file:///c:/Users/...` 形式リンクを全て標準の可搬的相対パス `[text](path)` に変換。
+* **PM-024 (ライセンスポリシーモデル名)**: `docs/setup/oss_license_policy.md` のモデル解説を現行の Gemma 4 系列 (Google / Gemma License) に更新。
+* **PM-025 (設計書 Rev 統一)**: BD-002, ORCH-001, ENV-001, OP-001, MULTI-001 の関連文書ヘッダーの版数表記を最新版数に統一更新。
+
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.1.9)**: リポジトリ全体の整合性検証により抽出された課題 10 件 (PM-016〜PM-025) を追加登録。
 - **2026/07/29 (Rev.1.8)**: PM-013 (補助関数契約/履歴スキーマ), PM-014 (B7メタデータ正本書式/復旧手順), PM-015 (PowerShell UTF-8 $PROFILE 永続設定正本化/setup_reviewdog.ps1非変更確認化) をすべて解決済みに更新。
 - **2026/07/29 (Rev.1.7)**: PM-007 (max_tokens: 35000 結合) および PM-011 (llm_client.py ハードコード完全削除) を解決済みに更新。
 - **2026/07/29 (Rev.1.6)**: PM-012 (setup_reviewdog.ps1 への git autocrlf input 自動設定組み込み) を解決済みに更新。
