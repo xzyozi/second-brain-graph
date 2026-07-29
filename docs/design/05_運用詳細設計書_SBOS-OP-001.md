@@ -4,11 +4,11 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-OP-001 |
-| 版数     | Rev.4.4（review_rounds 監査ログ構造連携完全整合版）|
+| 版数     | Rev.4.5（review_rounds 監査ログ構造 §2.1 完全整合版）|
 | 改訂日   | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.7）、SBOS-ENV-001（環境構築仕様書 Rev.4.5）、SBOS-PM-005（課題一覧 Rev.2.6） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.7） |
 
 ---
 
@@ -74,8 +74,8 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 ## 2. 監査トレーサビリティとログ管理
 
 ### 2.1 実行履歴ログ (`tools/.cache/execution_history.json`)
-各タスクの実行完了（または B7 エスカレーション）時に記録される単一 JSON スキーマ。
-`review` オブジェクト内には `total_rounds` (`len(rounds)`) と各ラウンドの `verdict` / `comment` が保持される。
+各タスクの実行完了（または B7 エスカレーション）時にアトミックに記録される正本 JSON スキーマ (`DD-003 §4.1.1` 準拠)。
+各試行回数は `lint_round` / `test_round` / `review_round` フィールドに記録され、各ラウンドのレビュー判定および指摘コメント履歴は `review_rounds: [{round, verdict, comments}]` 配列から時系列で全件参照・監査できる。
 
 ---
 
