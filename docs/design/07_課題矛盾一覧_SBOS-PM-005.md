@@ -1,7 +1,7 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.7
+# 課題・矛盾点一覧 (Problem Management) Rev.2.9
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.7  
+版数: Rev.2.9  
 改訂日: 2026年7月29日  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 
@@ -51,6 +51,7 @@
 | **PM-033** | MULTI-001 §5 Step 4 | 🟠 中 | MULTI-001 §5 Step 4 の登録確認コマンドが旧台帳パス (`projects/.project-registry.json`) のまま残存 | Step 4 の確認コマンドパスを `metadata/.project-registry.json` に修整完了 | 🟢 解決済み |
 | **PM-034** | BD-002 ヘッダー | 🟡 低 | BD-002 ヘッダーの関連文書表記で `SBOS-MULTI-001 Rev.2.4）` と開き括弧が欠落していたタイポ | `SBOS-MULTI-001（差分設計書 Rev.2.6）` へ正確に修整完了 | 🟢 解決済み |
 | **PM-035** | DD-003 §4.1.1 / OP-001 §2.1, §3.5 | 🟠 中 | `execution_history.json` 内レビュー指摘履歴構造の記述 (OP-001 §2.1) と正本 JSON スキーマ例 (DD-003 §4.1.1) の不一致 | `DD-003 §4.1.1` の正本 JSON スキーマ例に `review_rounds: [{round, verdict, comments}]` 履歴配列構造を追加定義し `OP-001 §2.1` および §3.5 の全記述と三者完全統合完了 | 🟢 解決済み |
+| **PM-036** | BD-002 / DD-003 / ORCH-001 / MULTI-001 | 🔴 高 | 手動コミット(`permission`運用)から `develop` 基準の自動ブランチ作成および PR 自動作成運用への方針転換と Git 操作の厳格化 | 1. 派生元 `develop` / ターゲット `develop` の固定 (`gh pr create`) <br> 2. `escalate_node` での `develop` への退避 <br> 3. メタデータ `project.json` への `base_branch` 追加 | 🟢 解決済み |
 
 ---
 
@@ -109,9 +110,33 @@
   1. 空ディレクトリ保持 (`projects/.gitkeep`) または環境構築時の自動ディレクトリ生成。
   2. 開発者が新規マシン構築時の衛星クローン手順の明確化。
 
+### PM-036: `develop` 基準・`main` 非参照の自動ブランチ作成および PR 自動作成運用の策定
+* **背景・動機**:
+  直接ワーキングツリーのファイルを編集させて人間が手動でコミットする現状の「permissionの維持」運用よりも、エージェントにブランチを切らせて PR (Pull Request) を作成させる方針へ変更。
+  `main` ブランチを完全にスコープ外とし、常に `develop` ブランチから派生し、`develop` 宛てに PR を作成することで、本番環境 (`main`) への影響を完全遮断し安全性を高める。
+* **具体的な設計方針・改修内容**:
+  1. **LangGraph ノードにおける Git 操作の厳格化**:
+     `orchestrator_graph.py` 内での自動処理において対象ブランチを `develop` に固定。
+     * **作業開始時 (派生元の固定)**: グラフ初期化時または `plan_node` 直前で、衛星リポジトリを必ず `develop` に合わせる (`git checkout develop && git pull origin develop` 後に `git checkout -b sbos/<Issue-ID> develop` を実行)。
+     * **`done_node` 到達時 (PR作成先の固定)**: タスク完了し PR を自動作成する際、ターゲット（ベース）ブランチを明示的に指定 (`gh pr create --base develop --head sbos/<Issue-ID> ...`)。
+  2. **B7 ブロッカー到達時の安全な退避 (`escalate_node` の改修)**:
+     * `escalate_node` に到達してタスクが失敗・中断した場合、実行中の作業ブランチ (`sbos/<Issue-ID>`) での変更を破棄または退避したのち、必ず `git checkout develop` を実行して衛星リポジトリをニュートラルな状態へ戻し、次回タスクへの環境汚染を防ぐ。
+  3. **メタデータ定義への「デフォルトブランチ」項目の追加**:
+     * `develop` のハードコードを避けるため、母艦側のメタデータ定義 `metadata/projects/<PROJECT_KEY>/project.json` に `"base_branch": "develop"` を追加する。
+```json
+{
+  "name": "自社ECサイトリニューアル",
+  "key": "EC",
+  "base_branch": "develop",
+  "created_at": "2026-06-26"
+}
+```
+
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.2.9)**: PM-036 (develop基準の自動ブランチ・PR運用への方針転換) の内容を BD-002, DD-003, ORCH-001, OP-001, MULTI-001 の各設計書へ反映完了し、ステータスを解決済みに更新。
+- **2026/07/29 (Rev.2.8)**: PM-036 (develop 基準・main 非参照の自動ブランチ作成および PR 自動作成運用の策定、escalate_node での develop 退避、project.json への base_branch 追加) を新規追加登録。
 - **2026/07/29 (Rev.2.7)**: PM-030 (ENV-001 Step 2 .gitignore ヒアドキュメントの正本化追従), PM-035 (OP-001 §2.1 旧記述の review_rounds 構造への修整完全整合) を完了し解決更新。
 - **2026/07/29 (Rev.2.6)**: PM-033 (MULTI-001 §5 Step 4 台帳確認パス修整), PM-034 (BD-002 ヘッダーカッコタイポ修整), PM-035 (DD-003 §4.1.1 への review_rounds レビュー指摘履歴配列追加定義および OP-001 三者整合) をすべて解決済みに更新。
 - **2026/07/29 (Rev.2.5)**: PM-028 (台帳ネスト構造パース整合), PM-029 (.gitignore 旧記述修整), PM-030 (ENV-001 台帳パス追従), PM-031 (全設計書 Rev 統一), PM-032 (DD-003 Typing & get_git_diff 契約 & マッピング明記) をすべて解決済みに更新。

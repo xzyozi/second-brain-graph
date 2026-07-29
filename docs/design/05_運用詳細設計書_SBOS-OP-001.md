@@ -4,11 +4,11 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-OP-001 |
-| 版数     | Rev.4.5（review_rounds 監査ログ構造 §2.1 完全整合版）|
+| 版数     | Rev.4.6（PM-036 ブランチ・PR自動化方針反映）|
 | 改訂日   | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.7） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.7）、SBOS-DD-003（詳細設計書 Rev.4.9）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.8） |
 
 ---
 
@@ -65,9 +65,9 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    - ③ `lint_node` (Ruff 高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
-   - ⑥ `done_node` (`tasks.md` を完了 `[x]` 更新し、`execution_history.json` へ成果記録)
+   - ⑥ `done_node` (`tasks.md` を完了 `[x]` 更新し、`execution_history.json` へ成果記録、PRの自動作成)
    
-   > **注意:** `orchestrator_graph.py` は衛星内で `git commit` を自動実行しない。成果物の最終確認後、人間が手動で `git add && git commit` を行う。
+   > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
 
 ---
 

@@ -4,10 +4,10 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                      |
-| 版数     | Rev.4.8（review_rounds 履歴配列構造追加・完全整合版） |
+| 版数     | Rev.4.9（PM-036 ブランチ・PR自動化方針反映） |
 | 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-MULTI-001（差分設計書 Rev.2.6）、SBOS-OP-001（運用詳細設計書 Rev.4.5）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.7） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.7）、SBOS-MULTI-001（差分設計書 Rev.2.7）、SBOS-OP-001（運用詳細設計書 Rev.4.6）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.8） |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
 
 ---
@@ -236,6 +236,18 @@ def review_node(state: OrchestratorState) -> OrchestratorState:
     _pipe_to_reviewdog(state["project_path"], state["review_comments"])
     return state
 
+def done_node(state: OrchestratorState) -> OrchestratorState:
+    """レビューを通過しLGTMとなった後、自動で PR (Pull Request) を作成する"""
+    import subprocess
+    # PR作成（ベースブランチは project.json の base_branch または develop）
+    base_branch = state.get("base_branch", "develop")
+    head_branch = f"sbos/{state['issue_id']}"
+    subprocess.run(
+        ["gh", "pr", "create", "--base", base_branch, "--head", head_branch, "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agentによって自動生成されたPRです。"],
+        cwd=state["project_path"], check=True
+    )
+    return state
+
 def build_graph():
     g = StateGraph(OrchestratorState)
     g.add_node("plan", plan_node)
@@ -288,9 +300,13 @@ def build_graph():
 
 ```python
 def escalate_node(state: OrchestratorState) -> OrchestratorState:
-    """レビュー/テスト/lint の試行回数上限到達時に tasks.md を動的更新し、B7 ブロッカー化させる"""
+    """レビュー/テスト/lint の試行回数上限到達時に tasks.md を動的更新し、B7 ブロッカー化させる。作業ブランチは破棄・退避し、base_branchへ戻す。"""
+    import subprocess
     actual_round = max(state.get("round", 0), state.get("lint_round", 0), state.get("test_round", 0))
     logger.error(f"Issue {state['issue_id']} がリトライ上限 ({actual_round}/{state['max_round']}) に達しました。B7ブロッカー化します。")
+    # B7発生時のロールバック: 作業ブランチの変更をリセットし base_branch へ退避する
+    base_branch = state.get("base_branch", "develop")
+    subprocess.run(["git", "checkout", "-f", base_branch], cwd=state["project_path"])
     # [F2/III.2修正] tasks.md 内の round メタデータを動的更新し、B7 判定を成立させる
     update_task_metadata(state["project_path"], state["issue_id"], round_num=actual_round, status="FAILED_B7")
     record_execution_history(state, final_status="FAILED_B7", actual_round=actual_round)
@@ -401,9 +417,19 @@ def cmd_orchestrate(args):
 
 def cmd_execute(args):
     """指定された issue_id に対して LangGraph グラフを組み立てて実行する"""
+    import subprocess
     issue_id = args.issue_id
     graph = build_graph()
     initial_state = build_initial_state(issue_id)  # tasks.md / project.json から構築
+    
+    # グラフ実行前処理: base_branch を最新化し、作業ブランチを切る (PM-036)
+    base_branch = initial_state.get("base_branch", "develop")
+    head_branch = f"sbos/{issue_id}"
+    proj_path = initial_state["project_path"]
+    subprocess.run(["git", "checkout", base_branch], cwd=proj_path, check=True)
+    subprocess.run(["git", "pull", "origin", base_branch], cwd=proj_path, check=True)
+    subprocess.run(["git", "checkout", "-b", head_branch, base_branch], cwd=proj_path, check=True)
+
     final_state = graph.invoke(initial_state)
     print(f"Issue {issue_id} の実行が完了しました (最終状態: {final_state.get('review_verdict', 'FAILED')})")
 

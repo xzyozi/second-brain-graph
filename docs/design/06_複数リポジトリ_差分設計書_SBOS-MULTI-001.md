@@ -4,10 +4,10 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-MULTI-001 |
-| 版数 | Rev.2.6（Step4台帳確認パス修整 PM-033 完全追従版） |
+| 版数 | Rev.2.7（PM-036 project.json base_branch追加方針反映） |
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年6月26日 |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-OP-001（運用詳細設計書 Rev.4.5）、SBOS-PM-005（課題一覧 Rev.2.7） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.7）、SBOS-DD-003（詳細設計書 Rev.4.9）、SBOS-OP-001（運用詳細設計書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.8） |
 
 ---
 
@@ -73,9 +73,12 @@ metadata/projects/EC/
 {
   "name": "自社ECサイトリニューアル",
   "key": "EC",
+  "base_branch": "develop",
   "created_at": "2026-06-26"
 }
 ```
+
+> **(PM-036 仕様追加)**: `base_branch` はエージェントが作業ブランチ (`sbos/<Issue-ID>`) を派生させる元のブランチであり、かつ作業完了後の PR ターゲットブランチとなります。デフォルトは `develop` を推奨します。
 
 > **（レビュー工程統合済みの場合）** SBOS-PM-001 Rev.2.0で追加した`default_models` / `max_review_rounds`フィールドも、レビューループを導入する場合はここに追記する。
 
@@ -185,6 +188,7 @@ cat > metadata/projects/NEW/project.json << 'EOF'
 {
   "name": "新規サービス",
   "key": "NEW",
+  "base_branch": "develop",
   "created_at": "2026-07-29"
 }
 EOF
