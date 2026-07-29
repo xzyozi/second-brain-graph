@@ -1,9 +1,9 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.1.1
+# 課題・矛盾点一覧 (Problem Management) Rev.1.3
 
 文書番号: SBOS-PM-005  
-版数: Rev.1.1  
+版数: Rev.1.3  
 改訂日: 2026年7月29日  
-関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-OP-001, SBOS-MULTI-001  
+関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 
 ---
 
@@ -20,18 +20,33 @@
 | **PM-002** | MULTI-001 §4 / OP-001 | 優先度キャッシュのフィールド名 (`"project"`) が実物の `"project_key"` / `"project_dir"` と不一致 | フィールド名を `"project_key"` / `"project_dir"` に統一 | 🟢 解決済み |
 | **PM-003** | ENV-001 §2.2 / DD-003 | 旧 OpenCode (`.opencode/opencode.json`) の廃止に伴うモデル設定の一元管理方法が未確定 | `config/models.json` および `tools/config_loader.py` を新設し一元管理 | 🟢 解決済み |
 | **PM-004** | MULTI-001 §5 | 新規衛星を `.project-registry.json` へ手動登録する手順はあるが、CLIツール化されていない | `tools/add-project.py` CLIスクリプトの開発（今後実施予定） | 🟡 未解決・タスク化 |
-| **PM-005** | ENV-001 §1.2 / pyproject.toml | Python 3.14 環境で `scipy` の Fortran ビルドエラーが発生する問題 | `.python-version` を `3.12` に固定し事前ビルドホイール利用を徹底 | 🟢 解決済み |
+| **PM-005** | ORCH-001 / DD-003 | 旧 ORCH-001 のエラー分類器・再試行上限ロジックと LangGraph ノード遷移のマッピングが未定義 | `OrchestratorState` にエラーカテゴリとカウントを持たせ、LangGraph 条件エッジで判定 | 🟡 未解決・設計中 |
+| **PM-006** | MULTI-001 / DD-003 | Issue ID フォーマット（カッコ記法 `[EC-001]` vs カッコなし `EC-001`）の表記が全仕様書で不一致 | 内部処理キーおよび正本表記としてはカッコなし `EC-001` に確定・統一 | 🟢 解決済み |
+| **PM-007** | DD-003 §3.1 / models.json | `config/models.json` の `temperature`, `max_tokens` が `llm_client.py` シグネチャに未結合 | `llm_client.call_llm` に `**kwargs` を受け渡す共通ラッパー仕様を適用 | 🟡 未解決・設計中 |
+| **PM-008** | OP-001 §5.1 | OS別 (Windows Native vs Linux/WSL2) 自動バッチスクリプト (.ps1 vs .sh) の配置手順が混在 | `scripts/windows/` と `scripts/linux/` にスクリプト配置構造を明確に分離 | 🟢 解決済み |
+| **PM-009** | MULTI-001 §2② | Issue ID プレフィックス決定ルール、連番4桁化 (`0001`〜`9999`)、およびサブタスク階層化の設計 | プレフィックス策定ルールおよび4桁化・サブタスク表現（例: `EC-0001-1`）の設計策定 | 🟡 今後実施する別タスク |
 
 ---
 
 ## 3. 詳細説明と今後の対応計画
 
-### PM-004: 衛星プロジェクト追加 CLI (`tools/add-project.py`) の自動化
-* **背景**: 新規衛星プロダクトを追加する際、`project.json` の作成と `.project-registry.json` への辞書登録ワンライナーを手動で実行する必要がある。
-* **対応計画**: `python tools/add-project.py --name "新規サービス" --key "NEW"` コマンドで全初期化を完結させるスクリプトを実装予定。
+### PM-006: Issue ID 正本表記 (`EC-001`) への統一
+* **対応内容**: システム内部キーおよび仕様書上の標準表記をカッコなしの `EC-001` に統一決定。表示上のカッコ `[EC-001]` は `tasks.md` 等のレンダリング時の表現としてのみ許容する。
+
+### PM-008: OS別スクリプト配置構造の分離完了
+* **対応内容**: `scripts/windows/setup_reviewdog.ps1` および `scripts/linux/setup_reviewdog.sh` へディレクトリ配置構造を明確に分離。
+
+### PM-009: Issue ID スキーマ拡張（4桁化・サブタスク階層化・プレフィックス策定）
+* **背景**: タスク数の増加（`001`〜`999` の上限超過）および複雑な親枝・子枝タスクの管理ニーズ。
+* **検討項目**:
+  1. プレフィックス命名決定ルールの標準化。
+  2. 連番表記の 4 桁化 (`0001` 〜 `9999`)。
+  3. サブタスク（例: `EC-0001-1` または `EC-0001-A`）のデータ構造・依存関係定義。
 
 ---
 
 ## 4. 改訂履歴
-- **2026/07/29 (Rev.1.1)**: 旧障害記録スクリプト (record-failure.py) に関する検討項目 (旧PM-005) を削除。
-- **2026/07/29 (Rev.1.0)**: 初版作成。PM-001〜PM-006 の矛盾点・課題を整理・初出定義。
+- **2026/07/29 (Rev.1.3)**: PM-006 (`EC-001` 統一) および PM-008 (OS別配置構造分離) を解決済みに更新。新規検討タスク PM-009 (4桁化・サブタスク・プレフィックスルール) を追記。
+- **2026/07/29 (Rev.1.2)**: 潜在的な仕様・設計レベルの課題 4 件 (PM-005〜PM-008) を追加。
+- **2026/07/29 (Rev.1.1)**: 旧障害記録スクリプト (record-failure.py) に関する検討項目を削除。
+- **2026/07/29 (Rev.1.0)**: 初版作成。
