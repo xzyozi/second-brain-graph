@@ -43,12 +43,12 @@ go build -o reviewdog.exe ./cmd/reviewdog
 
 ```powershell
 # Windows (PowerShell)
-.\scripts\setup_reviewdog.ps1
+.\scripts\windows\setup_reviewdog.ps1
 ```
 
 ```bash
 # Linux / macOS
-bash scripts/setup_reviewdog.sh
+bash scripts/linux/setup_reviewdog.sh
 ```
 
 ---
