@@ -4,10 +4,10 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                      |
-| 版数     | Rev.4.5（補助関数契約・Aider API実物整合版） |
+| 版数     | Rev.4.6（Typing修整・get_git_diff契約・マッピング明記統合版） |
 | 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.4）、SBOS-MULTI-001 Rev.2.2、SBOS-OP-001 Rev.4.2、SBOS-ENV-001 Rev.4.3、SBOS-PM-005 Rev.1.9 |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-MULTI-001 Rev.2.4、SBOS-OP-001 Rev.4.3、SBOS-ENV-001 Rev.4.4、SBOS-PM-005 Rev.2.5 |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
 
 ---
@@ -28,7 +28,7 @@ reviewdog -version
 
 ```python
 # tools/orchestrator_graph.py
-from typing import TypedDict, Literal, List, Dict, Any
+from typing import TypedDict, Literal, List, Dict, Any, Optional
 from pathlib import Path
 from langgraph.graph import StateGraph, END
 
@@ -159,6 +159,21 @@ def run_aider(
     except Exception as e:
         logger.error(f"[AiderRunner] Aider execution failed: {e}")
         return False
+
+def get_git_diff(cwd: Optional[str] = None) -> str:
+    """指定された衛星リポジトリカレントディレクトリの未コミット git diff を取得する"""
+    try:
+        res = subprocess.run(
+            ["git", "diff", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return res.stdout
+    except Exception as e:
+        logger.error(f"[AiderRunner] Failed to fetch git diff: {e}")
+        return ""
 ```
 
 ---
@@ -309,6 +324,7 @@ def update_task_metadata(
 
 #### 3. `record_execution_history()` 関数と `history_path` スキーマ
 * **保存パス (`history_path`)**: `tools/.cache/execution_history.json`
+* **フィールドマッピング注記**: `OrchestratorState` のレビュー試行カウンタ `state["round"]` は、履歴 JSON スキーマ上の `"review_round"` フィールドへそのままマッピング保存される。
 
 ```python
 def record_execution_history(

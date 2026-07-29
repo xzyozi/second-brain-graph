@@ -1,13 +1,13 @@
-# 差分設計書 (複数リポジトリ対応モデル) Rev.2.3
+# 差分設計書 (複数リポジトリ対応モデル) Rev.2.4
 **「第二の脳」母艦 × 衛星アーキテクチャ 拡張仕様**
 
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-MULTI-001 |
-| 版数 | Rev.2.3（メタデータ母艦階層分離 PM-026 / 完全 Git 遮断 PM-027 対応版） |
+| 版数 | Rev.2.4（台帳ネスト構造スコアリング整合 PM-028 完全整合版） |
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年6月26日 |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.4）、SBOS-DD-003（詳細設計書 Rev.4.5）、SBOS-OP-001（運用詳細設計書 Rev.4.2）、SBOS-PM-005（課題一覧 Rev.2.3） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.6）、SBOS-OP-001（運用詳細設計書 Rev.4.3）、SBOS-PM-005（課題一覧 Rev.2.5） |
 
 ---
 
@@ -98,17 +98,18 @@ import os, json
 
 def load_registry(root_dir: str) -> dict:
     """metadata/.project-registry.json を読み込む。
-    形式: {"EC": {"dir": "projects/ec-site", "meta": "metadata/projects/EC"}, ...}"""
+    形式: {"version": "1.0", "projects": {"EC": {"dir": "projects/ec-site", "meta": "metadata/projects/EC"}}}"""
     reg_path = os.path.join(root_dir, "metadata", ".project-registry.json")
     if not os.path.exists(reg_path):
         return {}
     with open(reg_path, encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+        return data.get("projects", {})
 
 all_issues = []
-registry = load_registry(root_dir=".")
-for project_key, info in registry.items():
-    meta_dir = os.path.join("metadata", "projects", project_key)
+projects = load_registry(root_dir=".")
+for project_key, info in projects.items():
+    meta_dir = info.get("meta", os.path.join("metadata", "projects", project_key))
     tasks_path = os.path.join(meta_dir, "tasks.md")
     if not os.path.exists(tasks_path):
         continue

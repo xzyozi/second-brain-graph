@@ -4,11 +4,11 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-ENV-001 |
-| 版数 | Rev.4.3（models.json 一元管理統合・Windows Nativeセットアップ完全対応版） |
+| 版数 | Rev.4.4（metadata/.project-registry.json 設定追従完全整合版） |
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | インフラエンジニア / システム管理者 / 開発環境構築担当エンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.4）、SBOS-DD-003（詳細設計書 Rev.4.5）、SBOS-OP-001（運用詳細設計書 Rev.4.2）、SBOS-PM-005（課題一覧 Rev.1.9） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.5）、SBOS-DD-003（詳細設計書 Rev.4.6）、SBOS-OP-001（運用詳細設計書 Rev.4.3）、SBOS-PM-005（課題一覧 Rev.2.5） |
 
 ---
 
@@ -118,9 +118,16 @@ __pycache__/
 .aider*
 EOF
 
-# 4. 衛星台帳インデックスの初期化
-echo '{}' > projects/.project-registry.json
-git add .gitignore projects/.project-registry.json
+# 4. 衛星台帳インデックスおよびメタデータディレクトリの初期化 (PM-026/027 対応)
+mkdir -p metadata/projects projects
+cat > metadata/.project-registry.json << 'EOF'
+{
+  "version": "1.0",
+  "projects": {}
+}
+EOF
+touch metadata/projects/.gitkeep projects/.gitkeep
+git add .gitignore metadata/ projects/.gitkeep
 git commit -m "chore: initialize second-brain OS base structure"
 ```
 
@@ -294,7 +301,7 @@ def main():
         print_result("Python OSS Packages", False, f"ImportError: {e}")
             
     # 5. 台帳インデックス構造チェック
-    reg_path = "projects/.project-registry.json"
+    reg_path = "metadata/.project-registry.json"
     print_result("Project Registry File Exists", os.path.exists(reg_path), reg_path)
     
     print("=== All Diagnostics Passed Successfully! ===")

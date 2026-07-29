@@ -4,10 +4,10 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-BD-002                                                      |
-| 版数     | Rev.4.4（全仕様書完全整合・最終安定版）|
+| 版数     | Rev.4.5（全仕様書完全整合・最終安定版）|
 | 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-DD-003（詳細設計書 Rev.4.5）、SBOS-MULTI-001 Rev.2.3、SBOS-OP-001（運用詳細設計書 Rev.4.2）、SBOS-ENV-001（環境構築仕様書 Rev.4.3）、SBOS-PM-005（課題一覧 Rev.2.4） |
+| 関連文書 | SBOS-DD-003（詳細設計書 Rev.4.6）、SBOS-MULTI-001 Rev.2.4）、SBOS-OP-001（運用詳細設計書 Rev.4.3）、SBOS-ENV-001（環境構築仕様書 Rev.4.4）、SBOS-PM-005（課題一覧 Rev.2.5） |
 | 対象読者 | システムアーキテクト / リード開発エンジニア / ナレッジマネジメント運用者 / DevOpsエンジニア |
 
 ---
@@ -81,8 +81,8 @@
 
 ## 4. 母艦×衛星 Git 隔離モデルとの整合
 
-1. **`.gitignore` による遮断 (SBOS-MULTI-001)**:
-   母艦の `.gitignore` (`/projects/*`, `!/projects/.project-registry.json`) により、衛星内の差分は母艦 Git に影響しない。
+1. **`.gitignore` による完全遮断 (SBOS-MULTI-001 / PM-027)**:
+   母艦の `.gitignore` (`/projects/*`, `/projects/.*`, `!.gitignore`) により、衛星内の差分および Git 履歴は母艦 Git から完全に隔離・遮断される。中央台帳は `metadata/.project-registry.json` に配置管理する。
 2. **Aider のコミット制御 (F1対応)**:
    Aider 起動オプションに正しく `--no-auto-commits`（複数形）を指定。Aider はファイルの修正のみを行い、`git commit` は行わない。
 3. **人間の最終承認**:

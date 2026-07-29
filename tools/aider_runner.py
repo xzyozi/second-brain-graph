@@ -49,3 +49,20 @@ def run_aider(
     except Exception as e:
         print(f"[AiderRunner] Unexpected error executing Aider: {e}")
         return False
+
+
+def get_git_diff(cwd: Optional[str] = None) -> str:
+    """Get the current uncommitted git diff for the target project repository."""
+    try:
+        res = subprocess.run(
+            ["git", "diff", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return res.stdout
+    except Exception as e:
+        print(f"[AiderRunner] Failed to fetch git diff: {e}")
+        return ""
+

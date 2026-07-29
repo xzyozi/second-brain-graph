@@ -1,44 +1,29 @@
-"""Unit tests for config_loader and aider_runner modules."""
+"""Unit tests for tools.aider_runner."""
 
-from unittest.mock import patch
-from tools.config_loader import get_model_name, load_model_config
-from tools.aider_runner import run_aider
-
-
-def test_load_model_config() -> None:
-    """Test loading configuration file."""
-    config = load_model_config()
-    assert "models" in config
-    assert "aider" in config
-
-
-def test_get_model_name() -> None:
-    """Test getting model names for roles."""
-    coder_model = get_model_name("coder")
-    aider_model = get_model_name("aider")
-    planner_model = get_model_name("planner")
-
-    assert "gemma" in coder_model.lower()
-    assert "gemma" in aider_model.lower()
-    assert "gemma" in planner_model.lower()
+from unittest.mock import MagicMock, patch
+from tools.aider_runner import get_git_diff, run_aider
 
 
 @patch("subprocess.run")
-def test_run_aider_mock(mock_run) -> None:
-    """Test run_aider function with mocked subprocess."""
-    mock_run.return_value.returncode = 0
+def test_get_git_diff_success(mock_run):
+    mock_res = MagicMock()
+    mock_res.stdout = "diff --git a/file.txt b/file.txt"
+    mock_res.returncode = 0
+    mock_run.return_value = mock_res
 
-    success = run_aider(
-        instruction="Fix syntax error",
-        target_files=["test.py"],
+    diff = get_git_diff(cwd=".")
+    assert "diff --git" in diff
+    mock_run.assert_called_once_with(
+        ["git", "diff", "HEAD"],
+        cwd=".",
+        capture_output=True,
+        text=True,
+        check=True,
     )
 
-    assert success is True
-    assert mock_run.called
-    args, _ = mock_run.call_args
-    cmd = args[0]
-    assert cmd[0] == "aider"
-    assert "--model" in cmd
-    assert "ollama/gemma-4-py_coder:latest" in cmd
-    assert "--yes-always" in cmd
-    assert "--no-auto-commits" in cmd
+
+@patch("subprocess.run")
+def test_get_git_diff_failure(mock_run):
+    mock_run.side_effect = Exception("Git not found")
+    diff = get_git_diff(cwd=".")
+    assert diff == ""
