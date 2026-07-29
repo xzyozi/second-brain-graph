@@ -39,16 +39,19 @@ go build -o reviewdog.exe ./cmd/reviewdog
 
 ### 3.3 自動セットアップスクリプトによる配置 (Windows / Linux)
 
-プロジェクト直下の `scripts/setup_reviewdog.ps1` (Windows) または `scripts/setup_reviewdog.sh` (Linux/macOS) を実行することでも自動取得・配置が可能です。
+プロジェクト直下の `scripts/windows/setup_reviewdog.ps1` (Windows) または `scripts/linux/setup_reviewdog.sh` (Linux/macOS) を実行することでも自動取得・配置が可能です。
+
+> **Windows Native 環境での注意:**  
+> Reviewdog の出力文字化けを防ぐため、事前に PowerShell プロファイル (`$PROFILE`) への UTF-8 永続設定を行っておくことを推奨します。（詳細は [環境構築仕様書 (SBOS-ENV-001) §5.1](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/04_%E7%92%B0%E5%A2%83%E6%A7%8B%E7%AF%89%E4%BB%95%E6%A7%98%E6%9B%B8_SBOS-ENV-001.md#51-windows-native-%E7%92%B0%E5%A2%83%E5%90%91%E3%81%91%E6%9C%80%E9%81%A9%E5%8C%96%E8%A6%8B%E5%87%BA%E3%81%97-powershell) を参照）
 
 ```powershell
 # Windows (PowerShell)
-.\scripts\setup_reviewdog.ps1
+.\scripts\windows\setup_reviewdog.ps1
 ```
 
 ```bash
 # Linux / macOS
-bash scripts/setup_reviewdog.sh
+bash scripts/linux/setup_reviewdog.sh
 ```
 
 ---

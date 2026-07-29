@@ -4,11 +4,11 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-ENV-001 |
-| 版数 | Rev.4.2（新OSSスタック全面対応・Windows Nativeセットアップ統合版） |
-| 改訂日 | 2026年7月28日 |
+| 版数 | Rev.4.6（.gitignore 生成スクリプト・台帳確認完全整合版） |
+| 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | インフラエンジニア / システム管理者 / 開発環境構築担当エンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.1）、SBOS-DD-003（詳細設計書 Rev.4.2）、SBOS-OP-001（運用詳細設計書 Rev.3.4） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-OP-001（運用詳細設計書 Rev.4.5）、SBOS-PM-005（課題一覧 Rev.2.7） |
 
 ---
 
@@ -21,9 +21,9 @@
 
 | パターン | システム構成・GPUスペック | 稼働可能なモデル構成 | 想定パフォーマンス |
 | :--- | :--- | :--- | :--- |
-| **推奨環境** | **NVIDIA RTX 4090 (24GB VRAM)**<br>または Apple M3/M4 Max (64GB RAM) | • Reviewer: `qwen3:32b` (Q4_K_M)<br>• Planner: `qwen2.5-coder:14b`<br>• Coder/Aider: `qwen2.5-coder:7b-16k` | 32BモデルをVRAMに常駐させつつ、7B/14Bモデルの即時ロードが可能。最高速の応答性と品質を実現。 |
-| **標準環境** | **NVIDIA RTX 4080 / 3090 (16GB VRAM)**<br>または Apple M2/M3 Pro (32GB RAM) | • Reviewer/Planner: `qwen2.5-coder:14b`<br>• Coder/Aider: `qwen2.5-coder:7b-16k` | 14Bモデルを最上位設計・監査として利用。全タスクの実用的で安定した自律処理が可能。 |
-| **最小要件** | **NVIDIA RTX 3060 / 4060 (8GB〜12GB VRAM)**<br>または Apple M1/M2 (16GB RAM) | • 全エージェント共通: `qwen2.5-coder:7b-16k` | 7Bモデル単体による運用。高度なレビューや複雑な要件定義ではリトライ回数が増加する可能性あり。 |
+| **推奨環境** | **NVIDIA RTX 4090 (24GB VRAM)**<br>または Apple M3/M4 Max (64GB RAM) | • 大型・高精度モデルを各役割 (`reviewer`, `planner`, `coder`, `aider`) に配備 | 大規模モデルをVRAMに常駐させつつ、高速応答性と高品質な設計・監査を両立。 |
+| **標準環境** | **NVIDIA RTX 4080 / 3090 (16GB VRAM)**<br>または Apple M2/M3 Pro (32GB RAM) | • 中型標準モデルを各役割に配備 | 標準的なローカルモデル構成で全タスクの実用的かつ安定した自律処理が可能。 |
+| **最小要件** | **NVIDIA RTX 3060 / 4060 (8GB〜12GB VRAM)**<br>または Apple M1/M2 (16GB RAM) | • 全エージェント共通で軽量モデルを配備 | 軽量モデル単体による運用。高度なレビューや複雑な要件定義ではリトライ回数が増加する可能性あり。 |
 
 ### 1.2 必須ソフトウェアおよびミドルウェア
 - **OS:** Linux (Ubuntu 22.04 LTS+ / Debian 12+), macOS (Sonoma 14+), または Windows 11 (Windows Native / WSL2 両対応)
@@ -36,40 +36,45 @@
 
 ---
 
-## 2. マルチモデル配置戦略と LiteLLM / Aider 設定仕様
+## 2. モデル配置管理仕様 (`config/models.json`)
 
-### 2.1 役割別推奨オープンウェイトモデル
-Ollama にダウンロードし、各エージェントの責務に合わせて配備するモデル名と選択根拠を規定する。
+### 2.1 一元管理モデル設定方針
+本システムでは、ドキュメントやモジュールコード内に具体的なモデル名を直接記述・ハードコードせず、すべて **`config/models.json`** にて一元管理（Single Source of Truth: SSOT）する。
 
-```bash
-# コマンドによるモデルのプル
-ollama pull qwen2.5-coder:7b-16k
-ollama pull qwen2.5-coder:14b
-ollama pull qwen3:32b  # VRAM 20GB以上が確保できる場合
-```
+ユーザー環境でダウンロード済み・利用可能な Ollama モデル (`ollama list`) を確認し、`config/models.json` に動的に割り当てる。
 
-- **`qwen2.5-coder:7b-16k` (コード編集・対話用):**
-  16,384トークンの拡張コンテキスト窓を持ち、Aider による差分編集と高速な応答（約40-60 token/sec）に特化。Coder / Aider および Sisyphus/PM に配備。
-- **`qwen2.5-coder:14b` (設計・計画用):**
-  複雑なディレクトリ構造の把握、アルゴリズムの選択、および正確なマークダウン指示書の生成において7Bモデルを圧倒する精度を誇る。Planner (plan_node) に配備。
-- **`qwen3:32b` (監査・レビュー用):**
-  優れた自然言語論理推論力とエッジケース検知能力を持つ。コードを書かせるのではなく、仕様書と diff の整合性を批判的に監査する Reviewer (review_node) に配備。
+### 2.2 設定ファイル構成例 (`config/models.json`)
 
----
-
-### 2.2 LiteLLM および Aider モデル割り当て構成
-
-OpenCode CLI および `.opencode/opencode.json` は廃止され、`tools/llm_client.py` (LiteLLM) および `tools/aider_runner.py` (Aider) により直接 Ollama API へ接続する。
-
-```python
-# tools/llm_client.py におけるモデル割り当て設定 (MODEL_MAP)
-MODEL_MAP = {
-    "planner": "ollama/qwen2.5-coder:14b",
-    "reviewer": "ollama/qwen3:32b",
-    "coder": "ollama/qwen2.5-coder:7b-16k",
+```json
+{
+  "api_base": "http://localhost:11434",
+  "default_provider": "ollama",
+  "models": {
+    "planner": {
+      "model_name": "ollama/<実在の汎用ローカルモデル名>",
+      "temperature": 0.2,
+      "max_tokens": 35000
+    },
+    "coder": {
+      "model_name": "ollama/<実在のコード用ローカルモデル名>",
+      "temperature": 0.1,
+      "max_tokens": 35000
+    },
+    "reviewer": {
+      "model_name": "ollama/<実在の汎用ローカルモデル名>",
+      "temperature": 0.1,
+      "max_tokens": 35000
+    }
+  },
+  "aider": {
+    "model_name": "ollama/<実在のコード用ローカルモデル名>",
+    "no_auto_commits": true,
+    "edit_format": "diff"
+  }
 }
 ```
 
+各モジュール (`tools/llm_client.py`, `tools/aider_runner.py` 等) は `tools/config_loader.py` 経由でこの設定を動的に参照し、LLM 呼び出しを行う。
 Aider 実行時は環境変数 `OLLAMA_API_BASE=http://localhost:11434` を設定し、`--no-auto-commits` (複数形) フラグを付加して非破壊的なワーキングツリー差分適用を行う。
 
 ---
@@ -96,25 +101,37 @@ cd ~/second-brain
 git init
 
 # 2. ツール・テンプレートおよびキャッシュ用フォルダ構成の作成
-mkdir -p tools/.cache tools/templates projects
+mkdir -p tools/.cache tools/templates projects config
 
-# 3. 母艦側 .gitignore の作成（衛星プロジェクト完全遮断ルールの適用）
+# 3. 母艦側 .gitignore の作成（衛星プロジェクト完全遮断ルールの適用 PM-027）
 cat << 'EOF' > .gitignore
 # 衛星プロジェクトのソースコードおよびGit履歴を母艦から完全に遮断
 /projects/*
-!/projects/.project-registry.json
+/projects/.*
+!/projects/.gitkeep
+!.gitignore
 
-# キャッシュ・ログ・一時ファイル
+# キャッシュ・ログ・ツールバイナリ
+/tools/bin/
+/tools/reviewdog/
 tools/.cache/*
 *.log
 __pycache__/
 *.pyc
 .venv/
+.aider*
 EOF
 
-# 4. 衛星台帳インデックスの初期化
-echo '{}' > projects/.project-registry.json
-git add .gitignore projects/.project-registry.json
+# 4. 衛星台帳インデックスおよびメタデータディレクトリの初期化 (PM-026/027 対応)
+mkdir -p metadata/projects projects
+cat > metadata/.project-registry.json << 'EOF'
+{
+  "version": "1.0",
+  "projects": {}
+}
+EOF
+touch metadata/projects/.gitkeep projects/.gitkeep
+git add .gitignore metadata/ projects/.gitkeep
 git commit -m "chore: initialize second-brain OS base structure"
 ```
 
@@ -130,10 +147,11 @@ uv pip install langgraph litellm aider-chat ruff pytest pytest-json-report
 
 # 2. Reviewdog のインストール
 # Linux / macOS の場合:
-curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh | sh -s -- -b ~/.local/bin
+bash scripts/linux/setup_reviewdog.sh
+tools/bin/reviewdog -version
+
 # Windows Native の場合 (PowerShell):
-# GitHub Releases から reviewdog.exe をダウンロードして PATH が通った場所へ配置
-reviewdog -version
+.\scripts\windows\setup_reviewdog.ps1
 
 # 3. ruff 設定ファイル (ruff.toml) の配置
 cat << 'EOF' > ruff.toml
@@ -188,10 +206,26 @@ Windows Native 環境で動作させる場合は、以下の Git および Power
    git config --global core.autocrlf input
    ```
 
-2. **PowerShell 文字化け対策 (UTF-8 設定):**
-   日本語パスや Reviewdog の出力文字化けを防止するため、PowerShell プロファイル (`$PROFILE`) に以下を追加する。
+2. **PowerShell 文字化け対策 ($PROFILE への UTF-8 永続設定):**
+   日本語パスや Reviewdog の出力文字化けを防止するため、PowerShell プロファイル (`$PROFILE`) へ UTF-8 永続設定を追加する。
+
+   **設定コマンド (重複防止アトミック追記):**
    ```powershell
-   $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+   if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
+   $utf8Cmd = '$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()'
+   if (!(Select-String -Path $PROFILE -Pattern "UTF8Encoding" -Quiet)) {
+       Add-Content -Path $PROFILE -Value "`n$utf8Cmd" -Encoding utf8
+       Write-Host "✓ $PROFILE に UTF-8 永続設定を追加しました。" -ForegroundColor Green
+   } else {
+       Write-Host "✓ $PROFILE には既に UTF-8 永続設定が存在します。" -ForegroundColor Yellow
+   }
+   ```
+
+   **新規 PowerShell セッションでの確認手順:**
+   新しい PowerShell ウィンドウを起動し、以下を実行して出力エンコーディングが UTF-8 であることを確認する。
+   ```powershell
+   $OutputEncoding.EncodingName
+   # 期待される出力: Unicode (UTF-8)
    ```
 
 ### 5.2 WSL2 環境向けパフォーマンス最適化 (Linux)
@@ -224,7 +258,7 @@ Register-ScheduledTask -TaskName "SecondBrainDailyScoring" -Action $Action -Trig
 
 ```python
 #!/usr/bin/env python3
-"""Second Brain OS (Rev.4.2) 環境健全性診断スクリプト"""
+"""Second Brain OS (Rev.4.3) 環境健全性診断スクリプト"""
 import os
 import sys
 import subprocess
@@ -271,7 +305,7 @@ def main():
         print_result("Python OSS Packages", False, f"ImportError: {e}")
             
     # 5. 台帳インデックス構造チェック
-    reg_path = "projects/.project-registry.json"
+    reg_path = "metadata/.project-registry.json"
     print_result("Project Registry File Exists", os.path.exists(reg_path), reg_path)
     
     print("=== All Diagnostics Passed Successfully! ===")

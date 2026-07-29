@@ -1,46 +1,52 @@
-# プロジェクトセットアップガイド (Hatch版)
+# pyproject.toml / Ruff / Mypy / Pytest 設定ガイド
 
-このプロジェクトは、依存関係と開発環境の管理に [Hatch](https://hatch.pypa.io/latest/) を使用します。プロジェクトルートにある `pyproject.toml` ファイルが、従来の `setup.py` の役割を置き換えます。
+本プロジェクトでは `pyproject.toml` にて、`setuptools` ビルド構成、`Ruff` (Linter/Formatter)、`Mypy` (Type Checker)、`Pytest` (Testing) の全設定を規定しています。
 
-## 初回のみ必要な準備
+---
 
-作業を始める前に、Hatchをインストールする必要があります。この作業は一度だけで結構です。
+## 1. `pyproject.toml` の構成
 
-```shell
-pip install hatch
-```
+```toml
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
-## プロジェクトのセットアップ
+[project]
+name = "second-brain-graph"
+version = "0.1.0"
+description = "LLMマルチエージェント × ナレッジグラフ統括・自律タスク実行基盤"
+requires-python = ">=3.10, <3.14"
 
-プロジェクトの環境構築、すべての依存関係のインストール、Playwrightが必要とするブラウザのダウンロードを行うには、プロジェクトのルートディレクトリで以下のコマンドを実行してください。
+dependencies = [
+    "langgraph>=0.1.0",
+    "litellm>=1.30.0",
+    "aider-chat>=0.30.0",
+    "pydantic>=2.0.0",
+    "pytest-json-report>=1.5.0",
+]
 
-```shell
-hatch run setup
-```
-
-このコマンド一つで、以下の処理が自動的に実行されます。
-
-1.  プロジェクト専用の仮想環境がなければ作成します。
-2.  `pyproject.toml` に指定された、アプリケーション用および開発用のすべての依存関係をインストールします。
-3.  `[tool.hatch.scripts]` に定義されたセットアップスクリプトを実行します。これには以下の処理が含まれます。
-    *   `requirements.in` から `requirements.txt` を生成する。
-    *   `requirements.txt` の内容と環境を完全に同期させる。
-    *   Playwrightが必要とするブラウザドライバをインストールする。
-
-## 仮想環境のアクティベート
-
-プロジェクトの環境内で作業（例：スクリプトの手動実行など）を行いたい場合は、以下のコマンドで仮想環境のシェルに入ることができます。
-
-```shell
-hatch shell
-```
-
-## テストの実行
-
-このプロジェクトでは、`pytest` を使用してテストを実行するよう設定されています。以下のコマンドでテストスイート全体を実行できます。
-
-```shell
-hatch run test
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.0.0",
+    "pip-licenses>=4.0.0",
+]
 ```
 
 ---
+
+## 2. ツール別設定詳細
+
+### ① Ruff (Linter & Formatter)
+- `line-length = 100`
+- `select = ["E", "F", "W", "I", "N", "B"]` (Error, Pyflakes, Warning, Isort, Naming, Bugbear)
+- コマンド: `uv run ruff check .` / `uv run ruff format .`
+
+### ② Mypy (型チェック)
+- `python_version = "3.10"`
+- コマンド: `uv run mypy .`
+
+### ③ Pytest (単体テスト)
+- `testpaths = ["tests"]`
+- コマンド: `uv run pytest`

@@ -1,74 +1,48 @@
-# 依存関係の管理フロー
+# uv による依存関係・パッケージ管理仕様
 
-このプロジェクトでは、Pythonの依存関係を管理するために `pip-tools` を使用します。
-これにより、開発環境の再現性を高め、依存関係をクリーンに保ちます。
-
-## 概要
-
-依存関係は2つのファイルで管理されます。
-
--   `requirements.in`: プロジェクトが**直接**必要とするライブラリを記述するファイルです。**手で編集するのはこのファイルだけです。**
--   `requirements.txt`: `pip-compile`によって**自動生成**されるファイルです。プロジェクトの全依存ライブラリ（間接的なものも含む）とそのバージョンが固定されています。このファイルは手で編集しないでください。
+本プロジェクトでは、高速かつ確定的パッケージマネージャー **`uv`** (Astral製) および **`pyproject.toml`** を用いて依存関係を一元管理します。
 
 ---
 
-## 新しいライブラリを追加する手順
+## 1. 概要と構成ファイル
 
-1.  **`requirements.in` にライブラリを追加**
-    -   プロジェクトのルートにある `requirements.in` ファイルを開き、追加したいライブラリ名を追記します。バージョンを指定することも可能ですが、通常は指定せずに最新の互換バージョンを自動で選択させます。
+依存関係および仮想環境は以下のファイルで管理されます。
 
-    ```
-    # requirements.in
-
-    flask
-    requests
-    # 新しいライブラリを追記
-    new-library
-    ```
-
-2.  **`requirements.txt` を更新**
-    -   ターミナルで以下のコマンドを実行し、`requirements.txt` を再生成します。
-
-    ```bash
-    pip-compile requirements.in
-    ```
-
-3.  **ライブラリのインストール**
-    -   更新された `requirements.txt` を使して、ライブラリをインストールします。
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4.  **ファイルをコミット**
-    -   変更された `requirements.in` と `requirements.txt` の両方をGitにコミットしてください。
+- **`pyproject.toml`**: プロジェクトが直接必要とするライブラリおよび開発依存関係 (`[project.optional-dependencies] dev`) を記述する標準設定ファイルです。手動編集を行います。
+- **`uv.lock`**: `uv` によって自動更新・ロックされる完全確定バージョン一覧です。直接編集しません。
 
 ---
 
-## 新しい開発環境をセットアップする手順
+## 2. 依存パッケージの追加・同期手順
 
-1.  **リポジトリをクローン**
-    -   `git clone ...`
+### ① 直接依存パッケージの追加
+`pyproject.toml` の `dependencies` または `[project.optional-dependencies] dev` にライブラリ名を追加します。
 
-2.  **仮想環境の作成と有効化** (推奨)
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # Linux/macOS
-    # .venv\Scripts\activate  # Windows
-    ```
+### ② 仮想環境の同期 (`uv sync`)
+ターミナルで以下のコマンドを実行し、依存関係をアトミックに同期します。
 
-3.  **依存ライブラリのインストール**
-    -   `requirements.txt` を使って、プロジェクトに必要な全てのライブラリをインストールします。
+```bash
+# 基本依存関係の同期
+uv sync
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+# 開発用ツール (ruff, mypy, pytest, pip-licenses) も含めた同期 (推奨)
+uv sync --extra dev
+```
 
-4.  **初期セットアップの実行**
-    -   データベースのマイグレーションや、`esbuild`のセットアップを行います。
+---
 
-    ```bash
-    python setup.py
-    ```
+## 3. 品質チェック・診断コマンド
 
-これで、開発を開始する準備が整います。
+```bash
+# コードチェック
+uv run ruff check .
+
+# 型チェック
+uv run mypy .
+
+# 単体テスト
+uv run pytest
+
+# ライセンス確認
+uv run pip-licenses
+```

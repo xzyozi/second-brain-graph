@@ -4,17 +4,18 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-ORCH-001 |
-| 版数 | Rev.3.1 |
+| 版数 | Rev.3.5（レガシーフォールバック参考資料版） |
+| 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | コアエンジン開発者 / アルゴリズム設計者 / 品質管理エンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書） |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-PM-005（課題一覧 Rev.2.7） |
 
 ---
 
 > [!IMPORTANT]
 > **【重要・アーキテクチャ移行に関する注記 (Rev.4.0以後の位置づけ)】**
-> 本書（SBOS-ORCH-001 Rev.3.1）は、自前実装時代（`orchestrator.py`, `agent_client.py`, 自作ASTマージ `_merge_python_code`）の制御アルゴリズム解説およびフォールバック参考資料です。
-> Rev.4.0 以降の新OSSスタック（LangGraph `StateGraph`, LiteLLM, Aider, Reviewdog）における現行の正本仕様は **『基本設計書 SBOS-BD-002 (Rev.4.2)』** および **『詳細設計書 SBOS-DD-003 (Rev.4.3)』** を参照してください。
+> 本書（SBOS-ORCH-001）は、自前実装時代の制御アルゴリズム解説およびフォールバック参考資料です。
+> Rev.4.0 以降の新OSSスタック（LangGraph `StateGraph`, LiteLLM, Aider, Reviewdog）における現行の正本仕様は **『基本設計書 SBOS-BD-002 (Rev.4.6)』** および **『詳細設計書 SBOS-DD-003 (Rev.4.8)』** を参照してください。
 
 ---
 

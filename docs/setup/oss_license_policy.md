@@ -45,8 +45,8 @@
 | **Development** | `pytest`, `ruff`, `mypy` | 最新安定版 | **MIT / Apache 2.0** | 開発・テスト用ツール |
 | **External Tool** | `Ollama` | `>=0.3.0` | **MIT License** | ローカルLLM実行基盤 |
 | **External Tool** | `Reviewdog` | 最新版 | **MIT License** | レビューアノテーションエンジン |
-| **Local LLM Model** | `Qwen2.5-Coder` (7B, 14B) | - | **Qwen License / Apache 2.0** | コード生成モデル（商用利用可） |
-| **Local LLM Model** | `Qwen3` (32B) | - | **Qwen License** | 監査・レビューモデル（商用利用可） |
+| **Local LLM Model** | `Gemma 4 12B IT` | - | **Gemma License** | 汎用・計画・監査モデル（利用規約準拠） |
+| **Local LLM Model** | `Gemma 4 Py Coder` | - | **Gemma License** | Pythonコード特化モデル（利用規約準拠） |
 
 ---
 

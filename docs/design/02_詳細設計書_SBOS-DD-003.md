@@ -4,10 +4,10 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                      |
-| 版数     | Rev.4.4（CLIエントリポイント仕様明記・完全整合版） |
-| 改訂日   | 2026年7月28日                                                     |
+| 版数     | Rev.4.8（review_rounds 履歴配列構造追加・完全整合版） |
+| 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.3）、SBOS-MULTI-001 Rev.2.1、SBOS-OP-001 Rev.4.1、SBOS-OSS-001/002 |
+| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-MULTI-001（差分設計書 Rev.2.6）、SBOS-OP-001（運用詳細設計書 Rev.4.5）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.7） |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
 
 ---
@@ -28,7 +28,7 @@ reviewdog -version
 
 ```python
 # tools/orchestrator_graph.py
-from typing import TypedDict, Literal, List, Dict, Any
+from typing import TypedDict, Literal, List, Dict, Any, Optional
 from pathlib import Path
 from langgraph.graph import StateGraph, END
 
@@ -47,12 +47,26 @@ class OrchestratorState(TypedDict):
     review_verdict: Literal["LGTM", "changes_requested", ""]
     review_comments: List[Dict[str, Any]]  # rdjson準拠のコメント配列
 
+    # PM-005: エラー分類器およびリトライ制御フィールド
+    error_category: Optional[Literal["LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED", "LLM_TIMEOUT", "SYSTEM_ERROR"]]
+    last_error_message: Optional[str]
+
     round: int                    # レビュー試行ラウンド数
-    lint_round: int               # ⭐NEW: lint リトライ数 (F3対応)
-    test_round: int               # ⭐NEW: test リトライ数 (F3対応)
-    max_round: int                # タスクごとの最大試行許容数
+    lint_round: int               # lint リトライ数
+    test_round: int               # test リトライ数
+    max_round: int                # タスクごとの最大試行許容数 (デフォルト 3)
     history: List[Dict[str, Any]]  # 各ノードの実行履歴
 ```
+
+### 2.1 エラー分類マッピング仕様 (PM-005 統合設計)
+旧 ORCH-001 のエラー分類ロジックを、LangGraph ノードの実行結果に応じて以下のように `error_category` へアトミックにマッピングする。
+
+| 発生ノード | 検知条件 | `error_category` 値 | 遷移先 (上限未達時) | 上限超過時 (`round >= max_round`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `lint_node` | Ruff 静的解析エラーあり | `"LINT_ERROR"` | `code_node` (`lint_round` + 1) | `escalate_node` (B7ブロッカー化) |
+| `test_node` | Pytest 単体テスト失敗 | `"TEST_ERROR"` | `code_node` (`test_round` + 1) | `escalate_node` (B7ブロッカー化) |
+| `review_node` | Reviewer 指摘あり (`changes_requested`) | `"REVIEW_REJECTED"` | `code_node` (`round` + 1) | `escalate_node` (B7ブロッカー化) |
+| 全ノード | LiteLLM 応答タイムアウト / 接続例外 | `"LLM_TIMEOUT"` / `"SYSTEM_ERROR"` | リトライまたは `escalate_node` | `escalate_node` (安全停止) |
 
 ---
 
@@ -62,31 +76,38 @@ class OrchestratorState(TypedDict):
 
 ```python
 #!/usr/bin/env python3
-"""tools/llm_client.py - LiteLLM経由でのLLM呼び出し"""
+"""tools/llm_client.py - LiteLLM経由での動的LLM呼び出し (PM-007, PM-011対応)"""
 import json, re, logging, litellm
-from typing import Optional
+from typing import Optional, Dict, Any
+from tools.config_loader import get_model_params, load_model_config
 
 logger = logging.getLogger("llm_client")
-# [MODEL_MAP明記] ENV-001 と完全整合させるため coder キーを明記
-MODEL_MAP = {
-    "planner": "ollama/qwen2.5-coder:14b",
-    "coder": "ollama/qwen2.5-coder:7b-16k",
-    "reviewer": "ollama/qwen3:32b",
-}
 
-def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool = False, timeout: int = 300) -> dict:
-    model = MODEL_MAP.get(role, "ollama/qwen2.5-coder:7b-16k")
+def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool = False, timeout: int = 300, **kwargs: Any) -> dict:
+    config = load_model_config()
+    api_base = config.get("api_base", "http://localhost:11434")
+    
+    # [PM-007/PM-011修正] config/models.json から動的にパラメータ(model_name, temperature, max_tokens: 35000等)を取得
+    role_params = get_model_params(role)
+    model_name = role_params.get("model_name", "ollama/gemma-4-py_coder:latest")
+    temperature = kwargs.get("temperature", role_params.get("temperature", 0.1))
+    max_tokens = kwargs.get("max_tokens", role_params.get("max_tokens", 35000))
+
     try:
         response = litellm.completion(
-            model=model,
+            model=model_name,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            timeout=timeout, api_base="http://localhost:11434"
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            api_base=api_base,
+            **{k: v for k, v in kwargs.items() if k not in ("temperature", "max_tokens")}
         )
     except Exception as e:
-        logger.error(f"LiteLLM Error ({role}): {e}")
+        logger.error(f"LiteLLM Error ({role} / {model_name}): {e}")
         raise
 
-    raw_output = response.choices[0].message.content
+    raw_output = response.choices[0].message.content or ""
     if not expect_json:
         return {"raw": raw_output}
 
@@ -103,22 +124,56 @@ def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool 
 
 ```python
 #!/usr/bin/env python3
-"""tools/aider_runner.py - Aiderサブプロセス起動 (F1修正済み)"""
+"""tools/aider_runner.py - Aider CLI サブプロセス制御エンジン (実物整合)"""
 import os, subprocess, logging
-from pathlib import Path
+from typing import List, Optional
+from tools.config_loader import get_model_name, load_model_config
 
-def run_aider(project_path: Path, message: str, model: str = "ollama/qwen2.5-coder:7b-16k", timeout: int = 600) -> str:
+logger = logging.getLogger("aider_runner")
+
+def run_aider(
+    instruction: str,
+    target_files: List[str],
+    model: Optional[str] = None,
+    cwd: Optional[str] = None,
+) -> bool:
+    """Aider CLI を非対話バッチモードで起動し指定ファイルへ差分編集を非破壊適用する"""
+    config = load_model_config()
+    aider_cfg = config.get("aider", {})
+    target_model = model or get_model_name("aider")
+    no_auto_commits = aider_cfg.get("no_auto_commits", True)
+
+    cmd = ["aider", "--model", target_model, "--yes-always"]
+    if no_auto_commits:
+        cmd.append("--no-auto-commits")
+    cmd.extend(["--message", instruction])
+    cmd.extend(target_files)
+
     env = os.environ.copy()
-    env["OLLAMA_API_BASE"] = "http://localhost:11434"
-    # [F1修正] 正しい Aider CLI フラグは --no-auto-commits (複数形)
-    cmd = ["aider", "--message", message, "--model", model, "--no-auto-commits", "--yes-always", "--no-stream"]
-    res = subprocess.run(cmd, cwd=str(project_path), env=env, capture_output=True, text=True, timeout=timeout)
-    if res.returncode != 0:
-        raise RuntimeError(f"Aider failed: {res.stderr}")
-    return get_git_diff(project_path)
+    api_base = config.get("api_base", "http://localhost:11434")
+    env["OLLAMA_API_BASE"] = api_base
 
-def get_git_diff(project_path: Path) -> str:
-    return subprocess.run(["git", "diff", "HEAD"], cwd=str(project_path), capture_output=True, text=True).stdout
+    try:
+        res = subprocess.run(cmd, cwd=cwd, env=env, check=True)
+        return res.returncode == 0
+    except Exception as e:
+        logger.error(f"[AiderRunner] Aider execution failed: {e}")
+        return False
+
+def get_git_diff(cwd: Optional[str] = None) -> str:
+    """指定された衛星リポジトリカレントディレクトリの未コミット git diff を取得する"""
+    try:
+        res = subprocess.run(
+            ["git", "diff", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return res.stdout
+    except Exception as e:
+        logger.error(f"[AiderRunner] Failed to fetch git diff: {e}")
+        return ""
 ```
 
 ---
@@ -195,25 +250,28 @@ def build_graph():
     g.add_edge("plan", "code")
     g.add_edge("code", "lint")
 
-    # [2.1修正] ルーティング関数は純粋関数（読み取り専用）。インクリメントはノード側で実施済み
+    # [PM-005対応] ルーティング関数は OrchestratorState の error_category およびリトライ回数で判定
     def route_after_lint(s: OrchestratorState) -> str:
-        if s["lint_result"]["passed"]:
+        if s["lint_result"].get("passed", False):
             return "test"
-        return "escalate" if s.get("lint_round", 0) >= s["max_round"] else "code"
+        # エラーカテゴリ分類: LINT_ERROR
+        return "escalate" if s.get("lint_round", 0) >= s.get("max_round", 3) else "code"
 
     g.add_conditional_edges("lint", route_after_lint, {"test": "test", "code": "code", "escalate": "escalate"})
 
     def route_after_test(s: OrchestratorState) -> str:
-        if s["test_result"]["passed"]:
+        if s["test_result"].get("passed", False):
             return "review"
-        return "escalate" if s.get("test_round", 0) >= s["max_round"] else "code"
+        # エラーカテゴリ分類: TEST_ERROR
+        return "escalate" if s.get("test_round", 0) >= s.get("max_round", 3) else "code"
 
     g.add_conditional_edges("test", route_after_test, {"review": "review", "code": "code", "escalate": "escalate"})
 
     def route_after_review(s: OrchestratorState) -> str:
-        if s["review_verdict"] == "LGTM":
+        if s.get("review_verdict") == "LGTM":
             return "done"
-        return "escalate" if s.get("round", 0) >= s["max_round"] else "code"
+        # エラーカテゴリ分類: REVIEW_REJECTED
+        return "escalate" if s.get("round", 0) >= s.get("max_round", 3) else "code"
 
     g.add_conditional_edges("review", route_after_review, {"done": "done", "escalate": "escalate", "code": "code"})
     g.add_edge("done", END)
@@ -234,9 +292,85 @@ def escalate_node(state: OrchestratorState) -> OrchestratorState:
     actual_round = max(state.get("round", 0), state.get("lint_round", 0), state.get("test_round", 0))
     logger.error(f"Issue {state['issue_id']} がリトライ上限 ({actual_round}/{state['max_round']}) に達しました。B7ブロッカー化します。")
     # [F2/III.2修正] tasks.md 内の round メタデータを動的更新し、B7 判定を成立させる
-    update_task_metadata(state["project_path"], state["issue_id"], round_num=actual_round)
+    update_task_metadata(state["project_path"], state["issue_id"], round_num=actual_round, status="FAILED_B7")
     record_execution_history(state, final_status="FAILED_B7", actual_round=actual_round)
     return state
+```
+
+### 4.1.1 補助関数契約および履歴スキーマ仕様 (PM-013 / PM-014)
+
+#### 1. `tasks.md` メタデータ正本書式
+`tasks.md` 内の Issue 項目の直下に以下の HTML コメント形式でメタデータを書き込み・保持する。`check-blockers.py` はこの形式を正の SSOT としてパースする。
+
+```markdown
+- [ ] EC-012: 決済例外処理ロールバックハンドラ
+  <!-- round:3 max_round:3 status:FAILED_B7 -->
+```
+
+#### 2. `update_task_metadata()` 関数の契約
+```python
+def update_task_metadata(
+    project_path: Union[str, Path],
+    issue_id: str,
+    round_num: int,
+    status: str = "FAILED_B7",
+    max_round: Optional[int] = None
+) -> None:
+    """
+    指定された Issue ID の直下に <!-- round:N max_round:M status:STATUS --> タグを探索・更新する。
+    存在しない場合は Issue 行の直下に挿入し、tasks.md を上書き保存する。
+    """
+```
+
+#### 3. `record_execution_history()` 関数と `history_path` スキーマ
+* **保存パス (`history_path`)**: `tools/.cache/execution_history.json`
+* **フィールドマッピング注記**: `OrchestratorState` のレビュー試行カウンタ `state["round"]` は、履歴 JSON スキーマ上の `"review_round"` フィールドへそのままマッピング保存される。
+
+```python
+def record_execution_history(
+    state: OrchestratorState,
+    final_status: str,
+    actual_round: int
+) -> None:
+    """
+    tools/.cache/execution_history.json へ実行完了・エスカレーション結果をアトミックに追記保存する。
+    """
+```
+
+**`execution_history.json` スキーマ仕様:**
+```json
+{
+  "records": [
+    {
+      "timestamp": "2026-07-29T15:00:00Z",
+      "issue_id": "EC-0001",
+      "project_path": "projects/ec-site",
+      "final_status": "FAILED_B7",
+      "actual_round": 3,
+      "max_round": 3,
+      "lint_round": 3,
+      "test_round": 1,
+      "review_round": 2,
+      "review_rounds": [
+        {
+          "round": 1,
+          "verdict": "changes_requested",
+          "comments": [{"file": "main.py", "line": 15, "message": "型アノテーション不足"}]
+        },
+        {
+          "round": 2,
+          "verdict": "changes_requested",
+          "comments": [{"file": "main.py", "line": 20, "message": "例外処理ハンドラ未考慮"}]
+        }
+      ],
+      "history_summary": {
+        "lint_passed": false,
+        "test_passed": true,
+        "review_verdict": "changes_requested"
+      }
+    }
+  ]
+}
 ```
 
 ---
