@@ -1,7 +1,8 @@
 """Unit tests for tools.aider_runner."""
 
 from unittest.mock import MagicMock, patch
-from tools.aider_runner import get_git_diff, run_aider
+
+from tools.aider_runner import get_git_diff
 
 
 @patch("subprocess.run")
