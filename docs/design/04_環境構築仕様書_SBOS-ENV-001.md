@@ -190,10 +190,26 @@ Windows Native 環境で動作させる場合は、以下の Git および Power
    git config --global core.autocrlf input
    ```
 
-2. **PowerShell 文字化け対策 (UTF-8 設定):**
-   日本語パスや Reviewdog の出力文字化けを防止するため、PowerShell プロファイル (`$PROFILE`) に以下を追加する。
+2. **PowerShell 文字化け対策 ($PROFILE への UTF-8 永続設定):**
+   日本語パスや Reviewdog の出力文字化けを防止するため、PowerShell プロファイル (`$PROFILE`) へ UTF-8 永続設定を追加する。
+
+   **設定コマンド (重複防止アトミック追記):**
    ```powershell
-   $OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+   if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
+   $utf8Cmd = '$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()'
+   if (!(Select-String -Path $PROFILE -Pattern "UTF8Encoding" -Quiet)) {
+       Add-Content -Path $PROFILE -Value "`n$utf8Cmd" -Encoding utf8
+       Write-Host "✓ $PROFILE に UTF-8 永続設定を追加しました。" -ForegroundColor Green
+   } else {
+       Write-Host "✓ $PROFILE には既に UTF-8 永続設定が存在します。" -ForegroundColor Yellow
+   }
+   ```
+
+   **新規 PowerShell セッションでの確認手順:**
+   新しい PowerShell ウィンドウを起動し、以下を実行して出力エンコーディングが UTF-8 であることを確認する。
+   ```powershell
+   $OutputEncoding.EncodingName
+   # 期待される出力: Unicode (UTF-8)
    ```
 
 ### 5.2 WSL2 環境向けパフォーマンス最適化 (Linux)
