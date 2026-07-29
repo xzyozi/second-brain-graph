@@ -1,7 +1,7 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.2
+# 課題・矛盾点一覧 (Problem Management) Rev.2.3
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.2  
+版数: Rev.2.3  
 改訂日: 2026年7月29日  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 
@@ -20,7 +20,7 @@
 | **PM-002** | MULTI-001 §4 / OP-001 | — | 優先度キャッシュのフィールド名 (`"project"`) が実物の `"project_key"` / `"project_dir"` と不一致 | フィールド名を `"project_key"` / `"project_dir"` に統一 | 🟢 解決済み |
 | **PM-003** | ENV-001 §2.2 / DD-003 | — | 旧 OpenCode (`.opencode/opencode.json`) の廃止に伴うモデル設定の一元管理方法が未確定 | `config/models.json` および `tools/config_loader.py` を新設し一元管理 | 🟢 解決済み |
 | **PM-004** | MULTI-001 §5 | 🟡 中 | 新規衛星を `.project-registry.json` へ手動登録する手順はあるが、CLIツール化されていない | `tools/add-project.py` CLIスクリプトの開発（今後実施予定） | 🟡 未解決・タスク化 |
-| **PM-005** | ORCH-001 / DD-003 | 🟡 中 | 旧 ORCH-001 のエラー分類器・再試行上限ロジックと LangGraph ノード遷移のマッピングが未定義 | `OrchestratorState` にエラーカテゴリとカウントを持たせ、LangGraph 条件エッジで判定 | 🟡 未解決・設計中 |
+| **PM-005** | ORCH-001 / DD-003 | 🟢 | 旧 ORCH-001 のエラー分類器・再試行上限ロジックと LangGraph ノード遷移のマッピングが未定義 | `OrchestratorState` に `error_category` を持たせ、DD-003 §2.1 / §4 に条件エッジ判定とマッピングを規定完了 | 🟢 解決済み |
 | **PM-006** | MULTI-001 / DD-003 | — | Issue ID フォーマット（カッコ記法 `[EC-001]` vs カッコなし `EC-001`）の表記が全仕様書で不一致 | 内部処理キーおよび正本表記としてはカッコなし `EC-001` に確定・統一 | 🟢 解決済み |
 | **PM-007** | DD-003 §3.1 / models.json | 🟢 | `config/models.json` の `temperature`, `max_tokens` (35000) を LiteLLM 呼び出しへ動的結合 | `tools/llm_client.py` 経由で `get_model_params` を呼び出し `litellm.completion` へ完全結合・検証完了 | 🟢 解決済み |
 | **PM-008** | OP-001 §5.1 | 🟢 | OS別 (Windows Native vs Linux/WSL2) 自動バッチスクリプト (.ps1 vs .sh) の配置手順が混在 | `scripts/windows/` と `scripts/linux/` にスクリプト配置構造を明確に分離 | 🟢 解決済み |
@@ -46,7 +46,8 @@
 
 ---
 
-## 3. 詳細説明と今後の対応計画
+### PM-005: エラー分類器および LangGraph ノード遷移マッピングの明確化
+* **対応内容**: `SBOS-DD-003 §2.1` および §4 にて、`OrchestratorState` に `error_category` フィールド（`"LINT_ERROR"`, `"TEST_ERROR"`, `"REVIEW_REJECTED"`, `"LLM_TIMEOUT"`, `"SYSTEM_ERROR"`）を明示。各ノードの実行結果に基づく分類マッピングおよび `route_after_lint`, `route_after_test`, `route_after_review` のルーティング関数判定条件を規定・完了。
 
 ### PM-006: Issue ID 正本表記 (`EC-001`) への統一
 * **対応内容**: システム内部キーおよび仕様書上の標準表記をカッコなしの `EC-001` に統一決定。表示上のカッコ `[EC-001]` は `tasks.md` 等のレンダリング時の表現としてのみ許容する。
@@ -103,6 +104,7 @@
 ---
 
 ## 4. 改訂履歴
+- **2026/07/29 (Rev.2.3)**: PM-005 (OrchestratorState への error_category 追加および LangGraph 条件付きエッジマッピング) を確定し解決済みに更新。
 - **2026/07/29 (Rev.2.2)**: PM-009 (Issue ID 4桁化、サブタスク ID A〜Z 表記およびオーバーフロー時の分解原則) を確定し解決済みに更新。
 - **2026/07/29 (Rev.2.1)**: 新規課題 PM-026 (衛星メタデータの母艦階層分離) および PM-027 (projects/ 完全 Git 除外) を追加登録。
 - **2026/07/29 (Rev.2.0)**: 横断的不一致課題 (PM-017〜PM-025) のドキュメント・設定修整完了に伴いステータスを解決済みに更新。

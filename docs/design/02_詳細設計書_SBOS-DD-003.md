@@ -47,12 +47,26 @@ class OrchestratorState(TypedDict):
     review_verdict: Literal["LGTM", "changes_requested", ""]
     review_comments: List[Dict[str, Any]]  # rdjson準拠のコメント配列
 
+    # PM-005: エラー分類器およびリトライ制御フィールド
+    error_category: Optional[Literal["LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED", "LLM_TIMEOUT", "SYSTEM_ERROR"]]
+    last_error_message: Optional[str]
+
     round: int                    # レビュー試行ラウンド数
-    lint_round: int               # ⭐NEW: lint リトライ数 (F3対応)
-    test_round: int               # ⭐NEW: test リトライ数 (F3対応)
-    max_round: int                # タスクごとの最大試行許容数
+    lint_round: int               # lint リトライ数
+    test_round: int               # test リトライ数
+    max_round: int                # タスクごとの最大試行許容数 (デフォルト 3)
     history: List[Dict[str, Any]]  # 各ノードの実行履歴
 ```
+
+### 2.1 エラー分類マッピング仕様 (PM-005 統合設計)
+旧 ORCH-001 のエラー分類ロジックを、LangGraph ノードの実行結果に応じて以下のように `error_category` へアトミックにマッピングする。
+
+| 発生ノード | 検知条件 | `error_category` 値 | 遷移先 (上限未達時) | 上限超過時 (`round >= max_round`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `lint_node` | Ruff 静的解析エラーあり | `"LINT_ERROR"` | `code_node` (`lint_round` + 1) | `escalate_node` (B7ブロッカー化) |
+| `test_node` | Pytest 単体テスト失敗 | `"TEST_ERROR"` | `code_node` (`test_round` + 1) | `escalate_node` (B7ブロッカー化) |
+| `review_node` | Reviewer 指摘あり (`changes_requested`) | `"REVIEW_REJECTED"` | `code_node` (`round` + 1) | `escalate_node` (B7ブロッカー化) |
+| 全ノード | LiteLLM 応答タイムアウト / 接続例外 | `"LLM_TIMEOUT"` / `"SYSTEM_ERROR"` | リトライまたは `escalate_node` | `escalate_node` (安全停止) |
 
 ---
 
@@ -221,25 +235,28 @@ def build_graph():
     g.add_edge("plan", "code")
     g.add_edge("code", "lint")
 
-    # [2.1修正] ルーティング関数は純粋関数（読み取り専用）。インクリメントはノード側で実施済み
+    # [PM-005対応] ルーティング関数は OrchestratorState の error_category およびリトライ回数で判定
     def route_after_lint(s: OrchestratorState) -> str:
-        if s["lint_result"]["passed"]:
+        if s["lint_result"].get("passed", False):
             return "test"
-        return "escalate" if s.get("lint_round", 0) >= s["max_round"] else "code"
+        # エラーカテゴリ分類: LINT_ERROR
+        return "escalate" if s.get("lint_round", 0) >= s.get("max_round", 3) else "code"
 
     g.add_conditional_edges("lint", route_after_lint, {"test": "test", "code": "code", "escalate": "escalate"})
 
     def route_after_test(s: OrchestratorState) -> str:
-        if s["test_result"]["passed"]:
+        if s["test_result"].get("passed", False):
             return "review"
-        return "escalate" if s.get("test_round", 0) >= s["max_round"] else "code"
+        # エラーカテゴリ分類: TEST_ERROR
+        return "escalate" if s.get("test_round", 0) >= s.get("max_round", 3) else "code"
 
     g.add_conditional_edges("test", route_after_test, {"review": "review", "code": "code", "escalate": "escalate"})
 
     def route_after_review(s: OrchestratorState) -> str:
-        if s["review_verdict"] == "LGTM":
+        if s.get("review_verdict") == "LGTM":
             return "done"
-        return "escalate" if s.get("round", 0) >= s["max_round"] else "code"
+        # エラーカテゴリ分類: REVIEW_REJECTED
+        return "escalate" if s.get("round", 0) >= s.get("max_round", 3) else "code"
 
     g.add_conditional_edges("review", route_after_review, {"done": "done", "escalate": "escalate", "code": "code"})
     g.add_edge("done", END)
