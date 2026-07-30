@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 import os
 from openai import OpenAI
-from tools.config_loader import get_model_params
+from tools.config_loader import get_model_params, ProfileConfig
 from tools.backend_coordinator import BackendExecutionCoordinator
 
 logger = logging.getLogger("llm_client")
@@ -43,7 +43,7 @@ def call_llm(
 
     coordinator = BackendExecutionCoordinator()
 
-    def _do_llm_call(profile: Dict[str, Any]) -> Dict[str, Any]:
+    def _do_llm_call(profile: ProfileConfig) -> Dict[str, Any]:
         # Coordinator Adapter sets OPENAI_API_BASE / OLLAMA_API_BASE
         api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OLLAMA_API_BASE")
         if not api_base:
@@ -53,7 +53,7 @@ def call_llm(
         # Load dynamic model parameters from config/models.json (PM-007, PM-011 SSOT)
         role_params = get_model_params(role)
         
-        model_name = profile.get("model")
+        model_name = profile.model
         if not model_name:
             raise ValueError(f"Profile provided by Coordinator is missing 'model' for intent '{intent}'.")
         

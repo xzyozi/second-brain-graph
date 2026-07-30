@@ -7,29 +7,28 @@ import os
 import subprocess
 from typing import List, Optional
 
-from tools.config_loader import load_model_config
+from tools.config_loader import load_model_config, ProfileConfig
 from tools.backend_coordinator import BackendExecutionCoordinator
 
 
 def run_aider(
     instruction: str,
     target_files: List[str],
-    model: Optional[str] = None,
     cwd: Optional[str] = None,
 ) -> bool:
     """Run Aider CLI to apply non-destructive code edits based on instruction."""
     coordinator = BackendExecutionCoordinator()
     intent = "aider_edit"
 
-    def _do_run_aider(profile: dict) -> bool:
+    def _do_run_aider(profile: ProfileConfig) -> bool:
         config = load_model_config()
-        aider_cfg = config.get("aider", {})
+        aider_cfg = config.aider
         
-        target_model = profile.get("model")
+        target_model = profile.model
         if not target_model:
             raise ValueError("Profile provided by Coordinator is missing 'model'.")
 
-        no_auto_commits = aider_cfg.get("no_auto_commits", True)
+        no_auto_commits = aider_cfg.no_auto_commits
 
         cmd = ["aider", "--model", target_model, "--yes-always"]
 

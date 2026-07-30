@@ -12,7 +12,7 @@ from typing import Any, Dict, Callable, Optional, Iterator, Union
 from pathlib import Path
 from filelock import FileLock, Timeout
 
-from tools.config_loader import get_backend_execution_config
+from tools.config_loader import get_backend_execution_config, ProfileConfig
 from tools.llama_backend import managed_llama_server
 
 logger = logging.getLogger("backend_coordinator")
@@ -73,11 +73,19 @@ class GpuLeaseAdapter:
             logger.error(f"Error releasing GPU lease: {e}")
 
 
-def unload_ollama_models() -> None:
+def unload_ollama_models(endpoint: str, assume_free_on_offline: bool) -> None:
     """Ollamaにロードされているモデルを解放する"""
+    if endpoint.endswith("/v1") or endpoint.endswith("/v1/"):
+        base_url = endpoint.rsplit("/v1", 1)[0]
+    else:
+        base_url = endpoint
+
+    ps_url = f"{base_url.rstrip('/')}/api/ps"
+    gen_url = f"{base_url.rstrip('/')}/api/generate"
+
     try:
         # ps api で現在ロードされているモデルを取得
-        req = urllib.request.urlopen("http://localhost:11434/api/ps", timeout=2)
+        req = urllib.request.urlopen(ps_url, timeout=2)
         if req.getcode() == 200:
             data = json.loads(req.read().decode('utf-8'))
             models = data.get("models", [])
@@ -86,7 +94,7 @@ def unload_ollama_models() -> None:
                 if model_name:
                     logger.info(f"Unloading Ollama model: {model_name}")
                     unload_req = urllib.request.Request(
-                        "http://localhost:11434/api/generate",
+                        gen_url,
                         data=json.dumps({"model": model_name, "keep_alive": 0}).encode('utf-8'),
                         headers={'Content-Type': 'application/json'}
                     )
@@ -95,7 +103,7 @@ def unload_ollama_models() -> None:
             # Verify unloading
             start_time = time.time()
             while time.time() - start_time < 10:
-                req = urllib.request.urlopen("http://localhost:11434/api/ps", timeout=2)
+                req = urllib.request.urlopen(ps_url, timeout=2)
                 if req.getcode() == 200:
                     data = json.loads(req.read().decode('utf-8'))
                     if not data.get("models"):
@@ -104,10 +112,11 @@ def unload_ollama_models() -> None:
             raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
             
     except urllib.error.URLError as e:
-        logger.info(f"Ollama appears to be offline or unreachable: {e}. Assuming VRAM is free.")
-    except Exception as e:
-        logger.error(f"Failed to verify/unload Ollama models (Ollama might not be running or failed to clear): {e}")
-        raise RuntimeError(f"Ollama unload failed: {e}")
+        if assume_free_on_offline:
+            logger.info(f"Ollama appears to be offline or unreachable: {e}. Assuming VRAM is free.")
+        else:
+            logger.error(f"Ollama appears to be offline or unreachable: {e}. Cannot guarantee VRAM is free. Aborting.")
+            raise RuntimeError(f"Ollama unreachable: {e}. To ignore, set assume_free_on_offline=true in profile.")
 
 
 class OllamaBackendAdapter:
@@ -117,7 +126,7 @@ class OllamaBackendAdapter:
     実行時に OLLAMA_API_BASE を一時的に環境変数としてパッチし、
     タスク終了後に元に戻す（副作用をブロック内に閉じ込める）。
     """
-    def __init__(self, profile: Dict[str, Any]) -> None:
+    def __init__(self, profile: ProfileConfig) -> None:
         self.profile = profile
 
     def execute(self, request: Dict[str, Any]) -> Any:
@@ -127,9 +136,7 @@ class OllamaBackendAdapter:
         
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
         
-        endpoint = self.profile.get("endpoint")
-        if not endpoint:
-            raise ValueError("Profile must specify 'endpoint' for ollama backend.")
+        endpoint = self.profile.endpoint
         
         with patch_env(OLLAMA_API_BASE=endpoint, OPENAI_API_BASE=endpoint):
             return action(self.profile)
@@ -143,7 +150,7 @@ class LlamaServerBackendAdapter:
     実行中は APIエンドポイントを :8080/v1 に一時パッチし、
     タスク終了時には必ずプロセスを終了（VRAM解放）させ、環境変数を復元する。
     """
-    def __init__(self, profile: Dict[str, Any]) -> None:
+    def __init__(self, profile: ProfileConfig) -> None:
         self.profile = profile
 
     def execute(self, request: Dict[str, Any]) -> Any:
@@ -151,20 +158,18 @@ class LlamaServerBackendAdapter:
         if action is None:
             raise ValueError("LlamaServerBackendAdapter requires an 'action' callable in request")
         
-        model_path = self.profile.get("model_path")
-        port = self.profile.get("port")
-        endpoint = self.profile.get("endpoint")
+        model_path = self.profile.model_path
+        port = self.profile.port
+        endpoint = self.profile.endpoint
+        assume_free = self.profile.assume_free_on_offline
         
-        if not model_path:
-            raise ValueError("LlamaServer profile must specify 'model_path'")
-        if not port:
-            raise ValueError("LlamaServer profile must specify 'port'")
-        if not endpoint:
-            raise ValueError("LlamaServer profile must specify 'endpoint'")
+        # Pydantic validates port and model_path for llama_server
+        assert model_path is not None
+        assert port is not None
             
         logger.info(f"Executing workload on llama-server backend with profile: {self.profile}")
         
-        unload_ollama_models()
+        unload_ollama_models(endpoint=endpoint, assume_free_on_offline=assume_free)
         
         with patch_env(OPENAI_API_BASE=endpoint, OLLAMA_API_BASE=endpoint):
             with managed_llama_server(model_path=model_path, port=port):
@@ -181,8 +186,8 @@ class BackendExecutionCoordinator:
         intent (e.g. 'spec_draft', 'aider_edit') に基づいてプロファイルを選択し、
         GPUリースを取得した上で、適切なバックエンドアダプタを介してリクエストを実行する。
         """
-        routes = self.config.get("routes", {})
-        profiles = self.config.get("profiles", {})
+        routes = self.config.routes
+        profiles = self.config.profiles
         
         profile_name = routes.get(intent)
         if not profile_name:
@@ -192,9 +197,7 @@ class BackendExecutionCoordinator:
         if not profile:
             raise ValueError(f"Profile '{profile_name}' is not defined in backend profiles.")
         
-        backend_type = profile.get("backend")
-        if not backend_type:
-            raise ValueError(f"Profile '{profile_name}' must specify 'backend'.")
+        backend_type = profile.backend
         
         logger.info(f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})")
         

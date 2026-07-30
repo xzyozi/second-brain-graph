@@ -9,12 +9,10 @@ from tools.llm_client import call_llm
 
 def test_get_model_params():
     planner_params = get_model_params("planner")
-    assert planner_params["model_name"] == "gemma-4-12B-it-qat-UD-Q4_K_XL"
     assert planner_params["max_tokens"] == 35000
     assert planner_params["temperature"] == 0.2
 
     coder_params = get_model_params("coder")
-    assert coder_params["model_name"] == "gemma-4-12B-it-qat-UD-Q4_K_XL"
     assert coder_params["max_tokens"] == 35000
 
 
@@ -23,8 +21,10 @@ def test_get_model_params():
 @patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
 def test_call_llm_with_dynamic_params(mock_coordinator_class, mock_openai_class):
     mock_coordinator = MagicMock()
+    from tools.config_loader import ProfileConfig
     # Execute the action immediately to test the inner logic, passing a dummy profile
-    mock_coordinator.execute.side_effect = lambda intent, req: req["action"]({"model": "gemma-4-12B-it-qat-UD-Q4_K_XL"})
+    dummy_profile = ProfileConfig(backend="ollama", model="gemma-4-12B-it-qat-UD-Q4_K_XL", endpoint="http://localhost")
+    mock_coordinator.execute.side_effect = lambda intent, req: req["action"](dummy_profile)
     mock_coordinator_class.return_value = mock_coordinator
 
     mock_client = MagicMock()

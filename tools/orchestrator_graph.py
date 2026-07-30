@@ -85,6 +85,15 @@ def write_state(project_key: str, state: Dict[str, Any], filename: str = "state.
     os.replace(temp_file, state_file)
 
 
+def write_event(project_key: str, event_data: Dict[str, Any], filename: str = "events.jsonl") -> None:
+    """Graph の状態に影響を与えない追記専用イベント記録 (PM-050)"""
+    event_file = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / filename
+    event_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(event_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event_data, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
 class GraphState(TypedDict):
     issue_id: str
     project_key: str
@@ -95,54 +104,59 @@ def execute_issue(issue_id: str, project_key: str) -> None:
     logger.info(f"Starting execution for Issue: {issue_id}")
     try:
         with ProjectLockManager(project_key):
-            logger.info("Setting up context and starting graph execution...")
-            from tools.llm_client import call_llm
+            try:
+                logger.info("Setting up context and starting graph execution...")
+                from tools.llm_client import call_llm
             
-            def spec_draft_node(state: GraphState) -> GraphState:
-                logger.info("Executing spec_draft_node")
-                call_llm(role="planner", intent="spec_draft", system_prompt="You are a planner", user_prompt=f"Draft spec for {state['issue_id']}")
-                return state
+                def spec_draft_node(state: GraphState) -> GraphState:
+                    logger.info("Executing spec_draft_node")
+                    call_llm(role="planner", intent="spec_draft", system_prompt="You are a planner", user_prompt=f"Draft spec for {state['issue_id']}")
+                    return state
 
-            def task_decomposition_node(state: GraphState) -> GraphState:
-                logger.info("Executing task_decomposition_node")
-                call_llm(role="planner", intent="task_decomposition", system_prompt="You are a planner", user_prompt=f"Decompose tasks for {state['issue_id']}")
-                return state
+                def task_decomposition_node(state: GraphState) -> GraphState:
+                    logger.info("Executing task_decomposition_node")
+                    call_llm(role="planner", intent="task_decomposition", system_prompt="You are a planner", user_prompt=f"Decompose tasks for {state['issue_id']}")
+                    return state
 
-            def task_prioritization_node(state: GraphState) -> GraphState:
-                logger.info("Executing task_prioritization_node")
-                call_llm(role="planner", intent="task_prioritization", system_prompt="You are a planner", user_prompt=f"Prioritize tasks for {state['issue_id']}")
-                state["status"] = "success"
-                return state
+                def task_prioritization_node(state: GraphState) -> GraphState:
+                    logger.info("Executing task_prioritization_node")
+                    call_llm(role="planner", intent="task_prioritization", system_prompt="You are a planner", user_prompt=f"Prioritize tasks for {state['issue_id']}")
+                    state["status"] = "success"
+                    return state
+                
+                logger.info("Initializing Graph nodes...")
+                workflow = StateGraph(GraphState)
+                workflow.add_node("spec_draft", spec_draft_node)
+                workflow.add_node("task_decomposition", task_decomposition_node)
+                workflow.add_node("task_prioritization", task_prioritization_node)
+                
+                workflow.set_entry_point("spec_draft")
+                workflow.add_edge("spec_draft", "task_decomposition")
+                workflow.add_edge("task_decomposition", "task_prioritization")
+                workflow.add_edge("task_prioritization", END)
+                
+                app = workflow.compile()
+                
+                initial_state = GraphState(
+                    issue_id=issue_id,
+                    project_key=project_key,
+                    status="running",
+                    error=None
+                )
+                final_state = app.invoke(initial_state)
+                
+                write_state(project_key, final_state)
+                logger.info(f"Execution completed for Issue: {issue_id}")
+                
+            except Exception as e:
+                logger.error(f"Execution failed for {issue_id}: {e}")
+                write_state(project_key, {"status": "FAILED_SYSTEM", "issue_id": issue_id, "error": str(e), "timestamp": datetime.now().isoformat()})
             
-            logger.info("Initializing Graph nodes...")
-            workflow = StateGraph(GraphState)
-            workflow.add_node("spec_draft", spec_draft_node)
-            workflow.add_node("task_decomposition", task_decomposition_node)
-            workflow.add_node("task_prioritization", task_prioritization_node)
-            
-            workflow.set_entry_point("spec_draft")
-            workflow.add_edge("spec_draft", "task_decomposition")
-            workflow.add_edge("task_decomposition", "task_prioritization")
-            workflow.add_edge("task_prioritization", END)
-            
-            app = workflow.compile()
-            
-            initial_state = GraphState(
-                issue_id=issue_id,
-                project_key=project_key,
-                status="running",
-                error=None
-            )
-            final_state = app.invoke(initial_state)
-            
-            write_state(project_key, final_state)
-            logger.info(f"Execution completed for Issue: {issue_id}")
     except TimeoutError:
         logger.warning(f"Execution skipped for {issue_id} due to lock timeout.")
-        write_state(project_key, {"status": "SKIPPED_LOCKED", "issue_id": issue_id, "timestamp": datetime.now().isoformat()}, filename="skipped.json")
+        write_event(project_key, {"event": "SKIPPED_LOCKED", "issue_id": issue_id, "timestamp": datetime.now().isoformat()})
     except Exception as e:
-        logger.error(f"Execution failed for {issue_id}: {e}")
-        write_state(project_key, {"status": "FAILED_SYSTEM", "issue_id": issue_id, "error": str(e), "timestamp": datetime.now().isoformat()})
+        logger.error(f"Unexpected error outside lock for {issue_id}: {e}")
         raise
 
 
