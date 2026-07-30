@@ -12,11 +12,13 @@ import sys
 import time
 import logging
 import argparse
-import uuid
-import json
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypedDict
+import json
+import os
+from filelock import FileLock, Timeout
+from langgraph.graph import StateGraph, END
 
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -42,8 +44,7 @@ class ProjectLockManager:
             metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
         self.lock_dir = metadata_dir / "projects" / project_key
         self.lock_file = self.lock_dir / ".lock"
-        self.stale_timeout_seconds = 7200  # 2時間
-        self.owner_token = uuid.uuid4().hex
+        self.lock = FileLock(str(self.lock_file), timeout=7200)
 
     def __enter__(self) -> "ProjectLockManager":
         self.lock_dir.mkdir(parents=True, exist_ok=True)
@@ -54,60 +55,18 @@ class ProjectLockManager:
         self._release_lock()
 
     def _acquire_lock(self) -> None:
-        start_time = time.time()
-        while True:
-            try:
-                # O_CREAT | O_EXCL でアトミックにファイル作成を試みる
-                fd = os.open(str(self.lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                # ロック取得成功。pid:uuid を書いて閉じる
-                with os.fdopen(fd, 'w') as f:
-                    f.write(f"{os.getpid()}:{self.owner_token}")
-                logger.info(f"Lock acquired for project {self.project_key}")
-                return
-            except FileExistsError:
-                # ロックがすでに存在する場合、Stale Lock かどうか判定
-                try:
-                    with open(self.lock_file, 'r') as f:
-                        content = f.read().strip()
-                        if ":" in content:
-                            pid_str, _ = content.split(":", 1)
-                        else:
-                            pid_str = content
-                    if pid_str.isdigit():
-                        pid = int(pid_str)
-                        try:
-                            # 自身のプロセスでない、かつ対象のPIDのプロセスが存在するかチェック
-                            os.kill(pid, 0)
-                        except OSError:
-                            # プロセスが存在しない -> Stale Lock
-                            logger.warning(f"Stale lock detected for {self.project_key} (PID {pid} is dead). Removing...")
-                            self.lock_file.unlink(missing_ok=True)
-                            continue
-                except Exception as e:
-                    logger.debug(f"Error checking lock owner: {e}")
-                
-                if time.time() - start_time > self.stale_timeout_seconds:
-                    raise TimeoutError(f"Failed to acquire project lock for {self.project_key} within timeout.")
-                
-                logger.info(f"Waiting for lock on project {self.project_key}...")
-                time.sleep(5)
-            except Exception as e:
-                logger.error(f"Error acquiring lock: {e}")
-                raise
+        try:
+            logger.info(f"Waiting for lock on project {self.project_key}...")
+            self.lock.acquire()
+            logger.info(f"Lock acquired for project {self.project_key}")
+        except Timeout:
+            logger.error(f"Failed to acquire project lock for {self.project_key} within timeout.")
+            raise TimeoutError(f"Failed to acquire project lock for {self.project_key} within timeout.")
 
     def _release_lock(self) -> None:
         try:
-            with open(self.lock_file, 'r') as f:
-                content = f.read().strip()
-            
-            expected_content = f"{os.getpid()}:{self.owner_token}"
-            if content == expected_content:
-                self.lock_file.unlink()
-                logger.info(f"Lock released for project {self.project_key}")
-            else:
-                logger.debug(f"Lock for project {self.project_key} is owned by another process. Skipping release.")
-        except FileNotFoundError:
-            pass
+            self.lock.release()
+            logger.info(f"Lock released for project {self.project_key}")
         except Exception as e:
             logger.error(f"Failed to release lock: {e}")
 
@@ -115,9 +74,19 @@ def write_state(project_key: str, state: Dict[str, Any]) -> None:
     """Graph 実行状態を安全に記録する (PM-037 安全停止ルール準拠)"""
     state_file = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / "state.json"
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(state_file, "w", encoding="utf-8") as f:
+    temp_file = state_file.with_suffix(".json.tmp")
+    
+    with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
+        
+    os.replace(temp_file, state_file)
 
+
+class GraphState(TypedDict):
+    issue_id: str
+    project_key: str
+    status: str
+    error: Optional[str]
 
 def execute_issue(issue_id: str, project_key: str) -> None:
     logger.info(f"Starting execution for Issue: {issue_id}")
@@ -126,28 +95,51 @@ def execute_issue(issue_id: str, project_key: str) -> None:
             logger.info("Setting up context and starting graph execution...")
             from tools.llm_client import call_llm
             
-            def spec_draft_node() -> None:
+            def spec_draft_node(state: GraphState) -> GraphState:
                 logger.info("Executing spec_draft_node")
-                call_llm(role="planner", intent="spec_draft", system_prompt="You are a planner", user_prompt=f"Draft spec for {issue_id}")
+                call_llm(role="planner", intent="spec_draft", system_prompt="You are a planner", user_prompt=f"Draft spec for {state['issue_id']}")
+                return state
 
-            def task_decomposition_node() -> None:
+            def task_decomposition_node(state: GraphState) -> GraphState:
                 logger.info("Executing task_decomposition_node")
-                call_llm(role="planner", intent="task_decomposition", system_prompt="You are a planner", user_prompt=f"Decompose tasks for {issue_id}")
+                call_llm(role="planner", intent="task_decomposition", system_prompt="You are a planner", user_prompt=f"Decompose tasks for {state['issue_id']}")
+                return state
 
-            def task_prioritization_node() -> None:
+            def task_prioritization_node(state: GraphState) -> GraphState:
                 logger.info("Executing task_prioritization_node")
-                call_llm(role="planner", intent="task_prioritization", system_prompt="You are a planner", user_prompt=f"Prioritize tasks for {issue_id}")
+                call_llm(role="planner", intent="task_prioritization", system_prompt="You are a planner", user_prompt=f"Prioritize tasks for {state['issue_id']}")
+                state["status"] = "success"
+                return state
             
             logger.info("Initializing Graph nodes...")
-            spec_draft_node()
-            task_decomposition_node()
-            task_prioritization_node()
+            workflow = StateGraph(GraphState)
+            workflow.add_node("spec_draft", spec_draft_node)
+            workflow.add_node("task_decomposition", task_decomposition_node)
+            workflow.add_node("task_prioritization", task_prioritization_node)
             
-            write_state(project_key, {"status": "success", "issue_id": issue_id})
+            workflow.set_entry_point("spec_draft")
+            workflow.add_edge("spec_draft", "task_decomposition")
+            workflow.add_edge("task_decomposition", "task_prioritization")
+            workflow.add_edge("task_prioritization", END)
+            
+            app = workflow.compile()
+            
+            initial_state = GraphState(
+                issue_id=issue_id,
+                project_key=project_key,
+                status="running",
+                error=None
+            )
+            final_state = app.invoke(initial_state)
+            
+            write_state(project_key, final_state)
             logger.info(f"Execution completed for Issue: {issue_id}")
+    except TimeoutError:
+        logger.warning(f"Execution skipped for {issue_id} due to lock timeout.")
+        write_state(project_key, {"status": "SKIPPED_LOCKED", "issue_id": issue_id, "timestamp": datetime.now().isoformat()})
     except Exception as e:
         logger.error(f"Execution failed for {issue_id}: {e}")
-        write_state(project_key, {"status": "error", "issue_id": issue_id, "error": str(e), "timestamp": datetime.now().isoformat()})
+        write_state(project_key, {"status": "FAILED_SYSTEM", "issue_id": issue_id, "error": str(e), "timestamp": datetime.now().isoformat()})
         raise
 
 

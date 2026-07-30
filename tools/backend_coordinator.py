@@ -8,9 +8,9 @@ import urllib.request
 import urllib.error
 import json
 import contextlib
-import uuid
 from typing import Any, Dict, Callable, Optional, Iterator, Union
 from pathlib import Path
+from filelock import FileLock, Timeout
 
 from tools.config_loader import get_backend_execution_config
 from tools.llama_backend import managed_llama_server
@@ -42,77 +42,33 @@ class GpuLeaseAdapter:
     GPUリースの排他制御を管理するアダプタ。
     
     ローカルの単一GPU (VRAM) を Ollama と llama-server で安全に排他利用するため、
-    ファイルロックを用いたリース管理を行う。プロセス生存確認により、
-    クラッシュ時の不要なロック（Stale Lock）を安全にパージする。
+    filelock (OSネイティブロック) を用いたリース管理を行う。
+    プロセス異常終了時は OS がロックを自動回収するため TOCTOU の心配がない。
     """
     def __init__(self, lock_file: str = ".gpu_lease.lock") -> None:
-        self.lock_file = Path(__file__).resolve().parent.parent / "metadata" / lock_file
-        self.max_wait_timeout = 60  # 最大待機時間 (秒)
-        self.owner_token = uuid.uuid4().hex
+        lock_path = Path(__file__).resolve().parent.parent / "metadata" / lock_file
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock = FileLock(str(lock_path), timeout=60)
 
     def acquire(self) -> None:
         """
         GPUリースを取得する。取得できない場合はTimeoutErrorを送出する。
         """
-        self.lock_file.parent.mkdir(parents=True, exist_ok=True)
-        start_time = time.time()
-        
-        while True:
-            try:
-                fd = os.open(str(self.lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                with os.fdopen(fd, 'w') as f:
-                    f.write(f"{os.getpid()}:{self.owner_token}")
-                logger.info("GPU lease acquired.")
-                return
-            except FileExistsError:
-                # 所有者プロセスの生存確認
-                try:
-                    with open(self.lock_file, 'r') as f:
-                        content = f.read().strip()
-                        if ":" in content:
-                            pid_str, _ = content.split(":", 1)
-                        else:
-                            pid_str = content
-                    if pid_str.isdigit():
-                        pid = int(pid_str)
-                        try:
-                            # 自身のプロセスでない、かつ対象のPIDのプロセスが存在するかチェック
-                            # Windows の場合 os.kill(pid, 0) は機能しない場合があるため考慮が必要だが
-                            # Python 3.8+ では利用可能
-                            os.kill(pid, 0)
-                        except OSError:
-                            # プロセスが存在しない -> Stale Lock
-                            logger.warning(f"Stale GPU lease detected (PID {pid} is dead). Removing...")
-                            self.lock_file.unlink(missing_ok=True)
-                            continue
-                except Exception as e:
-                    logger.debug(f"Error checking lock owner: {e}")
-                
-                if time.time() - start_time > self.max_wait_timeout:
-                    raise TimeoutError(f"Failed to acquire GPU lease within {self.max_wait_timeout} seconds.")
-                
-                logger.info("Waiting for GPU lease...")
-                time.sleep(2)
-            except Exception as e:
-                logger.error(f"Error acquiring GPU lease: {e}")
-                raise
+        try:
+            logger.info("Waiting for GPU lease...")
+            self.lock.acquire()
+            logger.info("GPU lease acquired.")
+        except Timeout:
+            logger.error("Failed to acquire GPU lease within timeout.")
+            raise TimeoutError("Failed to acquire GPU lease within 60 seconds.")
 
     def release(self) -> None:
         """
-        GPUリースを解放する。自身が所有者の場合のみファイルを削除する。
+        GPUリースを解放する。
         """
         try:
-            with open(self.lock_file, 'r') as f:
-                content = f.read().strip()
-            
-            expected_content = f"{os.getpid()}:{self.owner_token}"
-            if content == expected_content:
-                self.lock_file.unlink()
-                logger.info("GPU lease released.")
-            else:
-                logger.debug("GPU lease is owned by another process or token mismatch. Skipping release.")
-        except FileNotFoundError:
-            pass
+            self.lock.release()
+            logger.info("GPU lease released.")
         except Exception as e:
             logger.error(f"Error releasing GPU lease: {e}")
 
@@ -169,10 +125,11 @@ class OllamaBackendAdapter:
         
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
         
-        # Profile から endpoint を取得（未設定時は localhost:11434）
-        api_base = self.profile.get("endpoint", "http://localhost:11434")
+        endpoint = self.profile.get("endpoint")
+        if not endpoint:
+            raise ValueError("Profile must specify 'endpoint' for ollama backend.")
         
-        with patch_env(OLLAMA_API_BASE=api_base, OPENAI_API_BASE=api_base):
+        with patch_env(OLLAMA_API_BASE=endpoint, OPENAI_API_BASE=endpoint):
             return action()
 
 
@@ -192,20 +149,23 @@ class LlamaServerBackendAdapter:
         if action is None:
             raise ValueError("LlamaServerBackendAdapter requires an 'action' callable in request")
         
-        model_name = self.profile.get("model")
-        if not model_name:
-            raise ValueError("LlamaServer profile must specify a 'model'")
-            
-        model_path = f"./models/{model_name}.gguf"
+        model_path = self.profile.get("model_path")
+        port = self.profile.get("port")
+        endpoint = self.profile.get("endpoint")
         
+        if not model_path:
+            raise ValueError("LlamaServer profile must specify 'model_path'")
+        if not port:
+            raise ValueError("LlamaServer profile must specify 'port'")
+        if not endpoint:
+            raise ValueError("LlamaServer profile must specify 'endpoint'")
+            
         logger.info(f"Executing workload on llama-server backend with profile: {self.profile}")
         
         unload_ollama_models()
         
-        api_base = self.profile.get("endpoint", "http://localhost:8080/v1")
-        
-        with patch_env(OPENAI_API_BASE=api_base, OLLAMA_API_BASE=api_base):
-            with managed_llama_server(model_path=model_path, port=8080):
+        with patch_env(OPENAI_API_BASE=endpoint, OLLAMA_API_BASE=endpoint):
+            with managed_llama_server(model_path=model_path, port=port):
                 return action()
 
 
@@ -229,7 +189,10 @@ class BackendExecutionCoordinator:
         profile = profiles.get(profile_name)
         if not profile:
             raise ValueError(f"Profile '{profile_name}' is not defined in backend profiles.")
-        backend_type = profile.get("backend", "ollama")
+        
+        backend_type = profile.get("backend")
+        if not backend_type:
+            raise ValueError(f"Profile '{profile_name}' must specify 'backend'.")
         
         logger.info(f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})")
         

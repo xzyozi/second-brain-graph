@@ -2569,6 +2569,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aider-chat" },
+    { name = "filelock" },
     { name = "langgraph" },
     { name = "litellm" },
     { name = "openai" },
@@ -2587,6 +2588,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aider-chat", specifier = ">=0.30.0" },
+    { name = "filelock", specifier = ">=3.20.3" },
     { name = "langgraph", specifier = ">=0.1.0" },
     { name = "litellm", specifier = ">=1.30.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
