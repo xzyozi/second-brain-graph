@@ -1,4 +1,10 @@
 {
   "version": "1.0",
-  "projects": {}
+  "projects": {
+    "TFG": {
+      "name": "test_file_grep",
+      "path": "projects/test_file_grep",
+      "registered_at": "2026-07-30T21:58:00Z"
+    }
+  }
 }

@@ -35,6 +35,9 @@ def run_aider(
         if not target_model:
             raise ValueError("Profile provided by Coordinator is missing 'model'.")
 
+        if profile.backend == "ollama" and not (target_model.startswith("ollama/") or target_model.startswith("ollama_chat/")):
+            target_model = f"ollama/{target_model}"
+
         no_auto_commits = aider_cfg.no_auto_commits
 
         cmd = ["aider", "--model", target_model, "--yes-always"]
@@ -47,6 +50,8 @@ def run_aider(
 
         env = os.environ.copy()
         # Coordinator のアダプタが patch_env で設定した OLLAMA_API_BASE 等を継承する
+        if "OLLAMA_API_BASE" in env and env["OLLAMA_API_BASE"].endswith("/v1"):
+            env["OLLAMA_API_BASE"] = env["OLLAMA_API_BASE"].removesuffix("/v1")
 
         eff_timeout = timeout if timeout is not None else getattr(aider_cfg, "timeout", 600)
 

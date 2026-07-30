@@ -148,8 +148,9 @@ class OllamaBackendAdapter:
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
 
         endpoint = self.profile.openai_endpoint
+        ollama_base = self.profile.ollama_management_endpoint or endpoint.removesuffix("/v1").removesuffix("/v1/")
 
-        with patch_env(OLLAMA_API_BASE=endpoint, OPENAI_API_BASE=endpoint):
+        with patch_env(OLLAMA_API_BASE=ollama_base, OPENAI_API_BASE=endpoint):
             return action(self.profile)
 
 

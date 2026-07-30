@@ -109,7 +109,7 @@ def test_run_aider_custom_model_and_timeout(mock_run, mock_load_config, mock_get
     assert cmd == [
         "aider",
         "--model",
-        "custom-model",
+        "ollama/custom-model",
         "--yes-always",
         "--message",
         "add tests",
