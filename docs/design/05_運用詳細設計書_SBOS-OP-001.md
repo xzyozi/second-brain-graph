@@ -65,7 +65,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    - ③ `lint_node` (Ruff 高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
-   - ⑥ `done_node` (`tasks.md` を完了 `[x]` 更新し、`execution_history.json` へ成果記録、PRの自動作成)
+   - ⑥ `done_node` (`state.json` を `COMPLETED` 更新し、`execution_history.json` へ成果記録、PRの自動作成、ロック解放)
    
    > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
 
@@ -94,13 +94,14 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - テストコードや型定義の直接編集が必要な場合は、人間が `projects/<name>/` を編集する。
 
 ### ケース3: Aider CLI / LiteLLM 推論のタイムアウト
-- **症状:** `AiderRunError: Aider実行がタイムアウトしました (timeout=600)` が発生。
+- **症状:** `AiderRunError: Aider実行がタイムアウトしました (timeout=600)` や LiteLLM タイムアウトが発生。
 - **対処:**
-  - `nvidia-smi` で VRAM 使用量を確認。
-  - `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
+  - 初回タイムアウト発生時は、`llm_timeout_count` = 1 として同ノードを1回だけ自動再試行する。
+  - 2回目発生時は直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
+  - 根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
 
 ### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
-- **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止した。
+- **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止し、ロックが解放された。
 - **対処:**
   - `cd projects/<target-project>` を実行し、`git status` および `git diff` で変更内容を必ず人間が確認する。
   - 差分に問題がない場合は手動でコミット・PR作成を引き継ぐ。破棄する場合は `git restore .` やブランチ削除等を行う。
