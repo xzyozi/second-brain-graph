@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-import litellm
+from openai import OpenAI
 from tools.config_loader import get_model_params, load_model_config
 
 logger = logging.getLogger("llm_client")
@@ -20,7 +20,7 @@ def call_llm(
     timeout: int = 300,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Call LLM via LiteLLM using parameters configured in config/models.json.
+    """Call LLM via OpenAI API (llama-server) using parameters configured in config/models.json.
 
     Args:
         role: Model role ('planner', 'coder', 'reviewer', etc.)
@@ -28,17 +28,17 @@ def call_llm(
         user_prompt: User prompt text
         expect_json: If True, parses output as JSON with fallback
         timeout: Request timeout in seconds
-        **kwargs: Additional override parameters passed to litellm.completion
+        **kwargs: Additional override parameters passed to OpenAI chat.completions.create
 
     Returns:
         Dict containing LLM response or parsed JSON.
     """
     config = load_model_config()
-    api_base = config.get("api_base", "http://localhost:11434")
+    api_base = config.get("api_base", "http://localhost:8080/v1")
 
     # Load dynamic model parameters from config/models.json (PM-007, PM-011 SSOT)
     role_params = get_model_params(role)
-    model_name = role_params.get("model_name", "ollama/gemma-4-py_coder:latest")
+    model_name = role_params.get("model_name", "gemma-4-12B-it-qat-UD-Q4_K_XL")
     temperature = role_params.get("temperature", 0.1)
     max_tokens = role_params.get("max_tokens", 35000)
 
@@ -60,10 +60,17 @@ def call_llm(
         if key not in completion_params:
             completion_params[key] = value
 
+    client = OpenAI(base_url=api_base, api_key="local", timeout=timeout)
+
     try:
-        response = litellm.completion(**completion_params)
+        # 互換性のため openai クライアントから不要な completion_params を取り除く (api_base, timeout はclient側で設定)
+        api_params = completion_params.copy()
+        api_params.pop("api_base", None)
+        api_params.pop("timeout", None)
+        
+        response = client.chat.completions.create(**api_params)
     except Exception as e:
-        logger.error(f"LiteLLM Error ({role} / {model_name}): {e}")
+        logger.error(f"OpenAI API Error ({role} / {model_name}): {e}")
         raise
 
     raw_output = response.choices[0].message.content or ""

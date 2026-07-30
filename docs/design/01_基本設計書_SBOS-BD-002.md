@@ -4,10 +4,10 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-BD-002                                                      |
-| 版数     | Rev.4.6（全仕様書完全整合・最終安定版）|
+| 版数     | Rev.4.7（PM-036 ブランチ・PR自動化方針反映）|
 | 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-MULTI-001（差分設計書 Rev.2.6）、SBOS-OP-001（運用詳細設計書 Rev.4.5）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.7） |
+| 関連文書 | SBOS-DD-003（詳細設計書）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 | 対象読者 | システムアーキテクト / リード開発エンジニア / ナレッジマネジメント運用者 / DevOpsエンジニア |
 
 ---
@@ -49,7 +49,8 @@
 ```text
 [ tools/orchestrator_graph.py ]  ← LangGraph StateGraph (母艦)
 
-  gather_requirements (tasks.md / project.json 読み込み)
+  gather_requirements (state.json / project.json 読み込み)
+    │ (※すべての副作用より前にロック取得)
          │
          ▼
   plan_node (Executor役: LiteLLM 経由で要件指示書生成)
@@ -66,13 +67,15 @@
          ▼                                                      │
   review_node (LiteLLM レビュー ＋ Reviewdog 出力)             │
          │                                                      │
-         ├─ [LGTM] ─────────────────────────────► done_node (tasks.md 完了更新)
+         ├─ [LGTM (レビュー完了)] ──► done_node (PR作成)
+         │                           ├── [PR成功] ───► (status = "COMPLETED" 記録 / 履歴記録 / ロック解放)
+         │                           └── [PR失敗] ───► (status = "PR_FAILED" 記録 / 履歴記録 / 差分・ブランチ保持 / ロック解放)
          └─ [changes_requested] ────────────────┤
                                                 ▼
-                               (round / lint_round / test_round < max_round ?)
+                               (review_round / lint_round / test_round < max_round ?)
                                                 │
                                  ├─── [Yes] ───► code_node
-                                 └─── [No: 上限到達] ───► escalate_node (tasks.md round:N 動的更新 / B7 ブロッカー化)
+                                 └─── [No: 上限到達] ───► escalate_node (state.json.status = "FAILED_B7" 記録 / ロック解放)
 ```
 
 > **リトライ安全回路（F3対応）:** `review_node` だけでなく、`lint_node`（Ruff）および `test_node`（pytest）の失敗修正ループについても、無制限の無限試行を防止するため `lint_round` / `test_round` (上限 各3回) の安全回路を配備する。上限超過時は直ちに `escalate_node` に遷移してタスクを安全停止させる。
@@ -85,8 +88,8 @@
    母艦の `.gitignore` (`/projects/*`, `/projects/.*`, `!.gitignore`) により、衛星内の差分および Git 履歴は母艦 Git から完全に隔離・遮断される。中央台帳は `metadata/.project-registry.json` に配置管理する。
 2. **Aider のコミット制御 (F1対応)**:
    Aider 起動オプションに正しく `--no-auto-commits`（複数形）を指定。Aider はファイルの修正のみを行い、`git commit` は行わない。
-3. **人間の最終承認**:
-   `done_node` 到達後、運用者が成果物を確認し、衛星内で手動で `git add && git commit` を行う（`permission` 理念の維持）。
+3. **自動ブランチ作成と PR (Pull Request) による人間承認 (PM-036)**:
+   運用者は手動での `git commit` を行わない（`main` 環境保護）。エージェントは常に `project.json` で定義された `base_branch` (例:`develop`) から作業ブランチを切って作業し、`done_node` 到達後に PR を自動作成する。運用者は PR を通して成果物を確認しマージを行う。
 
 ---
 
