@@ -47,30 +47,32 @@ class OrchestratorState(TypedDict):
     review_verdict: Literal["LGTM", "changes_requested", ""]
     review_comments: List[Dict[str, Any]]  # rdjson準拠のコメント配列
 
-    # PM-005: エラー分類器およびリトライ制御フィールド
-    error_category: Optional[Literal["LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED", "LLM_TIMEOUT", "SYSTEM_ERROR"]]
+    # PM-005: 状態管理・エラー分類器およびリトライ制御フィールド
+    status: Literal["PENDING", "RUNNING", "FAILED_B7", "FAILED_SYSTEM", "SKIPPED_LOCKED", "PR_FAILED", "COMPLETED"]
+    error_category: Optional[Literal["LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED", "LLM_TIMEOUT", "SYSTEM_ERROR", "LOCKED", "PR_ERROR"]]
     last_error_message: Optional[str]
 
-    round: int                    # レビュー試行ラウンド数
+    review_round: int             # レビュー試行ラウンド数
     lint_round: int               # lint リトライ数
     test_round: int               # test リトライ数
     max_round: int                # タスクごとの最大試行許容数 (デフォルト 3)
+    llm_timeout_count: int        # LLMタイムアウト発生回数 (最大1回)
     history: List[Dict[str, Any]]  # 各ノードの実行履歴
 ```
 
 ### 2.1 エラー分類マッピング仕様 (PM-005 統合設計)
 旧 ORCH-001 のエラー分類ロジックを、LangGraph ノードの実行結果に応じて以下のように `error_category` へアトミックにマッピングする。
 
-| 発生ノード | 検知条件 | `error_category` 値 | 遷移先 (上限未達時) | 上限超過時 (`round >= max_round`) |
-| :--- | :--- | :--- | :--- | :--- |
-| `lint_node` | Ruff 静的解析エラーあり | `"LINT_ERROR"` | `code_node` (`lint_round` + 1) | `escalate_node` (B7ブロッカー: `FAILED_B7`) |
-| `test_node` | Pytest 単体テスト失敗 | `"TEST_ERROR"` | `code_node` (`test_round` + 1) | `escalate_node` (B7ブロッカー: `FAILED_B7`) |
-| `review_node` | Reviewer 指摘あり (`changes_requested`) | `"REVIEW_REJECTED"` | `code_node` (`round` + 1) | `escalate_node` (B7ブロッカー: `FAILED_B7`) |
-| 全ノード | LiteLLM タイムアウト | `"LLM_TIMEOUT"` | 1回だけ再試行 | `escalate_node` (システム例外: `FAILED_SYSTEM`) |
-| 全ノード | その他システム例外 | `"SYSTEM_ERROR"` | (再試行なし) | `escalate_node` (システム例外: `FAILED_SYSTEM`) |
-| `plan_node` 前 | ロック取得失敗 | `"LOCKED"` | (待機・キューなし) | 即時スキップ: `SKIPPED_LOCKED` |
-| 完了後 | PR作成失敗 | `"PR_ERROR"` | - | 作業ブランチ保持・停止: `PR_FAILED` |
-| 完了後 | PR作成成功 | `"PR_SUCCESS"` | - | 完了記録: `COMPLETED` |
+| 発生ノード | 検知条件 | `error_category` 値 | 判定カウンタ | 遷移先 (上限未達時) | 上限超過時 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `lint_node` | Ruff 静的解析エラーあり | `"LINT_ERROR"` | `lint_round >= max_round` | `code_node` | `escalate_node` (`FAILED_B7`) |
+| `test_node` | Pytest 単体テスト失敗 | `"TEST_ERROR"` | `test_round >= max_round` | `code_node` | `escalate_node` (`FAILED_B7`) |
+| `review_node` | Reviewer 指摘あり | `"REVIEW_REJECTED"` | `review_round >= max_round` | `code_node` | `escalate_node` (`FAILED_B7`) |
+| 全ノード | LiteLLM タイムアウト | `"LLM_TIMEOUT"` | `llm_timeout_count >= 1` | 1回だけ再試行 | `escalate_node` (`FAILED_SYSTEM`) |
+| 全ノード | その他システム例外 | `"SYSTEM_ERROR"` | - | (再試行なし) | `escalate_node` (`FAILED_SYSTEM`) |
+| `plan_node` 前 | ロック取得失敗 | `"LOCKED"` | - | (待機・キューなし) | 即時スキップ: `SKIPPED_LOCKED` |
+| 完了後 | PR作成失敗 | `"PR_ERROR"` | - | - | 作業ブランチ保持・停止: `PR_FAILED` |
+| 完了後 | PR作成成功 | - (成功) | - | - | 完了記録: `COMPLETED` |
 
 ---
 
@@ -241,15 +243,29 @@ def review_node(state: OrchestratorState) -> OrchestratorState:
     return state
 
 def done_node(state: OrchestratorState) -> OrchestratorState:
-    """レビューを通過しLGTMとなった後、自動で PR (Pull Request) を作成する"""
+    """
+    レビューLGTMは遷移条件であり完了ではない。
+    PR作成成功時のみ state.json.status = "COMPLETED" とし、
+    失敗時は作業ブランチと差分を保持して status = "PR_FAILED" とする。
+    どちらもロックを解放し execution_history.json へ記録する。
+    """
     import subprocess
-    # PR作成（ベースブランチは project.json の base_branch または develop）
     base_branch = state.get("base_branch", "develop")
     head_branch = f"sbos/{state['issue_id']}"
-    subprocess.run(
-        ["gh", "pr", "create", "--base", base_branch, "--head", head_branch, "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agentによって自動生成されたPRです。"],
-        cwd=state["project_path"], check=True
-    )
+    try:
+        subprocess.run(
+            ["gh", "pr", "create", "--base", base_branch, "--head", head_branch, "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agentによって自動生成されたPRです。"],
+            cwd=state["project_path"], check=True
+        )
+        final_status = "COMPLETED"
+    except subprocess.CalledProcessError:
+        print("PR作成に失敗しました。作業ブランチを保持します。")
+        final_status = "PR_FAILED"
+
+    actual_round = max(state.get("review_round", 0), state.get("lint_round", 0), state.get("test_round", 0))
+    update_task_state(state["project_path"], state["issue_id"], round_num=actual_round, status=final_status)
+    record_execution_history(state, final_status=final_status, actual_round=actual_round)
+    release_lock(state["project_path"]) # ロック解放
     return state
 
 def build_graph():
@@ -287,7 +303,7 @@ def build_graph():
         if s.get("review_verdict") == "LGTM":
             return "done"
         # エラーカテゴリ分類: REVIEW_REJECTED
-        return "escalate" if s.get("round", 0) >= s.get("max_round", 3) else "code"
+        return "escalate" if s.get("review_round", 0) >= s.get("max_round", 3) else "code"
 
     g.add_conditional_edges("review", route_after_review, {"done": "done", "escalate": "escalate", "code": "code"})
     g.add_edge("done", END)
@@ -307,16 +323,17 @@ def escalate_node(state: OrchestratorState) -> OrchestratorState:
     """
     上限到達またはシステム例外発生時に呼ばれ、state.json を動的更新しブロッカー化・安全停止させる。
     B7、システム失敗、PR失敗時に、自動処理は作業ブランチおよび未コミット差分を保持したまま停止する。
-    差分の破棄またはブランチ削除は、人間が内容を確認した後にのみ実施する。
+    差分の破棄またはブランチ削除は、人間が内容を確認した後にのみ実施し、ロックを解放する。
     """
-    actual_round = max(state.get("round", 0), state.get("lint_round", 0), state.get("test_round", 0))
-    final_status = "FAILED_B7" if actual_round >= state["max_round"] else "FAILED_SYSTEM"
+    actual_round = max(state.get("review_round", 0), state.get("lint_round", 0), state.get("test_round", 0))
+    final_status = "FAILED_B7" if state.get("error_category") in ["LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED"] else "FAILED_SYSTEM"
     
-    logger.error(f"Issue {state['issue_id']} 実行停止: {final_status} (round: {actual_round}/{state['max_round']})")
-    logger.info("安全のため作業ブランチおよび未コミット差分を保持して停止します。")
+    print(f"Issue {state['issue_id']} 実行停止: {final_status} (round: {actual_round}/{state['max_round']})")
+    print("安全のため作業ブランチおよび未コミット差分を保持して停止し、ロックを解放します。")
     
     update_task_state(state["project_path"], state["issue_id"], round_num=actual_round, status=final_status)
     record_execution_history(state, final_status=final_status, actual_round=actual_round)
+    release_lock(state["project_path"]) # ロック解放
     return state
 ```
 
@@ -328,7 +345,7 @@ def escalate_node(state: OrchestratorState) -> OrchestratorState:
 {
   "EC-012": {
     "status": "FAILED_B7",
-    "round": 3,
+    "review_round": 3,
     "max_round": 3
   }
 }
@@ -351,7 +368,7 @@ def update_task_state(
 
 #### 3. `record_execution_history()` 関数と `history_path` スキーマ
 * **保存パス (`history_path`)**: `tools/.cache/execution_history.json`
-* **フィールドマッピング注記**: `OrchestratorState` のレビュー試行カウンタ `state["round"]` は、履歴 JSON スキーマ上の `"review_round"` フィールドへそのままマッピング保存される。
+* **フィールドマッピング注記**: `OrchestratorState` のレビュー試行カウンタ `state["review_round"]` は、履歴 JSON スキーマ上の `"review_round"` フィールドへそのままマッピング保存される。
 
 ```python
 def record_execution_history(
@@ -380,12 +397,12 @@ def record_execution_history(
       "review_round": 2,
       "review_rounds": [
         {
-          "round": 1,
+          "review_round": 1,
           "verdict": "changes_requested",
           "comments": [{"file": "main.py", "line": 15, "message": "型アノテーション不足"}]
         },
         {
-          "round": 2,
+          "review_round": 2,
           "verdict": "changes_requested",
           "comments": [{"file": "main.py", "line": 20, "message": "例外処理ハンドラ未考慮"}]
         }
@@ -431,12 +448,19 @@ def cmd_execute(args):
     import subprocess
     issue_id = args.issue_id
     graph = build_graph()
-    initial_state = build_initial_state(issue_id)  # tasks.md / project.json から構築
+    initial_state = build_initial_state(issue_id)  # state.json / project.json から構築
     
-    # グラフ実行前処理: base_branch を最新化し、作業ブランチを切る (PM-036)
+    proj_path = initial_state["project_path"]
+    
+    # グラフ実行前処理: ロックの取得 (すべての副作用より前に行う)
+    if not acquire_lock(proj_path):
+        print(f"ロック取得失敗。別タスクが実行中です。状態を SKIPPED_LOCKED とします。")
+        update_task_state(proj_path, issue_id, round_num=0, status="SKIPPED_LOCKED")
+        return
+
+    # base_branch を最新化し、作業ブランチを切る (PM-036)
     base_branch = initial_state.get("base_branch", "develop")
     head_branch = f"sbos/{issue_id}"
-    proj_path = initial_state["project_path"]
     subprocess.run(["git", "checkout", base_branch], cwd=proj_path, check=True)
     subprocess.run(["git", "pull", "origin", base_branch], cwd=proj_path, check=True)
     subprocess.run(["git", "checkout", "-b", head_branch, base_branch], cwd=proj_path, check=True)
