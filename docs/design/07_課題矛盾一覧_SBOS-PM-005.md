@@ -74,7 +74,7 @@
 | **PM-047** | ENV-001 / DD | 🟢 | モデル設定SSOTとフォールバック方針の矛盾 | DD-003に残存していた直書きモデル名を廃止し、`models.json` フォールバック先例示へと一元化 | 🟢 解決済み |
 | **PM-048** | 全文書横断 | 🟢 | 文書間の版数参照が現行版と不一致 | 本文・関連文書欄の他文書固定版数参照を削除し文書番号のみの参照へ統一 | 🟢 解決済み |
 | **PM-049** | ORCH | 🟢 | 旧ORCH文書の位置付けが不明瞭（現行仕様との混同リスク） | `SBOS-ORCH-001.md` 各節に「非規範・参考資料」のアラートを追記し、正本は DD-003 である旨を明記 | 🟢 解決済み |
-| **PM-050** | DD / ORCH | 🟠 中 | Ollama (localhost:11434) と llama-server (localhost:8080) のLLMバックエンド接続経路・起動方針が混在している | 実運用に向けてOllamaかllama-serverのどちらに統一するか、接続先・起動設計を再定義する | 🟡 未解決・タスク化 |
+| **PM-050** | DD / ORCH | 🟠 中 | Ollama (localhost:11434) と llama-server (localhost:8080) のLLMバックエンド接続経路・起動方針が混在している | `BackendExecutionCoordinator` を導入し、推論目的（intent）に応じた排他併用（Exclusive Co-usage）アーキテクチャへ移行 | 🟢 解決済み |
 
 ---
 
@@ -231,10 +231,10 @@
   - 通常の LLM 呼び出しや Aider (`llm_client.py`, `config_loader.py`, `aider_runner.py` 経由) は **Ollama (localhost:11434)** へ接続する想定となっている。
   - Orchestrator の実行ラッパー (`orchestrator_graph.py`) はタスク実行時に `llama_backend.py` の `managed_llama_server()` を使い、**llama-server (localhost:8080)** を動的起動して GGUF モデルをロードする設計となっている。
   このままでは、`llm_client.py` の接続先とサーバー起動先が一致しない可能性があり、オーケストレーターとLLM間で通信エラーやリソースの二重起動が発生するリスクがある。
-* **解決案**: 実運用に向けてバックエンド方針を一本化する。
-  - 案1: Ollama をサービスとして常駐・統一させ、Orchestrator 側の `managed_llama_server()` 起動コードを廃止する。
-  - 案2: Orchestrator が llama-server を動的起動する設計を正本とし、`config_loader.py` の `api_base` や Aider の `--model` 指定先を localhost:8080 互換形式へ変更する。
-  方針決定後、`llm_client.py` および `orchestrator_graph.py` の設計とコードを修整する。
+* **解決案（排他併用アーキテクチャ）**: 実運用に向けて用途別にバックエンドを最適化するため、「排他併用 (Exclusive Co-usage)」方針を採用する。
+  - `BackendExecutionCoordinator` を新設し、推論目的（`intent`）に応じて `Ollama` または `llama-server` へ動的にルーティングする。
+  - 両者が VRAM を奪い合わないよう、`metadata/.gpu_lease.lock` を用いた単一のGPUリース管理を導入する。
+  - `llm_client.py` および `aider_runner.py` は Coordinator 経由でバックエンドを呼び出すよう統合する。
 
 ---
 
