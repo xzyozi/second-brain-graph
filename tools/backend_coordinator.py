@@ -125,8 +125,9 @@ def unload_ollama_models(management_endpoint: str) -> None:
     except urllib.error.URLError as e:
         logger.warning(
             f"Ollama management API unreachable at {ps_url}: {e}. "
-            "Assuming Ollama is not running and no models are loaded. Continuing."
+            "Assuming Ollama is not running and VRAM is free. Continuing."
         )
+        return
 
 
 class OllamaBackendAdapter:
