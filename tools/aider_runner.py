@@ -41,9 +41,7 @@ def run_aider(
         cmd.extend(target_files)
 
         env = os.environ.copy()
-        api_base = config.get("api_base")
-        if api_base:
-            env["OLLAMA_API_BASE"] = api_base
+        # Coordinator のアダプタが patch_env で設定した OLLAMA_API_BASE 等を継承する
 
         try:
             print(f"[AiderRunner] Running Aider with model '{target_model}' on {target_files}...")

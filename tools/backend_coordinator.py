@@ -7,7 +7,8 @@ import logging
 import urllib.request
 import urllib.error
 import json
-from typing import Any, Dict, Callable
+import contextlib
+from typing import Any, Dict, Callable, Optional, Iterator, Union
 from pathlib import Path
 
 from tools.config_loader import get_backend_execution_config
@@ -15,14 +16,45 @@ from tools.llama_backend import managed_llama_server
 
 logger = logging.getLogger("backend_coordinator")
 
-class GpuLeaseAdapter:
-    """GPUリースの排他制御を管理するアダプタ"""
-    def __init__(self, lock_file: str = "metadata/.gpu_lease.lock"):
-        self.lock_file = Path(lock_file)
-        self.stale_timeout = 7200
+@contextlib.contextmanager
+def patch_env(**env_vars: str) -> Iterator[None]:
+    """
+    一時的に環境変数を設定し、ブロック終了後に元の状態へ復元するコンテキストマネージャ。
+    
+    Args:
+        **env_vars: 設定する環境変数のキーと値
+    """
+    original = {k: os.environ.get(k) for k in env_vars.keys()}
+    os.environ.update(env_vars)
+    try:
+        yield
+    finally:
+        for k, v in original.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
-    def acquire(self):
+
+class GpuLeaseAdapter:
+    """
+    GPUリースの排他制御を管理するアダプタ。
+    
+    ローカルの単一GPU (VRAM) を Ollama と llama-server で安全に排他利用するため、
+    ファイルロックを用いたリース管理を行う。プロセス生存確認により、
+    クラッシュ時の不要なロック（Stale Lock）を安全にパージする。
+    """
+    def __init__(self, lock_file: str = "metadata/.gpu_lease.lock") -> None:
+        self.lock_file = Path(lock_file)
+        self.max_wait_timeout = 60  # 最大待機時間 (秒)
+
+    def acquire(self) -> None:
+        """
+        GPUリースを取得する。取得できない場合はTimeoutErrorを送出する。
+        """
         self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+        start_time = time.time()
+        
         while True:
             try:
                 fd = os.open(str(self.lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
@@ -31,21 +63,38 @@ class GpuLeaseAdapter:
                 logger.info("GPU lease acquired.")
                 return
             except FileExistsError:
-                mtime = os.path.getmtime(self.lock_file)
-                if time.time() - mtime > self.stale_timeout:
-                    logger.warning("Stale GPU lease detected. Removing...")
-                    try:
-                        self.lock_file.unlink()
-                        continue
-                    except Exception:
-                        pass
+                # 所有者プロセスの生存確認
+                try:
+                    with open(self.lock_file, 'r') as f:
+                        pid_str = f.read().strip()
+                    if pid_str.isdigit():
+                        pid = int(pid_str)
+                        try:
+                            # 自身のプロセスでない、かつ対象のPIDのプロセスが存在するかチェック
+                            # Windows の場合 os.kill(pid, 0) は機能しない場合があるため考慮が必要だが
+                            # Python 3.8+ では利用可能
+                            os.kill(pid, 0)
+                        except OSError:
+                            # プロセスが存在しない -> Stale Lock
+                            logger.warning(f"Stale GPU lease detected (PID {pid} is dead). Removing...")
+                            self.lock_file.unlink(missing_ok=True)
+                            continue
+                except Exception as e:
+                    logger.debug(f"Error checking lock owner: {e}")
+                
+                if time.time() - start_time > self.max_wait_timeout:
+                    raise TimeoutError(f"Failed to acquire GPU lease within {self.max_wait_timeout} seconds.")
+                
                 logger.info("Waiting for GPU lease...")
-                time.sleep(5)
+                time.sleep(2)
             except Exception as e:
                 logger.error(f"Error acquiring GPU lease: {e}")
                 raise
 
-    def release(self):
+    def release(self) -> None:
+        """
+        GPUリースを解放する。
+        """
         try:
             self.lock_file.unlink()
             logger.info("GPU lease released.")
@@ -55,7 +104,7 @@ class GpuLeaseAdapter:
             logger.error(f"Error releasing GPU lease: {e}")
 
 
-def unload_ollama_models():
+def unload_ollama_models() -> None:
     """Ollamaにロードされているモデルを解放する"""
     try:
         # ps api で現在ロードされているモデルを取得
@@ -78,53 +127,64 @@ def unload_ollama_models():
 
 
 class OllamaBackendAdapter:
-    def __init__(self, profile: Dict[str, Any]):
+    """
+    Ollama バックエンドのタスク実行アダプタ。
+    
+    実行時に OLLAMA_API_BASE を一時的に環境変数としてパッチし、
+    タスク終了後に元に戻す（副作用をブロック内に閉じ込める）。
+    """
+    def __init__(self, profile: Dict[str, Any]) -> None:
         self.profile = profile
 
     def execute(self, request: Dict[str, Any]) -> Any:
-        action: Callable = request.get("action")
-        if not action:
+        action: Optional[Callable[..., Any]] = request.get("action")
+        if action is None:
             raise ValueError("OllamaBackendAdapter requires an 'action' callable in request")
         
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
         
-        # AiderやLLMクライアント向けに環境変数を設定
-        api_base = "http://localhost:11434"
-        os.environ["OLLAMA_API_BASE"] = api_base
+        # Profile から endpoint を取得（未設定時は localhost:11434）
+        api_base = self.profile.get("endpoint", "http://localhost:11434")
         
-        # Actionの実行
-        return action()
+        with patch_env(OLLAMA_API_BASE=api_base, OPENAI_API_BASE=api_base):
+            return action()
 
 
 class LlamaServerBackendAdapter:
-    def __init__(self, profile: Dict[str, Any]):
+    """
+    llama-server バックエンドのタスク実行アダプタ。
+    
+    実行前に Ollama の VRAM を解放し、llama-server プロセスを起動する。
+    実行中は APIエンドポイントを :8080/v1 に一時パッチし、
+    タスク終了時には必ずプロセスを終了（VRAM解放）させ、環境変数を復元する。
+    """
+    def __init__(self, profile: Dict[str, Any]) -> None:
         self.profile = profile
 
     def execute(self, request: Dict[str, Any]) -> Any:
-        action: Callable = request.get("action")
-        if not action:
+        action: Optional[Callable[..., Any]] = request.get("action")
+        if action is None:
             raise ValueError("LlamaServerBackendAdapter requires an 'action' callable in request")
         
-        model_name = self.profile.get("model", "gemma-4-12B-it-qat-UD-Q4_K_XL")
-        # GGUFパスの簡易マッピング（実際は設定やディレクトリ構造に依存）
+        model_name = self.profile.get("model")
+        if not model_name:
+            raise ValueError("LlamaServer profile must specify a 'model'")
+            
         model_path = f"./models/{model_name}.gguf"
         
         logger.info(f"Executing workload on llama-server backend with profile: {self.profile}")
         
-        # Ollama のVRAMを解放する
         unload_ollama_models()
         
-        # クライアント向けの環境変数を設定
-        os.environ["OPENAI_API_BASE"] = "http://localhost:8080/v1"
-        os.environ["OLLAMA_API_BASE"] = "http://localhost:8080/v1"
-
-        # llama-server を起動してタスクを実行し、完了後にプロセスを停止
-        with managed_llama_server(model_path=model_path, port=8080):
-            return action()
+        api_base = self.profile.get("endpoint", "http://localhost:8080/v1")
+        
+        with patch_env(OPENAI_API_BASE=api_base, OLLAMA_API_BASE=api_base):
+            with managed_llama_server(model_path=model_path, port=8080):
+                return action()
 
 
 class BackendExecutionCoordinator:
-    def __init__(self):
+    def __init__(self) -> None:
         self.config = get_backend_execution_config()
         self.gpu_lease = GpuLeaseAdapter()
 
@@ -138,15 +198,16 @@ class BackendExecutionCoordinator:
         
         profile_name = routes.get(intent)
         if not profile_name:
-            logger.warning(f"No route found for intent '{intent}'. Falling back to coding_ollama.")
-            profile_name = "coding_ollama"
+            raise ValueError(f"No route mapped for intent '{intent}'. Explicit routing is required.")
             
-        profile = profiles.get(profile_name, {})
+        profile = profiles.get(profile_name)
+        if not profile:
+            raise ValueError(f"Profile '{profile_name}' is not defined in backend profiles.")
         backend_type = profile.get("backend", "ollama")
         
         logger.info(f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})")
         
-        adapter = None
+        adapter: Union[LlamaServerBackendAdapter, OllamaBackendAdapter]
         if backend_type == "llama_server":
             adapter = LlamaServerBackendAdapter(profile)
         elif backend_type == "ollama":
