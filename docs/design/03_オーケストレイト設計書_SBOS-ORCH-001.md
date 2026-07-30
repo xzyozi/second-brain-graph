@@ -65,6 +65,8 @@
 
 ## 2. エラー分類器とリトライ制御ロジック (`error_classifier.py`)
 
+> [!WARNING] 本節は旧自前実装の参考資料であり、現行の状態・失敗・Git契約には使用しない。現行正本は DD-003 とする。
+
 エラー発生時、LLMの不完全な推測に頼らず、エラーログの文字列やプロセスの終了コードを Python スクレイピングしてエラーカテゴリを決定する。
 
 ### 2.1 5大エラーカテゴリと上限値設定
@@ -151,6 +153,8 @@ def _merge_python_code(existing_content: str, generated_code: str) -> str:
 
 ## 4. レビュー差し戻しループと Git 未依存差分検証
 
+> [!WARNING] 本節は旧自前実装の参考資料であり、現行の状態・失敗・Git契約には使用しない。現行正本は DD-003 とする。
+
 ### 4.1 差し戻し先を常に「Coder（実装Agent）」とする設計トレードオフ
 レビューで仕様の不整合が指摘された場合、本来であれば上流の要件定義（Executor）からやり直すのが理想的である。しかし、本スタックにおける `execute_issue()` ループ構造では以下のトレードオフが存在する。
 
@@ -223,6 +227,8 @@ def _detect_b7_blocker(task_line: str, issue_id: str, history_records: List[Dict
 3. 実行可能な Issue を列挙する `actionable` 配列からは自動的に除外されるため、`orchestrator.py` の自動バッチ処理が該当 Issue を誤って再試行し続け、CPU/GPU リソースを浪費する事態が完全に阻止される。---
 
 ## 6. オーケストレイト中核ロジックの完全コード実装仕様
+
+> [!WARNING] 本節は旧自前実装の参考資料であり、現行の状態・失敗・Git契約には使用しない。現行正本は DD-003 とする。
 
 本節では、基本・詳細設計を実稼働させるための中核スクリプト `tools/orchestrator.py` のクラス構造および主要メソッドの完全なリファレンス実装を規定する。
 
@@ -383,6 +389,8 @@ class IssueOrchestrator:
 
 ## 7. 高等 AST 構文解析と関数レベルマージの詳細アルゴリズム
 
+> [!WARNING] 本節は旧自前実装の参考資料であり、現行の状態・失敗・Git契約には使用しない。現行正本は DD-003 とする。
+
 前述の `_merge_python_code` におけるマージロジックをさらに深掘りし、クラスメソッドやデコレータを保持したまま正確に差分マージを行うための `NodeTransformer` アルゴリズムを詳述する。
 
 ### 7.1 クラス内部メソッドの非破壊的置換 (`ClassMethodMerger`)
@@ -465,6 +473,8 @@ def clean_and_normalize_imports(source_code: str) -> str:
 ---
 
 ## 8. メモリおよびパフォーマンス最適化設計
+
+> [!WARNING] 本節は旧自前実装の参考資料であり、現行の状態・失敗・Git契約には使用しない。現行正本は DD-003 とする。
 
 ### 8.1 大規模ファイルにおける `difflib.unified_diff` の計算計算量と制限
 `difflib.unified_diff` は行単位のゲシュタルトパターンマッチング（Gestalt Pattern Matching）アルゴリズムを採用しており、時間計算量は最悪ケースで $O(N^2)$、空間計算量は $O(N)$（$N$ はファイル総行数）となる。
