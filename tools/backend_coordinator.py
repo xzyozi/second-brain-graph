@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 import json
 import contextlib
+import uuid
 from typing import Any, Dict, Callable, Optional, Iterator, Union
 from pathlib import Path
 
@@ -44,9 +45,10 @@ class GpuLeaseAdapter:
     ファイルロックを用いたリース管理を行う。プロセス生存確認により、
     クラッシュ時の不要なロック（Stale Lock）を安全にパージする。
     """
-    def __init__(self, lock_file: str = "metadata/.gpu_lease.lock") -> None:
-        self.lock_file = Path(lock_file)
+    def __init__(self, lock_file: str = ".gpu_lease.lock") -> None:
+        self.lock_file = Path(__file__).resolve().parent.parent / "metadata" / lock_file
         self.max_wait_timeout = 60  # 最大待機時間 (秒)
+        self.owner_token = uuid.uuid4().hex
 
     def acquire(self) -> None:
         """
@@ -59,14 +61,18 @@ class GpuLeaseAdapter:
             try:
                 fd = os.open(str(self.lock_file), os.O_CREAT | os.O_EXCL | os.O_RDWR)
                 with os.fdopen(fd, 'w') as f:
-                    f.write(str(os.getpid()))
+                    f.write(f"{os.getpid()}:{self.owner_token}")
                 logger.info("GPU lease acquired.")
                 return
             except FileExistsError:
                 # 所有者プロセスの生存確認
                 try:
                     with open(self.lock_file, 'r') as f:
-                        pid_str = f.read().strip()
+                        content = f.read().strip()
+                        if ":" in content:
+                            pid_str, _ = content.split(":", 1)
+                        else:
+                            pid_str = content
                     if pid_str.isdigit():
                         pid = int(pid_str)
                         try:
@@ -97,12 +103,14 @@ class GpuLeaseAdapter:
         """
         try:
             with open(self.lock_file, 'r') as f:
-                pid_str = f.read().strip()
-            if pid_str.isdigit() and int(pid_str) == os.getpid():
+                content = f.read().strip()
+            
+            expected_content = f"{os.getpid()}:{self.owner_token}"
+            if content == expected_content:
                 self.lock_file.unlink()
                 logger.info("GPU lease released.")
             else:
-                logger.debug("GPU lease is owned by another process. Skipping release.")
+                logger.debug("GPU lease is owned by another process or token mismatch. Skipping release.")
         except FileNotFoundError:
             pass
         except Exception as e:
@@ -127,8 +135,21 @@ def unload_ollama_models() -> None:
                         headers={'Content-Type': 'application/json'}
                     )
                     urllib.request.urlopen(unload_req, timeout=5)
+            
+            # Verify unloading
+            start_time = time.time()
+            while time.time() - start_time < 10:
+                req = urllib.request.urlopen("http://localhost:11434/api/ps", timeout=2)
+                if req.getcode() == 200:
+                    data = json.loads(req.read().decode('utf-8'))
+                    if not data.get("models"):
+                        return
+                time.sleep(1)
+            raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
+            
     except Exception as e:
-        logger.debug(f"Failed to check/unload Ollama models (Ollama might not be running): {e}")
+        logger.error(f"Failed to verify/unload Ollama models (Ollama might not be running or failed to clear): {e}")
+        raise RuntimeError(f"Ollama unload failed: {e}")
 
 
 class OllamaBackendAdapter:
