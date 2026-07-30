@@ -1,10 +1,11 @@
 """Configuration Loader for Second Brain OS Model Management."""
 
+from functools import lru_cache
 import json
 from pathlib import Path
-from functools import lru_cache
-from typing import Any, Dict, Optional, Literal
-from pydantic import BaseModel, ConfigDict, model_validator, Field
+from typing import Any, Dict, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # DEFAULT_CONFIG was removed to prevent silent fallbacks to unsafe defaults.
 
@@ -46,6 +47,7 @@ class BackendExecutionConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     mode: Literal["exclusive"]
     fallback: str = Field(min_length=1)
+    gpu_lease_timeout: int = Field(120, ge=1)
     routes: Dict[str, str]
     profiles: Dict[str, ProfileConfig]
 
@@ -54,10 +56,10 @@ class BackendExecutionConfig(BaseModel):
         for intent, profile_name in self.routes.items():
             if profile_name not in self.profiles:
                 raise ValueError(f"Route '{intent}' refers to undefined profile '{profile_name}'")
-        
+
         if self.fallback != "disabled" and self.fallback not in self.profiles:
             raise ValueError(f"Fallback '{self.fallback}' must be 'disabled' or refer to a defined profile")
-            
+
         return self
 
 class RootConfig(BaseModel):

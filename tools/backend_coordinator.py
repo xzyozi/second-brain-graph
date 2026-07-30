@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """tools/backend_coordinator.py - LLMバックエンドの排他併用を管理するCoordinator."""
 
-import os
-import time
-import logging
-import urllib.request
-import urllib.error
-import json
 import contextlib
 from functools import lru_cache
-from typing import Any, Dict, Callable, Optional, Iterator, Union
+import json
+import logging
+import os
 from pathlib import Path
+import time
+from typing import Any, Callable, Dict, Iterator, Optional, Union
+import urllib.error
+import urllib.request
+
 from filelock import FileLock, Timeout
 
-from tools.config_loader import get_backend_execution_config, ProfileConfig
+from tools.config_loader import ProfileConfig, get_backend_execution_config
 from tools.llama_backend import managed_llama_server
 
 logger = logging.getLogger("backend_coordinator")
@@ -22,7 +23,7 @@ logger = logging.getLogger("backend_coordinator")
 def patch_env(**env_vars: str) -> Iterator[None]:
     """
     一時的に環境変数を設定し、ブロック終了後に元の状態へ復元するコンテキストマネージャ。
-    
+
     Args:
         **env_vars: 設定する環境変数のキーと値
     """
@@ -41,15 +42,16 @@ def patch_env(**env_vars: str) -> Iterator[None]:
 class GpuLeaseAdapter:
     """
     GPUリースの排他制御を管理するアダプタ。
-    
+
     ローカルの単一GPU (VRAM) を Ollama と llama-server で安全に排他利用するため、
     filelock (OSネイティブロック) を用いたリース管理を行う。
     プロセス異常終了時は OS がロックを自動回収するため TOCTOU の心配がない。
     """
-    def __init__(self, lock_file: str = ".gpu_lease.lock") -> None:
+    def __init__(self, lock_file: str = ".gpu_lease.lock", timeout: int = 60) -> None:
         lock_path = Path(__file__).resolve().parent.parent / "metadata" / lock_file
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock = FileLock(str(lock_path), timeout=60)
+        self.timeout = timeout
+        self.lock = FileLock(str(lock_path), timeout=timeout)
 
     def __enter__(self) -> "GpuLeaseAdapter":
         self.acquire()
@@ -68,7 +70,7 @@ class GpuLeaseAdapter:
             logger.info("GPU lease acquired.")
         except Timeout:
             logger.error("Failed to acquire GPU lease within timeout.")
-            raise TimeoutError("Failed to acquire GPU lease within 60 seconds.")
+            raise TimeoutError(f"Failed to acquire GPU lease within {self.timeout} seconds.")
 
     def release(self) -> None:
         """
@@ -108,7 +110,7 @@ def unload_ollama_models(management_endpoint: str) -> None:
                         headers={'Content-Type': 'application/json'}
                     )
                     urllib.request.urlopen(unload_req, timeout=5)
-            
+
             # Verify unloading
             start_time = time.time()
             while time.time() - start_time < 10:
@@ -119,16 +121,18 @@ def unload_ollama_models(management_endpoint: str) -> None:
                         return
                 time.sleep(1)
             raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
-            
+
     except urllib.error.URLError as e:
-        logger.error(f"Ollama management API unreachable at {ps_url}: {e}. Cannot guarantee VRAM is free. Aborting.")
-        raise RuntimeError(f"Ollama unreachable: {e}")
+        logger.warning(
+            f"Ollama management API unreachable at {ps_url}: {e}. "
+            "Assuming Ollama is not running and no models are loaded. Continuing."
+        )
 
 
 class OllamaBackendAdapter:
     """
     Ollama バックエンドのタスク実行アダプタ。
-    
+
     実行時に OLLAMA_API_BASE を一時的に環境変数としてパッチし、
     タスク終了後に元に戻す（副作用をブロック内に閉じ込める）。
     """
@@ -139,11 +143,11 @@ class OllamaBackendAdapter:
         action: Optional[Callable[..., Any]] = request.get("action")
         if action is None:
             raise ValueError("OllamaBackendAdapter requires an 'action' callable in request")
-        
+
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
-        
+
         endpoint = self.profile.openai_endpoint
-        
+
         with patch_env(OLLAMA_API_BASE=endpoint, OPENAI_API_BASE=endpoint):
             return action(self.profile)
 
@@ -151,7 +155,7 @@ class OllamaBackendAdapter:
 class LlamaServerBackendAdapter:
     """
     llama-server バックエンドのタスク実行アダプタ。
-    
+
     実行前に Ollama の VRAM を解放し、llama-server プロセスを起動する。
     実行中は APIエンドポイントを :8080/v1 に一時パッチし、
     タスク終了時には必ずプロセスを終了（VRAM解放）させ、環境変数を復元する。
@@ -164,29 +168,29 @@ class LlamaServerBackendAdapter:
         action: Optional[Callable[..., Any]] = request.get("action")
         if action is None:
             raise ValueError("LlamaServerBackendAdapter requires an 'action' callable in request")
-        
+
         model_path = self.profile.model_path
         port = self.profile.port
         openai_endpoint = self.profile.openai_endpoint
-        
+
         # Pydantic validates port and model_path for llama_server
         assert model_path is not None
         assert port is not None
-            
+
         logger.info(f"Executing workload on llama-server backend with profile: {self.profile}")
-        
+
         # Find ollama management endpoint from profiles
         ollama_management_endpoint = None
         for p in self.config.profiles.values():
             if p.backend == "ollama" and p.ollama_management_endpoint:
                 ollama_management_endpoint = p.ollama_management_endpoint
                 break
-        
+
         if ollama_management_endpoint:
             unload_ollama_models(management_endpoint=ollama_management_endpoint)
         else:
             logger.info("No Ollama backend configured in profiles. Skipping Ollama model unload.")
-        
+
         with patch_env(OPENAI_API_BASE=openai_endpoint, OLLAMA_API_BASE=openai_endpoint):
             with managed_llama_server(model_path=model_path, port=port):
                 return action(self.profile)
@@ -195,7 +199,7 @@ class LlamaServerBackendAdapter:
 class BackendExecutionCoordinator:
     def __init__(self) -> None:
         self.config = get_backend_execution_config()
-        self.gpu_lease = GpuLeaseAdapter()
+        self.gpu_lease = GpuLeaseAdapter(timeout=self.config.gpu_lease_timeout)
 
     def execute(self, intent: str, request: Dict[str, Any]) -> Any:
         """
@@ -204,17 +208,17 @@ class BackendExecutionCoordinator:
         """
         routes = self.config.routes
         profiles = self.config.profiles
-        
+
         profile_name = routes.get(intent)
         if not profile_name:
             raise ValueError(f"No route mapped for intent '{intent}'. Explicit routing is required.")
-            
+
         profile = profiles.get(profile_name)
         if not profile:
             raise ValueError(f"Profile '{profile_name}' is not defined in backend profiles.")
-        
+
         backend_type = profile.backend
-        
+
         logger.info(f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})")
         adapter: Union[LlamaServerBackendAdapter, OllamaBackendAdapter]
         if backend_type == "llama_server":

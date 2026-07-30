@@ -24,6 +24,7 @@
   "backend_execution": {
     "mode": "exclusive",
     "fallback": "disabled",
+    "gpu_lease_timeout": 120,
     "routes": {
       "spec_draft": "reasoning_economy",
       "task_decomposition": "reasoning_economy",

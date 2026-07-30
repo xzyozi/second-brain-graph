@@ -174,3 +174,78 @@ def test_llama_server_adapter_skips_ollama_unload_when_no_ollama_profile(mock_pa
     
     assert result == "ok"
     mock_unload.assert_not_called()
+
+
+@patch("tools.backend_coordinator.urllib.request.urlopen")
+@patch("tools.backend_coordinator.managed_llama_server")
+@patch("tools.backend_coordinator.patch_env")
+def test_llama_server_adapter_ollama_unreachable_fallback(mock_patch_env, mock_managed_llama, mock_urlopen):
+    # urlopen raising URLError (simulating Ollama unreachable)
+    import urllib.error
+    mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+    
+    mock_managed_llama.return_value.__enter__ = MagicMock()
+    mock_managed_llama.return_value.__exit__ = MagicMock()
+    mock_patch_env.return_value.__enter__ = MagicMock()
+    mock_patch_env.return_value.__exit__ = MagicMock()
+
+    config = BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        gpu_lease_timeout=120,
+        routes={"spec_draft": "reasoning_economy"},
+        profiles={
+            "reasoning_economy": ProfileConfig(
+                backend="llama_server",
+                model="test-model",
+                openai_endpoint="http://localhost:8080/v1",
+                port=8080,
+                model_path="./models/test.gguf"
+            ),
+            "coding_ollama": ProfileConfig(
+                backend="ollama",
+                model="test-ollama",
+                openai_endpoint="http://localhost:11434/v1",
+                ollama_management_endpoint="http://localhost:11434"
+            )
+        }
+    )
+    profile = config.profiles["reasoning_economy"]
+    adapter = LlamaServerBackendAdapter(profile, config)
+    
+    # Execute should continue normally even when unload_ollama_models logs warning on URLError
+    result = adapter.execute({"action": lambda p: "ok"})
+    
+    assert result == "ok"
+    mock_urlopen.assert_called()  # verifying it tried to contact Ollama
+    mock_managed_llama.assert_called_once()  # verifying it continued to llama-server startup
+
+
+@patch("tools.backend_coordinator.get_backend_execution_config")
+@patch("tools.backend_coordinator.GpuLeaseAdapter")
+def test_coordinator_passes_gpu_lease_timeout_from_config(mock_gpu_lease_class, mock_get_config):
+    # Config has custom timeout
+    mock_get_config.return_value = BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        gpu_lease_timeout=45,  # custom value
+        routes={"spec_draft": "reasoning_economy"},
+        profiles={
+            "reasoning_economy": ProfileConfig(
+                backend="llama_server",
+                model="test-model",
+                openai_endpoint="http://localhost:8080/v1",
+                port=8080,
+                model_path="./models/test.gguf"
+            )
+        }
+    )
+    mock_gpu_lease = MagicMock()
+    mock_gpu_lease.__enter__ = MagicMock(return_value=mock_gpu_lease)
+    mock_gpu_lease.__exit__ = MagicMock(return_value=None)
+    mock_gpu_lease_class.return_value = mock_gpu_lease
+
+    coordinator = BackendExecutionCoordinator()
+    
+    # Verify GpuLeaseAdapter initialized with timeout=45
+    mock_gpu_lease_class.assert_called_once_with(timeout=45)
