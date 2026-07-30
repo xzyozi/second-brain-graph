@@ -87,8 +87,13 @@ class ProjectLockManager:
 
     def _release_lock(self):
         try:
-            self.lock_file.unlink()
-            logger.info(f"Lock released for project {self.project_key}")
+            with open(self.lock_file, 'r') as f:
+                pid_str = f.read().strip()
+            if pid_str.isdigit() and int(pid_str) == os.getpid():
+                self.lock_file.unlink()
+                logger.info(f"Lock released for project {self.project_key}")
+            else:
+                logger.debug(f"Lock for project {self.project_key} is owned by another process. Skipping release.")
         except FileNotFoundError:
             pass
         except Exception as e:

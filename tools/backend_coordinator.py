@@ -93,11 +93,16 @@ class GpuLeaseAdapter:
 
     def release(self) -> None:
         """
-        GPUリースを解放する。
+        GPUリースを解放する。自身が所有者の場合のみファイルを削除する。
         """
         try:
-            self.lock_file.unlink()
-            logger.info("GPU lease released.")
+            with open(self.lock_file, 'r') as f:
+                pid_str = f.read().strip()
+            if pid_str.isdigit() and int(pid_str) == os.getpid():
+                self.lock_file.unlink()
+                logger.info("GPU lease released.")
+            else:
+                logger.debug("GPU lease is owned by another process. Skipping release.")
         except FileNotFoundError:
             pass
         except Exception as e:
