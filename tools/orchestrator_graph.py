@@ -18,6 +18,8 @@ from datetime import datetime
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tools.llama_backend import managed_llama_server
+
 # ロガー設定
 logging.basicConfig(
     level=logging.INFO,
@@ -89,8 +91,14 @@ def execute_issue(issue_id: str, project_key: str):
     with ProjectLockManager(project_key):
         # ロック取得後の処理
         logger.info("Setting up context and starting graph execution...")
-        # (ここに Graph の初期化と実行処理が入る)
-        time.sleep(1) # mock
+        
+        # タスク実行時のみ llama-server を立ち上げ、VRAM を確保する
+        with managed_llama_server():
+            logger.info("llama-server is up. Initializing Graph...")
+            # (ここに Graph の初期化と実行処理が入る)
+            time.sleep(1) # mock
+            
+        # コンテキストを抜けると llama-server プロセスがキルされ VRAM が解放される
         logger.info(f"Execution completed for Issue: {issue_id}")
 
 
