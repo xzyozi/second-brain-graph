@@ -21,7 +21,7 @@ def test_coordinator_routing_ollama(mock_gpu_lease_class, mock_get_config):
         routes={"aider_edit": "coding_ollama"},
         profiles={
             "coding_ollama": ProfileConfig(
-                backend="ollama", model="test-model", endpoint="http://localhost:11434"
+                backend="ollama", model="test-model", openai_endpoint="http://localhost:11434/v1", ollama_management_endpoint="http://localhost:11434"
             )
         }
     )
@@ -62,7 +62,7 @@ def test_coordinator_routing_llama_server(mock_gpu_lease_class, mock_get_config)
             "reasoning_economy": ProfileConfig(
                 backend="llama_server", 
                 model="test-model-reasoning",
-                endpoint="http://localhost:8080/v1",
+                openai_endpoint="http://localhost:8080/v1",
                 port=8080,
                 model_path="./models/test.gguf"
             )
@@ -88,7 +88,10 @@ def test_coordinator_routing_llama_server(mock_gpu_lease_class, mock_get_config)
         mock_gpu_lease.release.assert_called_once()
         
         # Verify adapter called
-        mock_adapter_class.assert_called_once_with(mock_get_config.return_value.profiles["reasoning_economy"])
+        mock_adapter_class.assert_called_once_with(
+            mock_get_config.return_value.profiles["reasoning_economy"],
+            mock_get_config.return_value
+        )
         mock_adapter_instance.execute.assert_called_once_with(request)
         
         assert result == "success"

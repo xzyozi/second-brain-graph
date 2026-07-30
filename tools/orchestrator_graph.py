@@ -72,9 +72,22 @@ class ProjectLockManager:
             logger.error(f"Failed to release lock: {e}")
 
 def write_state(project_key: str, state: Dict[str, Any], filename: str = "state.json") -> None:
-    """Graph 実行状態を安全に記録する (PM-037 安全停止ルール準拠)"""
+    """Graph の状態を原子的に保存する (PM-046)"""
     state_file = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / filename
     state_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load previous state to increment generation if writing state.json
+    if filename == "state.json":
+        prev_generation = 0
+        if state_file.exists():
+            try:
+                with open(state_file, "r", encoding="utf-8") as f:
+                    prev_state = json.load(f)
+                    prev_generation = prev_state.get("generation", 0)
+            except Exception:
+                pass
+        state["generation"] = prev_generation + 1
+
     temp_file = state_file.with_name(f"{filename}.{uuid.uuid4().hex}.tmp")
     
     with open(temp_file, "w", encoding="utf-8") as f:
@@ -85,23 +98,31 @@ def write_state(project_key: str, state: Dict[str, Any], filename: str = "state.
     os.replace(temp_file, state_file)
 
 
-def write_event(project_key: str, event_data: Dict[str, Any], filename: str = "events.jsonl") -> None:
-    """Graph の状態に影響を与えない追記専用イベント記録 (PM-050)"""
-    event_file = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / filename
-    event_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(event_file, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event_data, ensure_ascii=False) + "\n")
+def write_event(project_key: str, event_data: Dict[str, Any]) -> None:
+    """Graph の状態に影響を与えない個別ファイルイベント記録 (PM-050)"""
+    events_dir = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    
+    execution_id = event_data.get("execution_id", "unknown")
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    event_file = events_dir / f"event_{execution_id}_{timestamp}.json"
+    
+    with open(event_file, "w", encoding="utf-8") as f:
+        json.dump(event_data, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
 
 class GraphState(TypedDict):
     issue_id: str
     project_key: str
+    execution_id: str
+    generation: int
     status: str
     error: Optional[str]
 
 def execute_issue(issue_id: str, project_key: str) -> None:
-    logger.info(f"Starting execution for Issue: {issue_id}")
+    execution_id = uuid.uuid4().hex
+    logger.info(f"Starting execution for Issue: {issue_id}, Execution ID: {execution_id}")
     try:
         with ProjectLockManager(project_key):
             try:
@@ -140,6 +161,8 @@ def execute_issue(issue_id: str, project_key: str) -> None:
                 initial_state = GraphState(
                     issue_id=issue_id,
                     project_key=project_key,
+                    execution_id=execution_id,
+                    generation=0,  # will be populated by write_state
                     status="running",
                     error=None
                 )
@@ -150,11 +173,11 @@ def execute_issue(issue_id: str, project_key: str) -> None:
                 
             except Exception as e:
                 logger.error(f"Execution failed for {issue_id}: {e}")
-                write_state(project_key, {"status": "FAILED_SYSTEM", "issue_id": issue_id, "error": str(e), "timestamp": datetime.now().isoformat()})
+                write_state(project_key, {"status": "FAILED_SYSTEM", "issue_id": issue_id, "execution_id": execution_id, "error": str(e), "timestamp": datetime.now().isoformat()})
             
     except TimeoutError:
         logger.warning(f"Execution skipped for {issue_id} due to lock timeout.")
-        write_event(project_key, {"event": "SKIPPED_LOCKED", "issue_id": issue_id, "timestamp": datetime.now().isoformat()})
+        write_event(project_key, {"event": "SKIPPED_LOCKED", "issue_id": issue_id, "execution_id": execution_id, "timestamp": datetime.now().isoformat()})
     except Exception as e:
         logger.error(f"Unexpected error outside lock for {issue_id}: {e}")
         raise

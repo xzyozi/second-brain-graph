@@ -73,12 +73,13 @@ class GpuLeaseAdapter:
             logger.error(f"Error releasing GPU lease: {e}")
 
 
-def unload_ollama_models(endpoint: str, assume_free_on_offline: bool) -> None:
+def unload_ollama_models(management_endpoint: str) -> None:
     """Ollamaにロードされているモデルを解放する"""
-    if endpoint.endswith("/v1") or endpoint.endswith("/v1/"):
-        base_url = endpoint.rsplit("/v1", 1)[0]
+    if management_endpoint.endswith("/v1") or management_endpoint.endswith("/v1/"):
+        logger.warning("Passed a /v1 endpoint to unload_ollama_models. Assuming management endpoint by stripping /v1")
+        base_url = management_endpoint.rsplit("/v1", 1)[0]
     else:
-        base_url = endpoint
+        base_url = management_endpoint
 
     ps_url = f"{base_url.rstrip('/')}/api/ps"
     gen_url = f"{base_url.rstrip('/')}/api/generate"
@@ -112,11 +113,8 @@ def unload_ollama_models(endpoint: str, assume_free_on_offline: bool) -> None:
             raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
             
     except urllib.error.URLError as e:
-        if assume_free_on_offline:
-            logger.info(f"Ollama appears to be offline or unreachable: {e}. Assuming VRAM is free.")
-        else:
-            logger.error(f"Ollama appears to be offline or unreachable: {e}. Cannot guarantee VRAM is free. Aborting.")
-            raise RuntimeError(f"Ollama unreachable: {e}. To ignore, set assume_free_on_offline=true in profile.")
+        logger.error(f"Ollama management API unreachable at {ps_url}: {e}. Cannot guarantee VRAM is free. Aborting.")
+        raise RuntimeError(f"Ollama unreachable: {e}")
 
 
 class OllamaBackendAdapter:
@@ -136,7 +134,7 @@ class OllamaBackendAdapter:
         
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
         
-        endpoint = self.profile.endpoint
+        endpoint = self.profile.openai_endpoint
         
         with patch_env(OLLAMA_API_BASE=endpoint, OPENAI_API_BASE=endpoint):
             return action(self.profile)
@@ -150,8 +148,9 @@ class LlamaServerBackendAdapter:
     実行中は APIエンドポイントを :8080/v1 に一時パッチし、
     タスク終了時には必ずプロセスを終了（VRAM解放）させ、環境変数を復元する。
     """
-    def __init__(self, profile: ProfileConfig) -> None:
+    def __init__(self, profile: ProfileConfig, config: Any) -> None:
         self.profile = profile
+        self.config = config
 
     def execute(self, request: Dict[str, Any]) -> Any:
         action: Optional[Callable[..., Any]] = request.get("action")
@@ -160,8 +159,7 @@ class LlamaServerBackendAdapter:
         
         model_path = self.profile.model_path
         port = self.profile.port
-        endpoint = self.profile.endpoint
-        assume_free = self.profile.assume_free_on_offline
+        openai_endpoint = self.profile.openai_endpoint
         
         # Pydantic validates port and model_path for llama_server
         assert model_path is not None
@@ -169,9 +167,20 @@ class LlamaServerBackendAdapter:
             
         logger.info(f"Executing workload on llama-server backend with profile: {self.profile}")
         
-        unload_ollama_models(endpoint=endpoint, assume_free_on_offline=assume_free)
+        # Find ollama management endpoint from profiles
+        ollama_management_endpoint = None
+        for p in self.config.profiles.values():
+            if p.backend == "ollama" and p.ollama_management_endpoint:
+                ollama_management_endpoint = p.ollama_management_endpoint
+                break
         
-        with patch_env(OPENAI_API_BASE=endpoint, OLLAMA_API_BASE=endpoint):
+        if not ollama_management_endpoint:
+            logger.warning("No ollama backend with management endpoint found. Falling back to localhost:11434")
+            ollama_management_endpoint = "http://localhost:11434"
+        
+        unload_ollama_models(management_endpoint=ollama_management_endpoint)
+        
+        with patch_env(OPENAI_API_BASE=openai_endpoint, OLLAMA_API_BASE=openai_endpoint):
             with managed_llama_server(model_path=model_path, port=port):
                 return action(self.profile)
 
@@ -200,10 +209,9 @@ class BackendExecutionCoordinator:
         backend_type = profile.backend
         
         logger.info(f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})")
-        
         adapter: Union[LlamaServerBackendAdapter, OllamaBackendAdapter]
         if backend_type == "llama_server":
-            adapter = LlamaServerBackendAdapter(profile)
+            adapter = LlamaServerBackendAdapter(profile, self.config)
         elif backend_type == "ollama":
             adapter = OllamaBackendAdapter(profile)
         else:
