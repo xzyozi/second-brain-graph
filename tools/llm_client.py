@@ -51,7 +51,9 @@ def call_llm(
     def _do_llm_call() -> Dict[str, Any]:
         config = load_model_config()
         # Coordinator Adapter sets OPENAI_API_BASE / OLLAMA_API_BASE
-        api_base = os.environ.get("OPENAI_API_BASE", os.environ.get("OLLAMA_API_BASE", config.get("api_base", "http://localhost:11434")))
+        api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OLLAMA_API_BASE")
+        if not api_base:
+            raise ValueError(f"Endpoint (api_base) is not set by Coordinator for intent '{intent}'.")
 
 
         # Load dynamic model parameters from config/models.json (PM-007, PM-011 SSOT)
@@ -59,9 +61,17 @@ def call_llm(
         
         # Override model_name with the one from the profile if available
         backend_cfg = get_backend_execution_config()
-        profile_name = backend_cfg.get("routes", {}).get(intent, "coding_ollama")
-        profile = backend_cfg.get("profiles", {}).get(profile_name, {})
-        model_name = profile.get("model", role_params.get("model_name", "gemma-4-12B-it-qat-UD-Q4_K_XL"))
+        profile_name = backend_cfg.get("routes", {}).get(intent)
+        if not profile_name:
+            raise ValueError(f"No route defined for intent '{intent}'.")
+            
+        profile = backend_cfg.get("profiles", {}).get(profile_name)
+        if not profile:
+            raise ValueError(f"Profile '{profile_name}' is not defined.")
+            
+        model_name = profile.get("model") or role_params.get("model_name")
+        if not model_name:
+            raise ValueError(f"Missing 'model' in profile '{profile_name}' and no fallback in role '{role}'.")
         
         temperature = role_params.get("temperature", 0.1)
         max_tokens = role_params.get("max_tokens", 35000)

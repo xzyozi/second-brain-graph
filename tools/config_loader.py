@@ -31,13 +31,19 @@ def get_model_name(role: str) -> str:
     """Get configured model name for a specific role (planner, coder, reviewer, aider)."""
     config = load_model_config()
     if role == "aider":
-        return str(config.get("aider", {}).get("model_name", "ollama/gemma-4-py_coder:latest"))
+        model_name = config.get("aider", {}).get("model_name")
+        if not model_name:
+            raise ValueError("Missing 'model_name' for role 'aider' in models.json.")
+        return str(model_name)
 
     models = config.get("models", {})
     if role in models:
-        return str(models[role].get("model_name", "ollama/gemma-4-py_coder:latest"))
+        model_name = models[role].get("model_name")
+        if not model_name:
+            raise ValueError(f"Missing 'model_name' for role '{role}' in models.json.")
+        return str(model_name)
 
-    return "ollama/gemma-4-py_coder:latest"
+    raise ValueError(f"Role '{role}' is not defined in models.json.")
 
 
 def get_model_params(role: str) -> Dict[str, Any]:
@@ -48,9 +54,11 @@ def get_model_params(role: str) -> Dict[str, Any]:
         params = dict(models[role])
         # Return parameters excluding metadata descriptions
         params.pop("description", None)
+        if "model_name" not in params:
+            raise ValueError(f"Missing 'model_name' parameter for role '{role}' in models.json.")
         return params
 
-    return {"model_name": "ollama/gemma-4-py_coder:latest", "temperature": 0.1, "max_tokens": 35000}
+    raise ValueError(f"Role '{role}' is not defined in models.json.")
 
 
 def get_backend_execution_config() -> Dict[str, Any]:

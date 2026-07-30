@@ -1,6 +1,7 @@
 """Tests for tools/llm_client.py and config_loader parameters integration."""
 
 from unittest.mock import MagicMock, patch
+import os
 import pytest
 from tools.config_loader import get_model_params
 from tools.llm_client import call_llm
@@ -19,6 +20,7 @@ def test_get_model_params():
 
 @patch("tools.llm_client.OpenAI")
 @patch("tools.llm_client.BackendExecutionCoordinator")
+@patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
 def test_call_llm_with_dynamic_params(mock_coordinator_class, mock_openai_class):
     mock_coordinator = MagicMock()
     # Execute the action immediately to test the inner logic
