@@ -26,5 +26,27 @@
     "description": "Aider 自動コード編集用モデル (gemma-4-py_coder:latest)",
     "no_auto_commits": true,
     "edit_format": "diff"
+  },
+  "backend_execution": {
+    "mode": "exclusive",
+    "fallback": "disabled",
+    "routes": {
+      "spec_draft": "reasoning_economy",
+      "task_decomposition": "reasoning_economy",
+      "task_prioritization": "reasoning_economy",
+      "code_edit": "coding_ollama",
+      "aider_edit": "coding_ollama",
+      "code_review": "coding_ollama"
+    },
+    "profiles": {
+      "reasoning_economy": {
+        "backend": "llama_server",
+        "model": "gemma-4-12B-it-qat-UD-Q4_K_XL"
+      },
+      "coding_ollama": {
+        "backend": "ollama",
+        "model": "gemma-4-py_coder:latest"
+      }
+    }
   }
 }

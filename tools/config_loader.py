@@ -29,6 +29,28 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "no_auto_commits": True,
         "edit_format": "diff",
     },
+    "backend_execution": {
+        "mode": "exclusive",
+        "fallback": "disabled",
+        "routes": {
+            "spec_draft": "reasoning_economy",
+            "task_decomposition": "reasoning_economy",
+            "task_prioritization": "reasoning_economy",
+            "code_edit": "coding_ollama",
+            "aider_edit": "coding_ollama",
+            "code_review": "coding_ollama"
+        },
+        "profiles": {
+            "reasoning_economy": {
+                "backend": "llama_server",
+                "model": "gemma-4-12B-it-qat-UD-Q4_K_XL"
+            },
+            "coding_ollama": {
+                "backend": "ollama",
+                "model": "gemma-4-py_coder:latest"
+            }
+        }
+    }
 }
 
 
@@ -77,3 +99,9 @@ def get_model_params(role: str) -> Dict[str, Any]:
         return params
 
     return {"model_name": "ollama/gemma-4-py_coder:latest", "temperature": 0.1, "max_tokens": 35000}
+
+
+def get_backend_execution_config() -> Dict[str, Any]:
+    """Get backend execution routing and profiles."""
+    config = load_model_config()
+    return config.get("backend_execution", DEFAULT_CONFIG["backend_execution"])
