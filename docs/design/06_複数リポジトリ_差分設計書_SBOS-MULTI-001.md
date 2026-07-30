@@ -64,8 +64,9 @@
 
 ```text
 metadata/projects/EC/
-├── project.json
-└── tasks.md
+├── project.json      # プロジェクト固有の設定（base_branch等）
+├── tasks.md          # 人間向けのタスク説明（HTML状態埋め込みは廃止）
+└── state.json        # 【正本】各タスクの機械状態（status, round等）
 ```
 
 `metadata/projects/<PROJECT_KEY>/project.json`:

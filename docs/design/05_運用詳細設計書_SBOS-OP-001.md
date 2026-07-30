@@ -99,24 +99,20 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - `nvidia-smi` で VRAM 使用量を確認。
   - `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
 
-### ケース4: Aider 差分キャンセルの手動復旧
-- **症状:** Aider が意図しない広範囲の変更を行った。
+### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
+- **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止した。
 - **対処:**
-  - `--no-auto-commits` により変更はワーキングツリーの未コミット差分として保持されているため、対象衛星ディレクトリで以下を実行して変更を破棄する。
-  ```bash
-  cd projects/<target-project>
-  git checkout -- .
-  git clean -fd
-  ```
+  - `cd projects/<target-project>` を実行し、`git status` および `git diff` で変更内容を必ず人間が確認する。
+  - 差分に問題がない場合は手動でコミット・PR作成を引き継ぐ。破棄する場合は `git restore .` やブランチ削除等を行う。
 
 ### ケース5: レビュー/テスト/lint試行上限到達 (B7 ブロッカー)
 - **症状:** 朝の自動スキャンバッチで `tools/.cache/blocked.json` に `B7` ブロッカーとして登録される。
 - **監査項目:**
-  - `metadata/projects/<project-key>/tasks.md` 内の該当 Issue 直下に記録されたメタデータコメント `<!-- round:3 max_round:3 status:FAILED_B7 -->` を確認。
-  - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行コメントは `review_rounds: [{round, verdict, comments}]` 配列から時系列で監査・追跡する。
+  - `metadata/projects/<project-key>/state.json` の該当 Issue における `"status": "FAILED_B7"` を確認。
+  - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行記録は時系列で監査・追跡する。
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
-  2. `max_round:3` は変更せずに、`tasks.md` 内のメタデータを `<!-- round:0 max_round:3 status:PENDING -->` へ手動リセットする。
+  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`round` カウンタを `0` にリセットする。
   3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
 ---

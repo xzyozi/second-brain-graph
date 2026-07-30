@@ -63,10 +63,14 @@ class OrchestratorState(TypedDict):
 
 | 発生ノード | 検知条件 | `error_category` 値 | 遷移先 (上限未達時) | 上限超過時 (`round >= max_round`) |
 | :--- | :--- | :--- | :--- | :--- |
-| `lint_node` | Ruff 静的解析エラーあり | `"LINT_ERROR"` | `code_node` (`lint_round` + 1) | `escalate_node` (B7ブロッカー化) |
-| `test_node` | Pytest 単体テスト失敗 | `"TEST_ERROR"` | `code_node` (`test_round` + 1) | `escalate_node` (B7ブロッカー化) |
-| `review_node` | Reviewer 指摘あり (`changes_requested`) | `"REVIEW_REJECTED"` | `code_node` (`round` + 1) | `escalate_node` (B7ブロッカー化) |
-| 全ノード | LiteLLM 応答タイムアウト / 接続例外 | `"LLM_TIMEOUT"` / `"SYSTEM_ERROR"` | リトライまたは `escalate_node` | `escalate_node` (安全停止) |
+| `lint_node` | Ruff 静的解析エラーあり | `"LINT_ERROR"` | `code_node` (`lint_round` + 1) | `escalate_node` (B7ブロッカー: `FAILED_B7`) |
+| `test_node` | Pytest 単体テスト失敗 | `"TEST_ERROR"` | `code_node` (`test_round` + 1) | `escalate_node` (B7ブロッカー: `FAILED_B7`) |
+| `review_node` | Reviewer 指摘あり (`changes_requested`) | `"REVIEW_REJECTED"` | `code_node` (`round` + 1) | `escalate_node` (B7ブロッカー: `FAILED_B7`) |
+| 全ノード | LiteLLM タイムアウト | `"LLM_TIMEOUT"` | 1回だけ再試行 | `escalate_node` (システム例外: `FAILED_SYSTEM`) |
+| 全ノード | その他システム例外 | `"SYSTEM_ERROR"` | (再試行なし) | `escalate_node` (システム例外: `FAILED_SYSTEM`) |
+| `plan_node` 前 | ロック取得失敗 | `"LOCKED"` | (待機・キューなし) | 即時スキップ: `SKIPPED_LOCKED` |
+| 完了後 | PR作成失敗 | `"PR_ERROR"` | - | 作業ブランチ保持・停止: `PR_FAILED` |
+| 完了後 | PR作成成功 | `"PR_SUCCESS"` | - | 完了記録: `COMPLETED` |
 
 ---
 
@@ -292,40 +296,47 @@ def build_graph():
 ```
 
 ### 4.1 B7 ブロッカー判定と `escalate_node` (F2 / III.2 統合修正)
-`escalate_node` はレビュー、lint、または test の試行回数が `max_round` に達した際に呼ばれる。
-固定値の `round:3` ではなく、**`actual_round = max(state["round"], state["lint_round"], state["test_round"])` の実測値** を動的に `tasks.md` 内のメタデータへ書き込む。
+`escalate_node` はレビュー、lint、または test の試行回数が `max_round` に達した際、およびシステム例外時に呼ばれる。
 
 > **B7 ブロッカー検知のシングルソース・オブ・トゥルース (SSOT):**
-> 日次バッチ `check-blockers.py` は **`tasks.md` 内の `round >= max_round` を正の判定基準** とする。`execution_history.json` 側の `review.total_rounds` は副次的な監査ログとして位置づけ、両者の整合性を維持する。
+> 日次バッチ `check-blockers.py` は、Issue単位の `metadata/projects/<PROJECT_KEY>/state.json` において **`status == "FAILED_B7"` の場合のみ**、B7ブロッカーとして扱う。
+> `tasks.md` 内のHTMLコメントによる状態管理は廃止する。
 
 ```python
 def escalate_node(state: OrchestratorState) -> OrchestratorState:
-    """レビュー/テスト/lint の試行回数上限到達時に tasks.md を動的更新し、B7 ブロッカー化させる。作業ブランチは破棄・退避し、base_branchへ戻す。"""
-    import subprocess
+    """
+    上限到達またはシステム例外発生時に呼ばれ、state.json を動的更新しブロッカー化・安全停止させる。
+    B7、システム失敗、PR失敗時に、自動処理は作業ブランチおよび未コミット差分を保持したまま停止する。
+    差分の破棄またはブランチ削除は、人間が内容を確認した後にのみ実施する。
+    """
     actual_round = max(state.get("round", 0), state.get("lint_round", 0), state.get("test_round", 0))
-    logger.error(f"Issue {state['issue_id']} がリトライ上限 ({actual_round}/{state['max_round']}) に達しました。B7ブロッカー化します。")
-    # B7発生時のロールバック: 作業ブランチの変更をリセットし base_branch へ退避する
-    base_branch = state.get("base_branch", "develop")
-    subprocess.run(["git", "checkout", "-f", base_branch], cwd=state["project_path"])
-    # [F2/III.2修正] tasks.md 内の round メタデータを動的更新し、B7 判定を成立させる
-    update_task_metadata(state["project_path"], state["issue_id"], round_num=actual_round, status="FAILED_B7")
-    record_execution_history(state, final_status="FAILED_B7", actual_round=actual_round)
+    final_status = "FAILED_B7" if actual_round >= state["max_round"] else "FAILED_SYSTEM"
+    
+    logger.error(f"Issue {state['issue_id']} 実行停止: {final_status} (round: {actual_round}/{state['max_round']})")
+    logger.info("安全のため作業ブランチおよび未コミット差分を保持して停止します。")
+    
+    update_task_state(state["project_path"], state["issue_id"], round_num=actual_round, status=final_status)
+    record_execution_history(state, final_status=final_status, actual_round=actual_round)
     return state
 ```
 
-### 4.1.1 補助関数契約および履歴スキーマ仕様 (PM-013 / PM-014)
+### 4.1.1 補助関数契約および履歴スキーマ仕様 (PM-038 / PM-042)
 
-#### 1. `tasks.md` メタデータ正本書式
-`tasks.md` 内の Issue 項目の直下に以下の HTML コメント形式でメタデータを書き込み・保持する。`check-blockers.py` はこの形式を正の SSOT としてパースする。
-
-```markdown
-- [ ] EC-012: 決済例外処理ロールバックハンドラ
-  <!-- round:3 max_round:3 status:FAILED_B7 -->
+#### 1. `state.json` メタデータ正本書式
+`metadata/projects/<PROJECT_KEY>/state.json` に Issue ID をキーとした以下の最小状態項目のみを保持する。
+```json
+{
+  "EC-012": {
+    "status": "FAILED_B7",
+    "round": 3,
+    "max_round": 3
+  }
+}
 ```
 
-#### 2. `update_task_metadata()` 関数の契約
+#### 2. `update_task_state()` 関数の契約
 ```python
-def update_task_metadata(
+def update_task_state(
     project_path: Union[str, Path],
     issue_id: str,
     round_num: int,
@@ -333,8 +344,8 @@ def update_task_metadata(
     max_round: Optional[int] = None
 ) -> None:
     """
-    指定された Issue ID の直下に <!-- round:N max_round:M status:STATUS --> タグを探索・更新する。
-    存在しない場合は Issue 行の直下に挿入し、tasks.md を上書き保存する。
+    metadata/projects/<PROJECT_KEY>/state.json 内の該当 issue_id の状態項目をアトミックに更新する。
+    tasks.md (人間向けのタスク説明) への書き込みは行わない。
     """
 ```
 
