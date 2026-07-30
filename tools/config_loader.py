@@ -4,54 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-DEFAULT_CONFIG: Dict[str, Any] = {
-    "api_base": "http://localhost:11434",
-    "default_provider": "ollama",
-    "models": {
-        "planner": {
-            "model_name": "ollama/gemma4-12b-it-Q4_K_M:latest",
-            "temperature": 0.2,
-            "max_tokens": 35000,
-        },
-        "coder": {
-            "model_name": "ollama/gemma-4-py_coder:latest",
-            "temperature": 0.1,
-            "max_tokens": 35000,
-        },
-        "reviewer": {
-            "model_name": "ollama/gemma4-12b-it-Q4_K_M:latest",
-            "temperature": 0.1,
-            "max_tokens": 35000,
-        },
-    },
-    "aider": {
-        "model_name": "ollama/gemma-4-py_coder:latest",
-        "no_auto_commits": True,
-        "edit_format": "diff",
-    },
-    "backend_execution": {
-        "mode": "exclusive",
-        "fallback": "disabled",
-        "routes": {
-            "spec_draft": "reasoning_economy",
-            "task_decomposition": "reasoning_economy",
-            "task_prioritization": "reasoning_economy",
-            "code_edit": "coding_ollama",
-            "aider_edit": "coding_ollama",
-            "code_review": "coding_ollama"
-        },
-        "profiles": {
-            "reasoning_economy": {
-                "backend": "llama_server",
-                "model": "gemma-4-12B-it-qat-UD-Q4_K_XL"
-            },
-            "coding_ollama": {
-                "backend": "ollama",
-                "model": "gemma-4-py_coder:latest"
-            }
-        }
-    }
-}
+# DEFAULT_CONFIG was removed to prevent silent fallbacks to unsafe defaults.
 
 
 def get_config_path() -> Path:
@@ -61,18 +14,17 @@ def get_config_path() -> Path:
 
 
 def load_model_config() -> Dict[str, Any]:
-    """Load model configuration from JSON file with fallback to default."""
+    """Load model configuration from JSON file. Raises error if missing."""
     config_path = get_config_path()
     if not config_path.exists():
-        return DEFAULT_CONFIG
+        raise FileNotFoundError(f"Required configuration file not found: {config_path}")
 
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             return data
     except Exception as e:
-        print(f"Warning: Failed to load config from {config_path}: {e}")
-        return DEFAULT_CONFIG
+        raise RuntimeError(f"Failed to parse config from {config_path}: {e}")
 
 
 def get_model_name(role: str) -> str:
@@ -104,4 +56,7 @@ def get_model_params(role: str) -> Dict[str, Any]:
 def get_backend_execution_config() -> Dict[str, Any]:
     """Get backend execution routing and profiles."""
     config = load_model_config()
-    return config.get("backend_execution", DEFAULT_CONFIG["backend_execution"])
+    backend_config = config.get("backend_execution")
+    if not backend_config:
+        raise ValueError("Missing 'backend_execution' configuration in models.json.")
+    return backend_config
