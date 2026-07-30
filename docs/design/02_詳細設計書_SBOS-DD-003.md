@@ -4,8 +4,8 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                      |
-| 版数     | Rev.4.9（PM-036 ブランチ・PR自動化方針反映） |
-| 改訂日   | 2026年7月29日                                                     |
+| 版数     | Rev.4.10（PM-050 LLMバックエンド排他併用・BackendExecutionCoordinatorの導入） |
+| 改訂日   | 2026年7月30日                                                     |
 | 作成日   | 2026年7月28日                                                     |
 | 関連文書 | SBOS-BD-002（基本設計書）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
@@ -89,55 +89,110 @@ class OrchestratorState(TypedDict):
 
 ## 3. モジュール設計
 
-### 3.1 `tools/llm_client.py` (LiteLLM ラッパー)
+### 3.1 `tools/llm_client.py` (動的LLM呼び出し)
+
+`llm_client.py` は、`BackendExecutionCoordinator` を介して適切な LLM バックエンドを選択し、統一された OpenAI 互換 API 呼び出しを行います。`intent` が未指定の場合は `ROLE_TO_INTENT_MAP` に基づき自動的にデフォルトの `intent` へフォールバックします。
 
 ```python
 #!/usr/bin/env python3
-"""tools/llm_client.py - LiteLLM経由での動的LLM呼び出し (PM-007, PM-011対応)"""
-import json, re, logging, litellm
-from typing import Optional, Dict, Any
-from tools.config_loader import get_model_params, load_model_config
+import json, logging, os
+from typing import Any, Dict
+from openai import OpenAI
+from tools.config_loader import get_model_params, ProfileConfig
+from tools.backend_coordinator import get_coordinator
 
 logger = logging.getLogger("llm_client")
 
-def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool = False, timeout: int = 300, **kwargs: Any) -> dict:
-    config = load_model_config()
-    api_base = config.get("api_base", "http://localhost:11434")
-    
-    # [PM-007/PM-011修正] config/models.json から動的にパラメータ(model_name, temperature, max_tokens: 35000等)を取得
-    role_params = get_model_params(role)
-    model_name = role_params.get("model_name", "gemma-4-12B-it-qat-UD-Q4_K_XL")
-    temperature = kwargs.get("temperature", role_params.get("temperature", 0.1))
-    max_tokens = kwargs.get("max_tokens", role_params.get("max_tokens", 35000))
+ROLE_TO_INTENT_MAP = {
+    "planner": "spec_draft",
+    "coder": "code_edit",
+    "reviewer": "code_review",
+}
 
-    try:
-        response = litellm.completion(
-            model=model_name,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            api_base=api_base,
-            **{k: v for k, v in kwargs.items() if k not in ("temperature", "max_tokens")}
+def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool = False, timeout: int = 300, intent: str = "", **kwargs: Any) -> Dict[str, Any]:
+    if not intent:
+        intent = ROLE_TO_INTENT_MAP.get(role, "")
+    if not intent:
+        raise ValueError(
+            "intent is required for call_llm (e.g. 'spec_draft', 'code_review') "
+            "and no default fallback exists."
         )
-    except Exception as e:
-        logger.error(f"LiteLLM Error ({role} / {model_name}): {e}")
-        raise
 
-    raw_output = response.choices[0].message.content or ""
-    if not expect_json:
-        return {"raw": raw_output}
+    coordinator = get_coordinator()
 
-    json_match = re.search(r"\{.*\}", raw_output, re.DOTALL)
-    if not json_match:
-        return {"verdict": "changes_requested", "comment": "JSON抽出失敗", "raw": raw_output}
-    try:
-        return json.loads(json_match.group(0))
-    except Exception as e:
-        return {"verdict": "changes_requested", "comment": f"JSONパースエラー: {e}", "raw": raw_output}
+    def _do_llm_call(profile: ProfileConfig) -> Dict[str, Any]:
+        api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OLLAMA_API_BASE")
+        if not api_base:
+            raise ValueError(f"Endpoint (api_base) is not set by Coordinator for intent '{intent}'.")
+
+        role_params = get_model_params(role)
+        model_name = profile.model
+        temperature = kwargs.get("temperature", role_params.get("temperature", 0.1))
+        max_tokens = kwargs.get("max_tokens", role_params.get("max_tokens", 35000))
+
+        client = OpenAI(base_url=api_base, api_key="local", timeout=timeout)
+        completion_params = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            **{k: v for k, v in kwargs.items() if k not in ("temperature", "max_tokens")}
+        }
+        response = client.chat.completions.create(**completion_params)
+        raw_output = response.choices[0].message.content or ""
+        # (JSONパース・抽出ロジック)
+        ...
+        return parsed
+
+    return coordinator.execute(intent, {"action": _do_llm_call})
 ```
 
-### 3.2 `tools/aider_runner.py` (Aider サブプロセス制御)
+### 3.2 `tools/backend_coordinator.py` (LLMバックエンド排他併用・GPUリース管理)
+
+Ollama と llama-server を単一 GPU 上で競合させずに排他併用するためのコーディネーターです。`models.json` 内の `gpu_lease_timeout` パラメータ（デフォルト 120 秒）に基づいて OS ネイティブロック (`.gpu_lease.lock`) を取得し、リースの占有管理および Ollama VRAM の動的解放制御 (`keep_alive: 0`) を行います。Ollama 未起動（`URLError`）時は warning を出力して llama-server 起動へとフォールバックします。
+
+```python
+#!/usr/bin/env python3
+"""tools/backend_coordinator.py - LLMバックエンドの排他併用管理"""
+import os, time, logging, urllib.request, json, contextlib
+from typing import Any, Dict, Callable
+from filelock import FileLock, Timeout
+
+class GpuLeaseAdapter:
+    def __init__(self, lock_file: str = ".gpu_lease.lock", timeout: int = 60) -> None:
+        self.timeout = timeout
+        self.lock = FileLock(str(lock_path), timeout=timeout)
+
+    def acquire(self) -> None:
+        try:
+            self.lock.acquire()
+        except Timeout:
+            raise TimeoutError(f"Failed to acquire GPU lease within {self.timeout} seconds.")
+
+def unload_ollama_models(management_endpoint: str) -> None:
+    try:
+        # ps api でモデル取得し keep_alive: 0 で順次アンロード
+        ...
+    except urllib.error.URLError as e:
+        logger.warning(f"Ollama offline: {e}. Continuing to llama-server startup.")
+
+class BackendExecutionCoordinator:
+    def __init__(self) -> None:
+        self.config = get_backend_execution_config()
+        self.gpu_lease = GpuLeaseAdapter(timeout=self.config.gpu_lease_timeout)
+
+    def execute(self, intent: str, request: Dict[str, Any]) -> Any:
+        # intent からプロファイル解決
+        # GPUリース取得後、対象アダプタの execute を呼ぶ
+        with self.gpu_lease:
+            return adapter.execute(request)
+```
+
+
+### 3.3 `tools/aider_runner.py` (Aider サブプロセス制御)
 
 ```python
 #!/usr/bin/env python3
