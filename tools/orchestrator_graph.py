@@ -48,6 +48,7 @@ class ProjectLockManager:
         self._release_lock()
 
     def _acquire_lock(self):
+        start_time = time.time()
         while True:
             try:
                 # O_CREAT | O_EXCL でアトミックにファイル作成を試みる
@@ -59,16 +60,24 @@ class ProjectLockManager:
                 return
             except FileExistsError:
                 # ロックがすでに存在する場合、Stale Lock かどうか判定
-                mtime = os.path.getmtime(self.lock_file)
-                if time.time() - mtime > self.stale_timeout_seconds:
-                    logger.warning(f"Stale lock detected for {self.project_key} (older than {self.stale_timeout_seconds}s). Removing...")
-                    try:
-                        self.lock_file.unlink()
-                        continue  # 削除に成功したら再試行
-                    except FileNotFoundError:
-                        pass # 他のプロセスが同時に削除した場合は続行
-                    except Exception as e:
-                        logger.error(f"Failed to remove stale lock: {e}")
+                try:
+                    with open(self.lock_file, 'r') as f:
+                        pid_str = f.read().strip()
+                    if pid_str.isdigit():
+                        pid = int(pid_str)
+                        try:
+                            # 自身のプロセスでない、かつ対象のPIDのプロセスが存在するかチェック
+                            os.kill(pid, 0)
+                        except OSError:
+                            # プロセスが存在しない -> Stale Lock
+                            logger.warning(f"Stale lock detected for {self.project_key} (PID {pid} is dead). Removing...")
+                            self.lock_file.unlink(missing_ok=True)
+                            continue
+                except Exception as e:
+                    logger.debug(f"Error checking lock owner: {e}")
+                
+                if time.time() - start_time > self.stale_timeout_seconds:
+                    raise TimeoutError(f"Failed to acquire project lock for {self.project_key} within timeout.")
                 
                 logger.info(f"Waiting for lock on project {self.project_key}...")
                 time.sleep(5)
@@ -91,9 +100,28 @@ def execute_issue(issue_id: str, project_key: str):
     with ProjectLockManager(project_key):
         # ロック取得後の処理
         logger.info("Setting up context and starting graph execution...")
-        # Context Fetching, plan_node, code_node 等を実行する
-        # 各ノード内のLLM呼び出しで BackendExecutionCoordinator が動的にバックエンドを起動・切替える
-        logger.info("Initializing Graph...")
+        
+        # 将来の実装に向けたグラフ構成のモック
+        # 実際には以下のような LangGraph ノードが連携して処理を実行する。
+        #
+        # def spec_draft_node(state):
+        #     # intent: "spec_draft"
+        #     call_llm(role="planner", intent="spec_draft", ...)
+        #
+        # def task_decomposition_node(state):
+        #     # intent: "task_decomposition"
+        #     call_llm(role="planner", intent="task_decomposition", ...)
+        #
+        # def task_prioritization_node(state):
+        #     # intent: "task_prioritization"
+        #     call_llm(role="planner", intent="task_prioritization", ...)
+        #
+        # def code_node(state):
+        #     # intent: "code_edit"
+        #     # または Aider
+        #     run_aider(..., intent="aider_edit")
+        
+        logger.info("Initializing Graph... (Dummy)")
         # (ここに Graph の初期化と実行処理が入る)
         time.sleep(1) # mock
             

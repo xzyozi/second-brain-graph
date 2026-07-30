@@ -101,17 +101,25 @@ def call_llm(
         if not expect_json:
             return {"raw": raw_output}
 
-        json_match = re.search(r"\{.*\}", raw_output, re.DOTALL)
-        if not json_match:
-            return {"verdict": "changes_requested", "comment": "JSON抽出失敗", "raw": raw_output}
-
         try:
-            parsed = json.loads(json_match.group(0))
+            parsed = json.loads(raw_output)
             if isinstance(parsed, dict):
                 return parsed
-            return {"verdict": "changes_requested", "comment": "JSONルートがオブジェクトではありません", "raw": raw_output}
-        except Exception as e:
-            return {"verdict": "changes_requested", "comment": f"JSONパースエラー: {e}", "raw": raw_output}
+        except json.JSONDecodeError:
+            pass
+
+        start_idx = raw_output.find('{')
+        if start_idx != -1:
+            try:
+                decoder = json.JSONDecoder()
+                parsed, _ = decoder.raw_decode(raw_output[start_idx:])
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"verdict": "changes_requested", "comment": "JSONルートがオブジェクトではありません", "raw": raw_output}
+            except json.JSONDecodeError as e:
+                return {"verdict": "changes_requested", "comment": f"JSONパースエラー: {e}", "raw": raw_output}
+
+        return {"verdict": "changes_requested", "comment": "JSON抽出失敗", "raw": raw_output}
 
     # Execute via coordinator
     return coordinator.execute(intent, {"action": _do_llm_call})
