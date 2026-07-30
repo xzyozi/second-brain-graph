@@ -1,4 +1,4 @@
-# 差分設計書 (複数リポジトリ対応モデル) Rev.2.6
+# 複数リポジトリ管理および差分検証・スコアリング設計書 Rev.2.7
 **「第二の脳」母艦 × 衛星アーキテクチャ 拡張仕様**
 
 | 項目 | 内容 |
@@ -90,7 +90,7 @@ metadata/projects/EC/
 1. `sisyphus` がプレフィックス `EC` を抽出。
 2. 母艦の `metadata/.project-registry.json` を引き、キー `EC` に対応するソースフォルダ（`projects/ec-site/`）およびメタデータフォルダ（`metadata/projects/EC/`）を特定。
 3. **エージェントの作業カレントディレクトリを `~/second-brain/projects/ec-site/` へ動的に切り替えてから** `executor` および `coder` を起動する。
-4. 進捗・チェックボックス更新は母艦側の `metadata/projects/EC/tasks.md` へ行う。
+4. 進捗・完了状態は母艦側の `metadata/projects/EC/state.json` へ記録し、自動処理で `tasks.md` は書き換えない。
 
 ### ④ スコアリング (`score-issues.py`) の全横断スキャン化
 
