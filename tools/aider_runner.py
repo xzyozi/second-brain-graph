@@ -11,10 +11,17 @@ from tools.config_loader import load_model_config, ProfileConfig
 from tools.backend_coordinator import get_coordinator
 
 
+class AiderRunError(Exception):
+    """Raised when Aider CLI execution fails or times out."""
+    pass
+
+
 def run_aider(
     instruction: str,
     target_files: List[str],
+    model: Optional[str] = None,
     cwd: Optional[str] = None,
+    timeout: Optional[int] = 600,
 ) -> bool:
     """Run Aider CLI to apply non-destructive code edits based on instruction."""
     coordinator = get_coordinator()
@@ -24,7 +31,7 @@ def run_aider(
         config = load_model_config()
         aider_cfg = config.aider
         
-        target_model = profile.model
+        target_model = model or profile.model
         if not target_model:
             raise ValueError("Profile provided by Coordinator is missing 'model'.")
 
@@ -41,10 +48,16 @@ def run_aider(
         env = os.environ.copy()
         # Coordinator のアダプタが patch_env で設定した OLLAMA_API_BASE 等を継承する
 
+        eff_timeout = timeout if timeout is not None else getattr(aider_cfg, "timeout", 600)
+
         try:
             print(f"[AiderRunner] Running Aider with model '{target_model}' on {target_files}...")
-            res = subprocess.run(cmd, cwd=cwd, env=env, check=True)
+            res = subprocess.run(cmd, cwd=cwd, env=env, check=True, timeout=eff_timeout)
             return res.returncode == 0
+        except subprocess.TimeoutExpired as e:
+            msg = f"Aider実行がタイムアウトしました (timeout={eff_timeout})"
+            print(f"[AiderRunner] Error: {msg}")
+            raise AiderRunError(msg) from e
         except FileNotFoundError:
             print("[AiderRunner] Error: Aider CLI is not installed in the current environment.")
             return False
@@ -72,4 +85,5 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
     except Exception as e:
         print(f"[AiderRunner] Failed to fetch git diff: {e}")
         return ""
+
 
