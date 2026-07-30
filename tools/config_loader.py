@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from functools import lru_cache
 from typing import Any, Dict, Optional, Literal
 from pydantic import BaseModel, ConfigDict, model_validator, Field
 
@@ -27,7 +28,7 @@ class ProfileConfig(BaseModel):
     openai_endpoint: str = Field(min_length=1, pattern=r"^https?://")
     ollama_management_endpoint: Optional[str] = Field(None, pattern=r"^https?://")
     port: Optional[int] = Field(None, ge=1, le=65535)
-    model_path: Optional[str] = None
+    model_path: Optional[str] = Field(None, min_length=1)
 
     @model_validator(mode='after')
     def check_backend_fields(self) -> 'ProfileConfig':
@@ -43,7 +44,7 @@ class ProfileConfig(BaseModel):
 
 class BackendExecutionConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    mode: str = Field(min_length=1)
+    mode: Literal["exclusive"]
     fallback: str = Field(min_length=1)
     routes: Dict[str, str]
     profiles: Dict[str, ProfileConfig]
@@ -70,8 +71,9 @@ def get_config_path() -> Path:
     root_dir = Path(__file__).resolve().parent.parent
     return root_dir / "config" / "models.json"
 
+@lru_cache(maxsize=1)
 def load_model_config() -> RootConfig:
-    """Load model configuration from JSON file and return validated Pydantic model."""
+    """Load model configuration from JSON file and return validated Pydantic model (cached)."""
     config_path = get_config_path()
     if not config_path.exists():
         raise FileNotFoundError(f"Required configuration file not found: {config_path}")

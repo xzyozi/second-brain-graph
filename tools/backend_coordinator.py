@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 import json
 import contextlib
+from functools import lru_cache
 from typing import Any, Dict, Callable, Optional, Iterator, Union
 from pathlib import Path
 from filelock import FileLock, Timeout
@@ -49,6 +50,13 @@ class GpuLeaseAdapter:
         lock_path = Path(__file__).resolve().parent.parent / "metadata" / lock_file
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = FileLock(str(lock_path), timeout=60)
+
+    def __enter__(self) -> "GpuLeaseAdapter":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.release()
 
     def acquire(self) -> None:
         """
@@ -174,11 +182,10 @@ class LlamaServerBackendAdapter:
                 ollama_management_endpoint = p.ollama_management_endpoint
                 break
         
-        if not ollama_management_endpoint:
-            logger.warning("No ollama backend with management endpoint found. Falling back to localhost:11434")
-            ollama_management_endpoint = "http://localhost:11434"
-        
-        unload_ollama_models(management_endpoint=ollama_management_endpoint)
+        if ollama_management_endpoint:
+            unload_ollama_models(management_endpoint=ollama_management_endpoint)
+        else:
+            logger.info("No Ollama backend configured in profiles. Skipping Ollama model unload.")
         
         with patch_env(OPENAI_API_BASE=openai_endpoint, OLLAMA_API_BASE=openai_endpoint):
             with managed_llama_server(model_path=model_path, port=port):
@@ -217,11 +224,11 @@ class BackendExecutionCoordinator:
         else:
             raise ValueError(f"Unknown backend type: {backend_type}")
 
-        self.gpu_lease.acquire()
-        try:
+        with self.gpu_lease:
             return adapter.execute(request)
-        except Exception as e:
-            logger.error(f"Execution failed on backend {backend_type} for intent {intent}: {e}")
-            raise
-        finally:
-            self.gpu_lease.release()
+
+
+@lru_cache(maxsize=1)
+def get_coordinator() -> BackendExecutionCoordinator:
+    """Get singleton instance of BackendExecutionCoordinator."""
+    return BackendExecutionCoordinator()

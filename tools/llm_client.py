@@ -3,13 +3,12 @@
 
 import json
 import logging
-import re
 from typing import Any, Dict, Optional
 
 import os
 from openai import OpenAI
 from tools.config_loader import get_model_params, ProfileConfig
-from tools.backend_coordinator import BackendExecutionCoordinator
+from tools.backend_coordinator import get_coordinator
 
 logger = logging.getLogger("llm_client")
 
@@ -41,14 +40,13 @@ def call_llm(
     if not intent:
         raise ValueError("intent is required for call_llm (e.g. 'spec_draft', 'code_review').")
 
-    coordinator = BackendExecutionCoordinator()
+    coordinator = get_coordinator()
 
     def _do_llm_call(profile: ProfileConfig) -> Dict[str, Any]:
         # Coordinator Adapter sets OPENAI_API_BASE / OLLAMA_API_BASE
         api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OLLAMA_API_BASE")
         if not api_base:
             raise ValueError(f"Endpoint (api_base) is not set by Coordinator for intent '{intent}'.")
-
 
         # Load dynamic model parameters from config/models.json (PM-007, PM-011 SSOT)
         role_params = get_model_params(role)
@@ -74,8 +72,6 @@ def call_llm(
             ],
             "temperature": kwargs.get("temperature", temperature),
             "max_tokens": kwargs.get("max_tokens", max_tokens),
-            "timeout": timeout,
-            "api_base": api_base,
         }
 
         # Add any extra custom kwargs
@@ -86,12 +82,7 @@ def call_llm(
         client = OpenAI(base_url=api_base, api_key="local", timeout=timeout)
 
         try:
-            # 互換性のため openai クライアントから不要な completion_params を取り除く
-            api_params = completion_params.copy()
-            api_params.pop("api_base", None)
-            api_params.pop("timeout", None)
-            
-            response = client.chat.completions.create(**api_params)
+            response = client.chat.completions.create(**completion_params)
         except Exception as e:
             logger.error(f"OpenAI API Error ({role} / {model_name} / {intent}): {e}")
             raise

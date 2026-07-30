@@ -12,12 +12,11 @@ import sys
 import time
 import logging
 import argparse
+import json
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, Optional, TypedDict
-import json
-import os
-import uuid
 from filelock import FileLock, Timeout
 from langgraph.graph import StateGraph, END
 
@@ -72,7 +71,11 @@ class ProjectLockManager:
             logger.error(f"Failed to release lock: {e}")
 
 def write_state(project_key: str, state: Dict[str, Any], filename: str = "state.json") -> None:
-    """Graph の状態を原子的に保存する (PM-046)"""
+    """Graph の状態を原子的に保存する (PM-046).
+    
+    注意: 状態の世代(generation)を安全にインクリメントするため、
+    この関数は必ず ProjectLockManager のロック保有中にのみ呼び出すこと。
+    """
     state_file = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / filename
     state_file.parent.mkdir(parents=True, exist_ok=True)
     
@@ -120,6 +123,25 @@ class GraphState(TypedDict):
     status: str
     error: Optional[str]
 
+def spec_draft_node(state: GraphState) -> GraphState:
+    logger.info("Executing spec_draft_node")
+    from tools.llm_client import call_llm
+    call_llm(role="planner", intent="spec_draft", system_prompt="You are a planner", user_prompt=f"Draft spec for {state['issue_id']}")
+    return state
+
+def task_decomposition_node(state: GraphState) -> GraphState:
+    logger.info("Executing task_decomposition_node")
+    from tools.llm_client import call_llm
+    call_llm(role="planner", intent="task_decomposition", system_prompt="You are a planner", user_prompt=f"Decompose tasks for {state['issue_id']}")
+    return state
+
+def task_prioritization_node(state: GraphState) -> GraphState:
+    logger.info("Executing task_prioritization_node")
+    from tools.llm_client import call_llm
+    call_llm(role="planner", intent="task_prioritization", system_prompt="You are a planner", user_prompt=f"Prioritize tasks for {state['issue_id']}")
+    state["status"] = "success"
+    return state
+
 def execute_issue(issue_id: str, project_key: str) -> None:
     execution_id = uuid.uuid4().hex
     logger.info(f"Starting execution for Issue: {issue_id}, Execution ID: {execution_id}")
@@ -127,23 +149,6 @@ def execute_issue(issue_id: str, project_key: str) -> None:
         with ProjectLockManager(project_key):
             try:
                 logger.info("Setting up context and starting graph execution...")
-                from tools.llm_client import call_llm
-            
-                def spec_draft_node(state: GraphState) -> GraphState:
-                    logger.info("Executing spec_draft_node")
-                    call_llm(role="planner", intent="spec_draft", system_prompt="You are a planner", user_prompt=f"Draft spec for {state['issue_id']}")
-                    return state
-
-                def task_decomposition_node(state: GraphState) -> GraphState:
-                    logger.info("Executing task_decomposition_node")
-                    call_llm(role="planner", intent="task_decomposition", system_prompt="You are a planner", user_prompt=f"Decompose tasks for {state['issue_id']}")
-                    return state
-
-                def task_prioritization_node(state: GraphState) -> GraphState:
-                    logger.info("Executing task_prioritization_node")
-                    call_llm(role="planner", intent="task_prioritization", system_prompt="You are a planner", user_prompt=f"Prioritize tasks for {state['issue_id']}")
-                    state["status"] = "success"
-                    return state
                 
                 logger.info("Initializing Graph nodes...")
                 workflow = StateGraph(GraphState)

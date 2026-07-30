@@ -8,7 +8,7 @@ import subprocess
 from typing import List, Optional
 
 from tools.config_loader import load_model_config, ProfileConfig
-from tools.backend_coordinator import BackendExecutionCoordinator
+from tools.backend_coordinator import get_coordinator
 
 
 def run_aider(
@@ -17,7 +17,7 @@ def run_aider(
     cwd: Optional[str] = None,
 ) -> bool:
     """Run Aider CLI to apply non-destructive code edits based on instruction."""
-    coordinator = BackendExecutionCoordinator()
+    coordinator = get_coordinator()
     intent = "aider_edit"
 
     def _do_run_aider(profile: ProfileConfig) -> bool:
