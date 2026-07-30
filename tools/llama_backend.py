@@ -6,6 +6,7 @@ import subprocess
 import logging
 import urllib.request
 import urllib.error
+import socket
 from contextlib import contextmanager
 from typing import Generator
 
@@ -92,5 +93,20 @@ def managed_llama_server(
             logger.warning("llama-server did not terminate gracefully, forcing kill...")
             process.kill()
             process.wait()
+            
+        # ポート解放を監査 (VRAM解放の確実な担保)
+        logger.info("Auditing port release...")
+        port_freed = False
+        for _ in range(10):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                result = s.connect_ex(('127.0.0.1', port))
+                if result != 0:
+                    port_freed = True
+                    break
+            time.sleep(1)
+            
+        if not port_freed:
+            raise RuntimeError(f"llama-server failed to free port {port} after termination.")
+            
         logger.info("VRAM has been completely freed.")
 

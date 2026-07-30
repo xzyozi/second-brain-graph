@@ -4,8 +4,8 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-BD-002                                                      |
-| 版数     | Rev.4.7（PM-036 ブランチ・PR自動化方針反映）|
-| 改訂日   | 2026年7月29日                                                     |
+| 版数     | Rev.4.8（PM-050 LLMバックエンド排他併用・BackendExecutionCoordinatorの導入） |
+| 改訂日   | 2026年7月30日                                                     |
 | 作成日   | 2026年7月28日                                                     |
 | 関連文書 | SBOS-DD-003（詳細設計書）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 | 対象読者 | システムアーキテクト / リード開発エンジニア / ナレッジマネジメント運用者 / DevOpsエンジニア |
@@ -36,7 +36,7 @@
 | # | 旧自前実装 | 置き換え先OSS | ライセンス | 役割と統合方針 |
 | --- | --- | --- | --- | --- |
 | 1 | `orchestrator.py` (`State` Enum + `while`) | **LangGraph** (`StateGraph`) | MIT | 状態遷移・リトライ・条件分岐エッジを制御。コンテキスト共有を TypedDict State として一元管理。 |
-| 2 | `agent_client.py` (`subprocess` + OpenCode) | **LiteLLM** | MIT | Ollama (`http://localhost:11434`) へ直接接続。argv 長制限を解消。 |
+| 2 | agent_client.py (`subprocess` + OpenCode) | **LiteLLM** ＋ **BackendExecutionCoordinator** | MIT | `BackendExecutionCoordinator` が推論目的（intent）に応じて Ollama / llama-server へルーティング・排他制御し、LiteLLM経由で呼び出す。 |
 | 3 | Coder Agent + `_merge_python_code` | **Aider** (`aider-chat`) | Apache-2.0 | `--no-auto-commits` (複数形) で衛星ワーキングツリーに変更を反映。自動コミットは行わない。 |
 | 4 | (なし・LLM任せ) | **Ruff** | MIT | 一次静的解析。LLM呼び出し前に機械的エラーをフィルタリング。 |
 | 5 | 自作レビュープロンプト | LiteLLM + **Reviewdog** | MIT | レビュー指摘を rdjson 化し、`-reporter=local -diff="git diff HEAD"` で表示。 |
@@ -97,7 +97,7 @@
 
 - **対応OS**: Windows Native (PowerShell / `uv`), Linux (Ubuntu), macOS
 - **依存管理**: `uv pip install langgraph litellm aider-chat ruff pytest pytest-json-report`
-- **LLMサーバー**: Ollama (`localhost:11434`)
+- **LLMサーバー**: `BackendExecutionCoordinator` による制御のもと、Ollama (`localhost:11434`) および llama-server (`localhost:8080`) を推論目的（intent）に応じて排他併用。GPUのリース管理 (`.gpu_lease.lock`) により VRAM の競合を防止する。また、Ollama 未起動時には warning を出力し llama-server の実行を続行する。タイムアウト値は `gpu_lease_timeout` として `models.json` から可変設定可能。
 - **Windows Native 環境特有の注意点**:
   - **日次タイマージョブ**: Linux の `cron` に代わり、Windows Task Scheduler (`schtasks`) または PowerShell の `Register-ScheduledTask` を使用して日次評価バッチをスケジュールする。
   - **改行コード管理**: Git 設定で `git config --global core.autocrlf input` を指定し、Aider による差分生成時に CRLF / LF の混在で diff が巨大化する問題を防御する。

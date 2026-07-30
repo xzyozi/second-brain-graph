@@ -1,7 +1,7 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.13
+# 課題・矛盾点一覧 (Problem Management) Rev.2.15
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.13（PM-041〜PM-049の設計決定およびドキュメント反映完了）
+版数: Rev.2.15（PM-050: Exclusive Co-usage バックエンド調整・完了反映）
 改訂日: 2026年7月30日  
 作成日: 2026年6月25日  
 対象読者: 全開発・運用メンバー  
@@ -10,6 +10,8 @@
 ---
 
 ## 更新履歴
+- **2026/07/30 (Rev.2.15)**: 課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) に対する3つの改善推奨ポイントを適用し、ステータスを解決済みに更新。
+- **2026/07/30 (Rev.2.14)**: 新規課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) を追加登録。
 - **2026/07/30 (Rev.2.13)**: PM-041〜PM-049の設計反映作業を完了し、ステータスを解決済みに更新（`state.json` の正本化、ロック等例外固定ルールの導入、Git復旧安全化など）。SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
 - **2026/07/29 (Rev.2.12)**: PM-036〜PM-038の対応完了、PM-039〜040は継続課題として整理
 
@@ -73,6 +75,7 @@
 | **PM-047** | ENV-001 / DD | 🟢 | モデル設定SSOTとフォールバック方針の矛盾 | DD-003に残存していた直書きモデル名を廃止し、`models.json` フォールバック先例示へと一元化 | 🟢 解決済み |
 | **PM-048** | 全文書横断 | 🟢 | 文書間の版数参照が現行版と不一致 | 本文・関連文書欄の他文書固定版数参照を削除し文書番号のみの参照へ統一 | 🟢 解決済み |
 | **PM-049** | ORCH | 🟢 | 旧ORCH文書の位置付けが不明瞭（現行仕様との混同リスク） | `SBOS-ORCH-001.md` 各節に「非規範・参考資料」のアラートを追記し、正本は DD-003 である旨を明記 | 🟢 解決済み |
+| **PM-050** | DD / ORCH | 🟠 中 | Ollama (localhost:11434) と llama-server (localhost:8080) のLLMバックエンド接続経路・起動方針が混在している | `BackendExecutionCoordinator` を導入し、推論目的（intent）に応じた排他併用（Exclusive Co-usage）アーキテクチャへ移行 | 🟢 解決済み |
 
 ---
 
@@ -224,9 +227,27 @@
 * **課題**: 冒頭では参考資料と明記されるが、本文に現行仕様のように読める完全な設計記述が残っている。
 * **解決案**: 現行設計と旧設計を明確に分離し、旧仕様の節には「参考・非規範」と表示する。可能であれば docs/archive/ へ移動する。
 
+### PM-050: LLM バックエンドの混在 (Ollama vs llama-server)
+* **課題**: 現在の設計・実装において、LLM のバックエンド方針が 2 系統混在している。
+  - 通常の LLM 呼び出しや Aider (`llm_client.py`, `config_loader.py`, `aider_runner.py` 経由) は **Ollama (localhost:11434)** へ接続する想定となっている。
+  - Orchestrator の実行ラッパー (`orchestrator_graph.py`) はタスク実行時に `llama_backend.py` の `managed_llama_server()` を使い、**llama-server (localhost:8080)** を動的起動して GGUF モデルをロードする設計となっている。
+  このままでは、`llm_client.py` の接続先とサーバー起動先が一致しない可能性があり、オーケストレーターとLLM間で通信エラーやリソースの二重起動が発生するリスクがある。
+* **解決案（排他併用アーキテクチャ）**: 実運用に向けて用途別にバックエンドを最適化するため、「排他併用 (Exclusive Co-usage)」方針を採用する。
+  - `BackendExecutionCoordinator` を新設し、推論目的（`intent`）に応じて `Ollama` または `llama-server` へ動的にルーティングする。
+  - 両者が VRAM を奪い合わないよう、`metadata/.gpu_lease.lock` を用いた単一のGPUリース管理を導入する。
+  - `llm_client.py` および `aider_runner.py` は Coordinator 経由でバックエンドを呼び出すよう統合する。
+* **対応内容**: `BackendExecutionCoordinator` による「排他併用 (Exclusive Co-usage)」アーキテクチャを実装。さらに以下の3つの改善を施し、安定性を向上させた。
+  1. **Ollama 未起動時フォールバック**: Ollama 接続エラー（`URLError`）発生時、プロセス中断を回避し warning ログを出力した上で `llama-server` の起動処理を続行する挙動に変更。
+  2. **GPU リース取得タイムアウトの可変設定**: `models.json` 内の `backend_execution.gpu_lease_timeout` パラメータからタイムアウト値（デフォルト 120 秒）を読み込むよう `GpuLeaseAdapter` に動的結合。
+  3. **intent 指定漏れ対策のフォールバック**: `call_llm` で `intent` が未指定の場合、`role` に基づいてデフォルトの `intent` にフォールバックするマッピング処理を追加。
+  また、本対応について `01_基本設計書_SBOS-BD-002.md` および `02_詳細設計書_SBOS-DD-003.md` の設計記述を更新した。
+
 ---
 
 ## 4. 改訂履歴
+- **2026/07/30 (Rev.2.15)**: 課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) に対する3つの改善推奨ポイントを適用し、ステータスを解決済みに更新。
+- **2026/07/30 (Rev.2.15)**: PM-050 (Exclusive Co-usage BackendExecutionCoordinator) の実装・検証・Ollama耐性強化およびgpu_lease_timeout統合完了に伴いステータスを解決済みに更新。
+- **2026/07/30 (Rev.2.14)**: 新規課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) を追加登録。
 - **2026/07/30 (Rev.2.13)**: 設計文書レビューに基づく9件の重要指摘（PM-041〜PM-049: 台帳正本一本化、B7安全回路、例外状態遷移、Git保全等）の設計決定および各設計書への反映完了。
 - **2026/07/30 (Rev.2.12)**: PM-036〜PM-038の対応を完了。PM-039およびPM-040は継続課題として整理。
 - **2026/07/30 (Rev.2.11)**: 新規課題 PM-040 (35,000トークン制限に伴う Context Fetching ノード / RAG・AST関連ファイル動的抽出の必要性) を追加登録。
