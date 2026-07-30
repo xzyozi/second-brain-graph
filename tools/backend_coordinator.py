@@ -103,6 +103,8 @@ def unload_ollama_models() -> None:
                 time.sleep(1)
             raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
             
+    except urllib.error.URLError as e:
+        logger.info(f"Ollama appears to be offline or unreachable: {e}. Assuming VRAM is free.")
     except Exception as e:
         logger.error(f"Failed to verify/unload Ollama models (Ollama might not be running or failed to clear): {e}")
         raise RuntimeError(f"Ollama unload failed: {e}")
@@ -130,7 +132,7 @@ class OllamaBackendAdapter:
             raise ValueError("Profile must specify 'endpoint' for ollama backend.")
         
         with patch_env(OLLAMA_API_BASE=endpoint, OPENAI_API_BASE=endpoint):
-            return action()
+            return action(self.profile)
 
 
 class LlamaServerBackendAdapter:
@@ -166,7 +168,7 @@ class LlamaServerBackendAdapter:
         
         with patch_env(OPENAI_API_BASE=endpoint, OLLAMA_API_BASE=endpoint):
             with managed_llama_server(model_path=model_path, port=port):
-                return action()
+                return action(self.profile)
 
 
 class BackendExecutionCoordinator:

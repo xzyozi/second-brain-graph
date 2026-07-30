@@ -2,19 +2,45 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+from pydantic import BaseModel, Field
 
 # DEFAULT_CONFIG was removed to prevent silent fallbacks to unsafe defaults.
 
+
+class AiderConfig(BaseModel):
+    model_name: str
+    no_auto_commits: bool = True
+
+class RoleConfig(BaseModel):
+    model_name: str
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    description: Optional[str] = None
+
+class ProfileConfig(BaseModel):
+    backend: str
+    model: str
+    endpoint: str
+    port: Optional[int] = None
+    model_path: Optional[str] = None
+
+class BackendExecutionConfig(BaseModel):
+    routes: Dict[str, str]
+    profiles: Dict[str, ProfileConfig]
+
+class RootConfig(BaseModel):
+    aider: AiderConfig
+    models: Dict[str, RoleConfig]
+    backend_execution: BackendExecutionConfig
 
 def get_config_path() -> Path:
     """Get absolute path to config/models.json."""
     root_dir = Path(__file__).resolve().parent.parent
     return root_dir / "config" / "models.json"
 
-
 def load_model_config() -> Dict[str, Any]:
-    """Load model configuration from JSON file. Raises error if missing."""
+    """Load model configuration from JSON file. Raises error if missing or invalid."""
     config_path = get_config_path()
     if not config_path.exists():
         raise FileNotFoundError(f"Required configuration file not found: {config_path}")
@@ -22,9 +48,11 @@ def load_model_config() -> Dict[str, Any]:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)
+            # Pydantic validation
+            RootConfig.model_validate(data)
             return data
     except Exception as e:
-        raise RuntimeError(f"Failed to parse config from {config_path}: {e}")
+        raise RuntimeError(f"Failed to parse or validate config from {config_path}: {e}")
 
 
 def get_model_name(role: str) -> str:

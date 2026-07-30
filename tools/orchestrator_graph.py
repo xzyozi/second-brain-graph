@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, TypedDict
 import json
 import os
+import uuid
 from filelock import FileLock, Timeout
 from langgraph.graph import StateGraph, END
 
@@ -44,7 +45,7 @@ class ProjectLockManager:
             metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
         self.lock_dir = metadata_dir / "projects" / project_key
         self.lock_file = self.lock_dir / ".lock"
-        self.lock = FileLock(str(self.lock_file), timeout=7200)
+        self.lock = FileLock(str(self.lock_file), timeout=0)
 
     def __enter__(self) -> "ProjectLockManager":
         self.lock_dir.mkdir(parents=True, exist_ok=True)
@@ -70,14 +71,16 @@ class ProjectLockManager:
         except Exception as e:
             logger.error(f"Failed to release lock: {e}")
 
-def write_state(project_key: str, state: Dict[str, Any]) -> None:
+def write_state(project_key: str, state: Dict[str, Any], filename: str = "state.json") -> None:
     """Graph 実行状態を安全に記録する (PM-037 安全停止ルール準拠)"""
-    state_file = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / "state.json"
+    state_file = Path(__file__).resolve().parent.parent / "metadata" / "projects" / project_key / filename
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    temp_file = state_file.with_suffix(".json.tmp")
+    temp_file = state_file.with_name(f"{filename}.{uuid.uuid4().hex}.tmp")
     
     with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
         
     os.replace(temp_file, state_file)
 
@@ -136,7 +139,7 @@ def execute_issue(issue_id: str, project_key: str) -> None:
             logger.info(f"Execution completed for Issue: {issue_id}")
     except TimeoutError:
         logger.warning(f"Execution skipped for {issue_id} due to lock timeout.")
-        write_state(project_key, {"status": "SKIPPED_LOCKED", "issue_id": issue_id, "timestamp": datetime.now().isoformat()})
+        write_state(project_key, {"status": "SKIPPED_LOCKED", "issue_id": issue_id, "timestamp": datetime.now().isoformat()}, filename="skipped.json")
     except Exception as e:
         logger.error(f"Execution failed for {issue_id}: {e}")
         write_state(project_key, {"status": "FAILED_SYSTEM", "issue_id": issue_id, "error": str(e), "timestamp": datetime.now().isoformat()})

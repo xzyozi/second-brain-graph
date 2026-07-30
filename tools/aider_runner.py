@@ -7,7 +7,7 @@ import os
 import subprocess
 from typing import List, Optional
 
-from tools.config_loader import get_model_name, load_model_config, get_backend_execution_config
+from tools.config_loader import load_model_config
 from tools.backend_coordinator import BackendExecutionCoordinator
 
 
@@ -21,14 +21,13 @@ def run_aider(
     coordinator = BackendExecutionCoordinator()
     intent = "aider_edit"
 
-    def _do_run_aider() -> bool:
+    def _do_run_aider(profile: dict) -> bool:
         config = load_model_config()
         aider_cfg = config.get("aider", {})
-
-        backend_cfg = get_backend_execution_config()
-        profile_name = backend_cfg.get("routes", {}).get(intent, "coding_ollama")
-        profile = backend_cfg.get("profiles", {}).get(profile_name, {})
-        target_model = model or profile.get("model") or get_model_name("aider")
+        
+        target_model = profile.get("model")
+        if not target_model:
+            raise ValueError("Profile provided by Coordinator is missing 'model'.")
 
         no_auto_commits = aider_cfg.get("no_auto_commits", True)
 

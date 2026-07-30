@@ -41,11 +41,15 @@
     "profiles": {
       "reasoning_economy": {
         "backend": "llama_server",
-        "model": "gemma-4-12B-it-qat-UD-Q4_K_XL"
+        "model": "gemma-4-12B-it-qat-UD-Q4_K_XL",
+        "endpoint": "http://localhost:8080/v1",
+        "port": 8080,
+        "model_path": "./models/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
       },
       "coding_ollama": {
         "backend": "ollama",
-        "model": "gemma-4-py_coder:latest"
+        "model": "gemma-4-py_coder:latest",
+        "endpoint": "http://localhost:11434"
       }
     }
   }

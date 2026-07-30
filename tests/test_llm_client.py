@@ -23,8 +23,8 @@ def test_get_model_params():
 @patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
 def test_call_llm_with_dynamic_params(mock_coordinator_class, mock_openai_class):
     mock_coordinator = MagicMock()
-    # Execute the action immediately to test the inner logic
-    mock_coordinator.execute.side_effect = lambda intent, req: req["action"]()
+    # Execute the action immediately to test the inner logic, passing a dummy profile
+    mock_coordinator.execute.side_effect = lambda intent, req: req["action"]({"model": "gemma-4-12B-it-qat-UD-Q4_K_XL"})
     mock_coordinator_class.return_value = mock_coordinator
 
     mock_client = MagicMock()
@@ -33,7 +33,7 @@ def test_call_llm_with_dynamic_params(mock_coordinator_class, mock_openai_class)
     mock_response.choices = [MagicMock(message=MagicMock(content='{"verdict": "LGTM"}'))]
     mock_client.chat.completions.create.return_value = mock_response
 
-    res = call_llm("planner", "System Prompt", "User Prompt", expect_json=True)
+    res = call_llm("planner", "System Prompt", "User Prompt", expect_json=True, intent="spec_draft")
 
     assert res == {"verdict": "LGTM"}
     mock_client.chat.completions.create.assert_called_once()

@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 import os
 from openai import OpenAI
-from tools.config_loader import get_model_params, load_model_config, get_backend_execution_config
+from tools.config_loader import get_model_params
 from tools.backend_coordinator import BackendExecutionCoordinator
 
 logger = logging.getLogger("llm_client")
@@ -21,7 +21,7 @@ def call_llm(
     user_prompt: str,
     expect_json: bool = False,
     timeout: int = 300,
-    intent: Optional[str] = None,
+    intent: str = "",
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Call LLM via OpenAI API using parameters configured in config/models.json.
@@ -39,17 +39,11 @@ def call_llm(
         Dict containing LLM response or parsed JSON.
     """
     if not intent:
-        if role == "planner":
-            intent = "spec_draft"
-        elif role == "reviewer":
-            intent = "code_review"
-        else:
-            intent = "code_edit"
+        raise ValueError("intent is required for call_llm (e.g. 'spec_draft', 'code_review').")
 
     coordinator = BackendExecutionCoordinator()
 
-    def _do_llm_call() -> Dict[str, Any]:
-        config = load_model_config()
+    def _do_llm_call(profile: Dict[str, Any]) -> Dict[str, Any]:
         # Coordinator Adapter sets OPENAI_API_BASE / OLLAMA_API_BASE
         api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OLLAMA_API_BASE")
         if not api_base:
@@ -59,19 +53,9 @@ def call_llm(
         # Load dynamic model parameters from config/models.json (PM-007, PM-011 SSOT)
         role_params = get_model_params(role)
         
-        # Override model_name with the one from the profile if available
-        backend_cfg = get_backend_execution_config()
-        profile_name = backend_cfg.get("routes", {}).get(intent)
-        if not profile_name:
-            raise ValueError(f"No route defined for intent '{intent}'.")
-            
-        profile = backend_cfg.get("profiles", {}).get(profile_name)
-        if not profile:
-            raise ValueError(f"Profile '{profile_name}' is not defined.")
-            
-        model_name = profile.get("model") or role_params.get("model_name")
+        model_name = profile.get("model")
         if not model_name:
-            raise ValueError(f"Missing 'model' in profile '{profile_name}' and no fallback in role '{role}'.")
+            raise ValueError(f"Profile provided by Coordinator is missing 'model' for intent '{intent}'.")
         
         temperature = role_params.get("temperature")
         if temperature is None:
