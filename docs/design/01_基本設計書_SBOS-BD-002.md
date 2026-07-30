@@ -49,7 +49,8 @@
 ```text
 [ tools/orchestrator_graph.py ]  ← LangGraph StateGraph (母艦)
 
-  gather_requirements (tasks.md / project.json 読み込み)
+  gather_requirements (state.json / project.json 読み込み)
+    │ (※すべての副作用より前にロック取得)
          │
          ▼
   plan_node (Executor役: LiteLLM 経由で要件指示書生成)
@@ -66,13 +67,13 @@
          ▼                                                      │
   review_node (LiteLLM レビュー ＋ Reviewdog 出力)             │
          │                                                      │
-         ├─ [LGTM] ─────────────────────────────► done_node (tasks.md 完了更新)
+         ├─ [LGTM] ─────────────────────────────► done_node (state.json.status = "COMPLETED" 記録 / ロック解放)
          └─ [changes_requested] ────────────────┤
                                                 ▼
                                (round / lint_round / test_round < max_round ?)
                                                 │
                                  ├─── [Yes] ───► code_node
-                                 └─── [No: 上限到達] ───► escalate_node (tasks.md round:N 動的更新 / B7 ブロッカー化)
+                                 └─── [No: 上限到達] ───► escalate_node (state.json.status = "FAILED_B7" 記録 / ロック解放)
 ```
 
 > **リトライ安全回路（F3対応）:** `review_node` だけでなく、`lint_node`（Ruff）および `test_node`（pytest）の失敗修正ループについても、無制限の無限試行を防止するため `lint_round` / `test_round` (上限 各3回) の安全回路を配備する。上限超過時は直ちに `escalate_node` に遷移してタスクを安全停止させる。
