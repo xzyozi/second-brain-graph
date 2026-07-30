@@ -1,13 +1,13 @@
-# 差分設計書 (複数リポジトリ対応モデル) Rev.2.6
+# 複数リポジトリ管理および差分検証・スコアリング設計書 Rev.2.7
 **「第二の脳」母艦 × 衛星アーキテクチャ 拡張仕様**
 
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-MULTI-001 |
-| 版数 | Rev.2.6（Step4台帳確認パス修整 PM-033 完全追従版） |
+| 版数 | Rev.2.7（PM-036 project.json base_branch追加方針反映） |
 | 改訂日 | 2026年7月29日 |
 | 作成日 | 2026年6月26日 |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-OP-001（運用詳細設計書 Rev.4.5）、SBOS-PM-005（課題一覧 Rev.2.7） |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
 
 ---
 
@@ -64,8 +64,9 @@
 
 ```text
 metadata/projects/EC/
-├── project.json
-└── tasks.md
+├── project.json      # プロジェクト固有の設定（base_branch等）
+├── tasks.md          # 人間向けのタスク説明（HTML状態埋め込みは廃止）
+└── state.json        # 【正本】各タスクの機械状態（status, round等）
 ```
 
 `metadata/projects/<PROJECT_KEY>/project.json`:
@@ -73,9 +74,12 @@ metadata/projects/EC/
 {
   "name": "自社ECサイトリニューアル",
   "key": "EC",
+  "base_branch": "develop",
   "created_at": "2026-06-26"
 }
 ```
+
+> **(PM-036 仕様追加)**: `base_branch` はエージェントが作業ブランチ (`sbos/<Issue-ID>`) を派生させる元のブランチであり、かつ作業完了後の PR ターゲットブランチとなります。デフォルトは `develop` を推奨します。
 
 > **（レビュー工程統合済みの場合）** SBOS-PM-001 Rev.2.0で追加した`default_models` / `max_review_rounds`フィールドも、レビューループを導入する場合はここに追記する。
 
@@ -86,7 +90,7 @@ metadata/projects/EC/
 1. `sisyphus` がプレフィックス `EC` を抽出。
 2. 母艦の `metadata/.project-registry.json` を引き、キー `EC` に対応するソースフォルダ（`projects/ec-site/`）およびメタデータフォルダ（`metadata/projects/EC/`）を特定。
 3. **エージェントの作業カレントディレクトリを `~/second-brain/projects/ec-site/` へ動的に切り替えてから** `executor` および `coder` を起動する。
-4. 進捗・チェックボックス更新は母艦側の `metadata/projects/EC/tasks.md` へ行う。
+4. 進捗・完了状態は母艦側の `metadata/projects/EC/state.json` へ記録し、自動処理で `tasks.md` は書き換えない。
 
 ### ④ スコアリング (`score-issues.py`) の全横断スキャン化
 
@@ -185,6 +189,7 @@ cat > metadata/projects/NEW/project.json << 'EOF'
 {
   "name": "新規サービス",
   "key": "NEW",
+  "base_branch": "develop",
   "created_at": "2026-07-29"
 }
 EOF

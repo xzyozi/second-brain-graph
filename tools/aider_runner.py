@@ -7,48 +7,55 @@ import os
 import subprocess
 from typing import List, Optional
 
-from tools.config_loader import get_model_name, load_model_config
+from tools.config_loader import load_model_config, ProfileConfig
+from tools.backend_coordinator import get_coordinator
 
 
 def run_aider(
     instruction: str,
     target_files: List[str],
-    model: Optional[str] = None,
     cwd: Optional[str] = None,
 ) -> bool:
     """Run Aider CLI to apply non-destructive code edits based on instruction."""
-    config = load_model_config()
-    aider_cfg = config.get("aider", {})
+    coordinator = get_coordinator()
+    intent = "aider_edit"
 
-    target_model = model or get_model_name("aider")
-    no_auto_commits = aider_cfg.get("no_auto_commits", True)
+    def _do_run_aider(profile: ProfileConfig) -> bool:
+        config = load_model_config()
+        aider_cfg = config.aider
+        
+        target_model = profile.model
+        if not target_model:
+            raise ValueError("Profile provided by Coordinator is missing 'model'.")
 
-    cmd = ["aider", "--model", target_model, "--yes-always"]
+        no_auto_commits = aider_cfg.no_auto_commits
 
-    if no_auto_commits:
-        cmd.append("--no-auto-commits")
+        cmd = ["aider", "--model", target_model, "--yes-always"]
 
-    cmd.extend(["--message", instruction])
-    cmd.extend(target_files)
+        if no_auto_commits:
+            cmd.append("--no-auto-commits")
 
-    env = os.environ.copy()
-    api_base = config.get("api_base")
-    if api_base:
-        env["OLLAMA_API_BASE"] = api_base
+        cmd.extend(["--message", instruction])
+        cmd.extend(target_files)
 
-    try:
-        print(f"[AiderRunner] Running Aider with model '{target_model}' on {target_files}...")
-        res = subprocess.run(cmd, cwd=cwd, env=env, check=True)
-        return res.returncode == 0
-    except FileNotFoundError:
-        print("[AiderRunner] Error: Aider CLI is not installed in the current environment.")
-        return False
-    except subprocess.CalledProcessError as e:
-        print(f"[AiderRunner] Aider execution failed with exit code {e.returncode}")
-        return False
-    except Exception as e:
-        print(f"[AiderRunner] Unexpected error executing Aider: {e}")
-        return False
+        env = os.environ.copy()
+        # Coordinator のアダプタが patch_env で設定した OLLAMA_API_BASE 等を継承する
+
+        try:
+            print(f"[AiderRunner] Running Aider with model '{target_model}' on {target_files}...")
+            res = subprocess.run(cmd, cwd=cwd, env=env, check=True)
+            return res.returncode == 0
+        except FileNotFoundError:
+            print("[AiderRunner] Error: Aider CLI is not installed in the current environment.")
+            return False
+        except subprocess.CalledProcessError as e:
+            print(f"[AiderRunner] Aider execution failed with exit code {e.returncode}")
+            return False
+        except Exception as e:
+            print(f"[AiderRunner] Unexpected error executing Aider: {e}")
+            return False
+
+    return coordinator.execute(intent, {"action": _do_run_aider})
 
 
 def get_git_diff(cwd: Optional[str] = None) -> str:

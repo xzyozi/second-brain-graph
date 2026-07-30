@@ -4,11 +4,11 @@
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-OP-001 |
-| 版数     | Rev.4.5（review_rounds 監査ログ構造 §2.1 完全整合版）|
+| 版数     | Rev.4.6（PM-036 ブランチ・PR自動化方針反映）|
 | 改訂日   | 2026年7月29日 |
 | 作成日 | 2026年7月27日 |
 | 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.6）、SBOS-DD-003（詳細設計書 Rev.4.8）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.7） |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 
 ---
 
@@ -65,9 +65,9 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    - ③ `lint_node` (Ruff 高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
-   - ⑥ `done_node` (`tasks.md` を完了 `[x]` 更新し、`execution_history.json` へ成果記録)
+   - ⑥ `done_node` (LGTMは完了ではなく遷移条件。PR作成を行い、成功時は `state.json` を `COMPLETED` に、失敗時は `PR_FAILED` に更新。`execution_history.json` へ成果記録、ロック解放)
    
-   > **注意:** `orchestrator_graph.py` は衛星内で `git commit` を自動実行しない。成果物の最終確認後、人間が手動で `git add && git commit` を行う。
+   > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
 
 ---
 
@@ -75,11 +75,14 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 
 ### 2.1 実行履歴ログ (`tools/.cache/execution_history.json`)
 各タスクの実行完了（または B7 エスカレーション）時にアトミックに記録される正本 JSON スキーマ (`DD-003 §4.1.1` 準拠)。
-各試行回数は `lint_round` / `test_round` / `review_round` フィールドに記録され、各ラウンドのレビュー判定および指摘コメント履歴は `review_rounds: [{round, verdict, comments}]` 配列から時系列で全件参照・監査できる。
+各試行回数は `lint_round` / `test_round` / `review_round` フィールドに記録され、各ラウンドのレビュー判定および指摘コメント履歴は `review_rounds: [{review_round, verdict, comments}]` 配列から時系列で全件参照・監査できる。
 
 ---
 
 ## 3. トラブルシューティング・ランブック（障害対応フロー）
+
+> **注意:** 例外発生・ロック取得失敗・PR作成失敗時などの各種終端状態の監査および復旧方針は、`SBOS-DD-003` で定義された「終端状態の監査・運用契約表」に完全に従うものとする。
+
 
 ### ケース1: LLM 応答パース失敗 (`JSON抽出失敗` / パースエラー)
 - **症状:** `llm_client.py` (LiteLLM) で `JSON抽出失敗` が出力され、`changes_requested` にフォールバックする。
@@ -94,29 +97,27 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - テストコードや型定義の直接編集が必要な場合は、人間が `projects/<name>/` を編集する。
 
 ### ケース3: Aider CLI / LiteLLM 推論のタイムアウト
-- **症状:** `AiderRunError: Aider実行がタイムアウトしました (timeout=600)` が発生。
+- **症状:** `AiderRunError: Aider実行がタイムアウトしました (timeout=600)` や LiteLLM タイムアウトが発生。
 - **対処:**
-  - `nvidia-smi` で VRAM 使用量を確認。
-  - `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
+  - Issue実行全体を通して再試行は1回のみとする。
+  - `llm_timeout_count == 0` の場合: `llm_timeout_count` を 1 にして同一ノードを自動再試行する。
+  - `llm_timeout_count == 1` の場合: 直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
+  - 根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
 
-### ケース4: Aider 差分キャンセルの手動復旧
-- **症状:** Aider が意図しない広範囲の変更を行った。
+### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
+- **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止し、ロックが解放された。
 - **対処:**
-  - `--no-auto-commits` により変更はワーキングツリーの未コミット差分として保持されているため、対象衛星ディレクトリで以下を実行して変更を破棄する。
-  ```bash
-  cd projects/<target-project>
-  git checkout -- .
-  git clean -fd
-  ```
+  - `cd projects/<target-project>` を実行し、`git status` および `git diff` で変更内容を必ず人間が確認する。
+  - 差分に問題がない場合は手動でコミット・PR作成を引き継ぐ。破棄する場合は `git restore .` やブランチ削除等を行う。
 
 ### ケース5: レビュー/テスト/lint試行上限到達 (B7 ブロッカー)
 - **症状:** 朝の自動スキャンバッチで `tools/.cache/blocked.json` に `B7` ブロッカーとして登録される。
 - **監査項目:**
-  - `metadata/projects/<project-key>/tasks.md` 内の該当 Issue 直下に記録されたメタデータコメント `<!-- round:3 max_round:3 status:FAILED_B7 -->` を確認。
-  - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行コメントは `review_rounds: [{round, verdict, comments}]` 配列から時系列で監査・追跡する。
+  - `metadata/projects/<project-key>/state.json` の該当 Issue における `"status": "FAILED_B7"` を確認。
+  - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行記録は時系列で監査・追跡する。
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
-  2. `max_round:3` は変更せずに、`tasks.md` 内のメタデータを `<!-- round:0 max_round:3 status:PENDING -->` へ手動リセットする。
+  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。
   3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
 ---
