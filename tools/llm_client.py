@@ -73,8 +73,13 @@ def call_llm(
         if not model_name:
             raise ValueError(f"Missing 'model' in profile '{profile_name}' and no fallback in role '{role}'.")
         
-        temperature = role_params.get("temperature", 0.1)
-        max_tokens = role_params.get("max_tokens", 35000)
+        temperature = role_params.get("temperature")
+        if temperature is None:
+            raise ValueError(f"Missing 'temperature' in role '{role}'.")
+            
+        max_tokens = role_params.get("max_tokens")
+        if max_tokens is None:
+            raise ValueError(f"Missing 'max_tokens' in role '{role}'.")
 
         # Allow explicit kwargs to override defaults
         completion_params: Dict[str, Any] = {
