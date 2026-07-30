@@ -54,11 +54,15 @@
 │   ├── notify.py                    # 通知バッチ (--event daily_summary)
 │   └── backup-second-brain.ps1      # 定期バックアップスクリプト
 │
-└── projects/                       # 衛星プロダクト格納ディレクトリ
-    ├── .project-registry.json      # 衛星中央台帳 (Issueプレフィックス -> パスマッピング)
+├── metadata/                       # メタデータおよび台帳格納ディレクトリ（正本）
+│   ├── .project-registry.json      # 衛星中央台帳 (Issueプレフィックス -> パスマッピング)
+│   └── projects/
+│       └── <PROJECT_KEY>/          # 衛星プロダクトのメタデータ
+│           ├── project.json        # 衛星識別メタデータ
+│           └── tasks.md            # タスク定義ファイル
+│
+└── projects/                       # 衛星プロダクト格納ディレクトリ（ソースコード専用・Git完全隔離）
     └── <project-name>/              # 各衛星プロダクト (個別のGitリポジトリ)
-        ├── project.json            # 衛星識別メタデータ
-        └── tasks.md                # タスク定義ファイル
 ```
 
 ---

@@ -7,7 +7,7 @@
 | 版数     | Rev.4.9（PM-036 ブランチ・PR自動化方針反映） |
 | 改訂日   | 2026年7月29日                                                     |
 | 作成日   | 2026年7月28日                                                     |
-| 関連文書 | SBOS-BD-002（基本設計書 Rev.4.7）、SBOS-MULTI-001（差分設計書 Rev.2.7）、SBOS-OP-001（運用詳細設計書 Rev.4.6）、SBOS-ENV-001（環境構築仕様書 Rev.4.6）、SBOS-PM-005（課題一覧 Rev.2.8） |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
 
 ---
@@ -89,7 +89,7 @@ def call_llm(role: str, system_prompt: str, user_prompt: str, expect_json: bool 
     
     # [PM-007/PM-011修正] config/models.json から動的にパラメータ(model_name, temperature, max_tokens: 35000等)を取得
     role_params = get_model_params(role)
-    model_name = role_params.get("model_name", "ollama/gemma-4-py_coder:latest")
+    model_name = role_params.get("model_name", "gemma-4-12B-it-qat-UD-Q4_K_XL")
     temperature = kwargs.get("temperature", role_params.get("temperature", 0.1))
     max_tokens = kwargs.get("max_tokens", role_params.get("max_tokens", 35000))
 
