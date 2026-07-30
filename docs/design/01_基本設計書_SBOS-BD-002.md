@@ -67,10 +67,12 @@
          ▼                                                      │
   review_node (LiteLLM レビュー ＋ Reviewdog 出力)             │
          │                                                      │
-         ├─ [LGTM] ─────────────────────────────► done_node (state.json.status = "COMPLETED" 記録 / ロック解放)
+         ├─ [LGTM (レビュー完了)] ──► done_node (PR作成)
+         │                           ├── [PR成功] ───► (status = "COMPLETED" 記録 / 履歴記録 / ロック解放)
+         │                           └── [PR失敗] ───► (status = "PR_FAILED" 記録 / 履歴記録 / 差分・ブランチ保持 / ロック解放)
          └─ [changes_requested] ────────────────┤
                                                 ▼
-                               (round / lint_round / test_round < max_round ?)
+                               (review_round / lint_round / test_round < max_round ?)
                                                 │
                                  ├─── [Yes] ───► code_node
                                  └─── [No: 上限到達] ───► escalate_node (state.json.status = "FAILED_B7" 記録 / ロック解放)

@@ -65,7 +65,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    - ③ `lint_node` (Ruff 高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
-   - ⑥ `done_node` (`state.json` を `COMPLETED` 更新し、`execution_history.json` へ成果記録、PRの自動作成、ロック解放)
+   - ⑥ `done_node` (LGTMは完了ではなく遷移条件。PR作成を行い、成功時は `state.json` を `COMPLETED` に、失敗時は `PR_FAILED` に更新。`execution_history.json` へ成果記録、ロック解放)
    
    > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
 
@@ -75,11 +75,14 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 
 ### 2.1 実行履歴ログ (`tools/.cache/execution_history.json`)
 各タスクの実行完了（または B7 エスカレーション）時にアトミックに記録される正本 JSON スキーマ (`DD-003 §4.1.1` 準拠)。
-各試行回数は `lint_round` / `test_round` / `review_round` フィールドに記録され、各ラウンドのレビュー判定および指摘コメント履歴は `review_rounds: [{round, verdict, comments}]` 配列から時系列で全件参照・監査できる。
+各試行回数は `lint_round` / `test_round` / `review_round` フィールドに記録され、各ラウンドのレビュー判定および指摘コメント履歴は `review_rounds: [{review_round, verdict, comments}]` 配列から時系列で全件参照・監査できる。
 
 ---
 
 ## 3. トラブルシューティング・ランブック（障害対応フロー）
+
+> **注意:** 例外発生・ロック取得失敗・PR作成失敗時などの各種終端状態の監査および復旧方針は、`SBOS-DD-003` で定義された「終端状態の監査・運用契約表」に完全に従うものとする。
+
 
 ### ケース1: LLM 応答パース失敗 (`JSON抽出失敗` / パースエラー)
 - **症状:** `llm_client.py` (LiteLLM) で `JSON抽出失敗` が出力され、`changes_requested` にフォールバックする。
@@ -96,8 +99,9 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 ### ケース3: Aider CLI / LiteLLM 推論のタイムアウト
 - **症状:** `AiderRunError: Aider実行がタイムアウトしました (timeout=600)` や LiteLLM タイムアウトが発生。
 - **対処:**
-  - 初回タイムアウト発生時は、`llm_timeout_count` = 1 として同ノードを1回だけ自動再試行する。
-  - 2回目発生時は直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
+  - Issue実行全体を通して再試行は1回のみとする。
+  - `llm_timeout_count == 0` の場合: `llm_timeout_count` を 1 にして同一ノードを自動再試行する。
+  - `llm_timeout_count == 1` の場合: 直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
   - 根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
 
 ### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
@@ -113,7 +117,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行記録は時系列で監査・追跡する。
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
-  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`round` カウンタを `0` にリセットする。
+  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。
   3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
 ---

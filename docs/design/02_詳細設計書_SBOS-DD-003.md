@@ -68,11 +68,22 @@ class OrchestratorState(TypedDict):
 | `lint_node` | Ruff 静的解析エラーあり | `"LINT_ERROR"` | `lint_round >= max_round` | `code_node` | `escalate_node` (`FAILED_B7`) |
 | `test_node` | Pytest 単体テスト失敗 | `"TEST_ERROR"` | `test_round >= max_round` | `code_node` | `escalate_node` (`FAILED_B7`) |
 | `review_node` | Reviewer 指摘あり | `"REVIEW_REJECTED"` | `review_round >= max_round` | `code_node` | `escalate_node` (`FAILED_B7`) |
-| 全ノード | LiteLLM タイムアウト | `"LLM_TIMEOUT"` | `llm_timeout_count >= 1` | 1回だけ再試行 | `escalate_node` (`FAILED_SYSTEM`) |
+| 全ノード | LiteLLM タイムアウト | `"LLM_TIMEOUT"` | `llm_timeout_count >= 1` | 1回だけ再試行 (count==0) | `escalate_node` (`FAILED_SYSTEM`) |
 | 全ノード | その他システム例外 | `"SYSTEM_ERROR"` | - | (再試行なし) | `escalate_node` (`FAILED_SYSTEM`) |
 | `plan_node` 前 | ロック取得失敗 | `"LOCKED"` | - | (待機・キューなし) | 即時スキップ: `SKIPPED_LOCKED` |
 | 完了後 | PR作成失敗 | `"PR_ERROR"` | - | - | 作業ブランチ保持・停止: `PR_FAILED` |
 | 完了後 | PR作成成功 | - (成功) | - | - | 完了記録: `COMPLETED` |
+
+### 2.2 終端状態の監査・運用契約表
+各終端状態（終了・停止時）における状態・履歴・Git・排他制御の振る舞いを以下に規定する。
+
+| 終端状態 | `state.json` | 実行履歴 | 差分・ブランチ | ロック |
+| :--- | :--- | :--- | :--- | :--- |
+| `FAILED_B7` | 記録 | 記録 | 保持 | 解放 |
+| `FAILED_SYSTEM` | 記録 | 記録 | 保持 | 解放 |
+| `SKIPPED_LOCKED` | 記録 | 記録 | 変更なし | 未取得のため解放不要 |
+| `PR_FAILED` | 記録 | 記録 | 保持 | 解放 |
+| `COMPLETED` | 記録 | 記録 | PR作成済み | 解放 |
 
 ---
 
