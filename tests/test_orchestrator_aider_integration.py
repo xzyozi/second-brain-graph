@@ -1,4 +1,4 @@
-"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, and lock verification."""
+"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, git switch, reviewer validation, and CLI commands."""
 
 import json
 from pathlib import Path
@@ -120,8 +120,43 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         assert review_res["error_category"] == "SYSTEM_ERROR"
 
 
+def test_review_node_validates_response_structure() -> None:
+    """Verify that non-dict or invalid verdict from Reviewer LLM normalizes to FAILED_SYSTEM."""
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_exec_004",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/grep/office_parser.py"],
+        instruction="Fix bug",
+        cwd=None,
+        base_branch="develop",
+        aider_message="",
+    )
+
+    # Invalid non-dict response
+    with patch("tools.llm_client.call_llm", return_value="Invalid string response"):
+        res = review_node(state.copy())
+        assert res["status"] == "FAILED_SYSTEM"
+        assert res["error_category"] == "SYSTEM_ERROR"
+
+    # Missing verdict key in dict
+    with patch("tools.llm_client.call_llm", return_value={"comments": ["Looks weird"]}):
+        res = review_node(state.copy())
+        assert res["status"] == "FAILED_SYSTEM"
+        assert res["error_category"] == "SYSTEM_ERROR"
+
+
 @patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out"))
-@patch("tools.llm_client.call_llm")
+@patch("tools.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []})
 def test_execute_issue_aider_timeout_flow_fully_isolated(
     mock_call_llm: MagicMock, mock_run_aider: MagicMock, tmp_path: Path
 ) -> None:

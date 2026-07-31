@@ -24,7 +24,7 @@ from langgraph.graph import END, StateGraph
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.aider_runner import AiderRunError, run_aider
+from tools.aider_runner import AiderRunError, get_git_diff, run_aider
 
 # ロガー設定
 logging.basicConfig(
@@ -386,19 +386,38 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
 def review_node(state: GraphState) -> GraphState:
     """Reviewer LLM 呼び出しノード (DD-003 §4)。
-    例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
+    プロンプトに Git diff を注入し、応答形式の厳格検証を行う。
+    例外発生時または不整合時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
     logger.info("Executing review_node")
     from tools.llm_client import call_llm
+    cwd = state.get("cwd")
+    diff_text = get_git_diff(cwd) if cwd else ""
+    user_prompt = (
+        f"Review changes for {state['issue_id']}.\n\n"
+        f"Git diff:\n{diff_text if diff_text else '(No git diff detected)'}"
+    )
+
     try:
         res = call_llm(
             role="reviewer",
             intent="code_review",
-            system_prompt="You are a reviewer",
-            user_prompt=f"Review changes for {state['issue_id']}",
+            system_prompt=(
+                "You are a reviewer. You must respond with JSON containing a 'verdict' "
+                "('LGTM' or 'changes_requested') and 'comments'."
+            ),
+            user_prompt=user_prompt,
             expect_json=True
         )
-        verdict = res.get("verdict", "LGTM") if isinstance(res, dict) else "LGTM"
+
+        if not isinstance(res, dict) or "verdict" not in res or res.get("verdict") not in ["LGTM", "changes_requested"]:
+            logger.error(f"Invalid review response structure: {res}")
+            state["status"] = "FAILED_SYSTEM"
+            state["error_category"] = "SYSTEM_ERROR"
+            state["error"] = f"Invalid review response structure from LLM: {res}"
+            return state
+
+        verdict = res["verdict"]
         if verdict == "LGTM":
             state["status"] = "review_lgtm"
         else:
@@ -418,29 +437,60 @@ def review_node(state: GraphState) -> GraphState:
 
 
 def done_node(state: GraphState) -> GraphState:
-    """PR 作成および完了ノード (DD-003 §4)。"""
-    logger.info("Executing done_node (PR creation)")
+    """PR 作成および完了ノード (DD-003 §4)。
+    明示的 git add -> git commit -> git push -> gh pr create パイプラインを実行。
+    失敗時は PR_FAILED / PR_ERROR としてブランチと差分を安全保持する。
+    """
+    logger.info("Executing done_node (PR creation pipeline)")
     cwd = state.get("cwd")
     base_branch = state.get("base_branch", "develop")
     head_branch = f"sbos/{state['issue_id']}"
+    target_files = state.get("target_files", [])
+
     try:
-        if cwd and Path(cwd).exists():
-            try:
+        if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+            # 1. 明示的な git add
+            if target_files:
+                subprocess.run(["git", "add", "--"] + target_files, cwd=cwd, capture_output=True, text=True)
+
+            # 2. 未コミット差分の存在確認とコミット
+            status_res = subprocess.run(["git", "status", "--porcelain"], cwd=cwd, capture_output=True, text=True)
+            if status_res.stdout.strip():
                 subprocess.run(
-                    ["git", "commit", "-a", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
-                    cwd=cwd, check=True, capture_output=True
+                    ["git", "commit", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
+                    cwd=cwd, check=True, capture_output=True, text=True
                 )
-            except Exception:
-                pass  # no uncommitted diff is acceptable
-        subprocess.run(
+
+            # 3. リモートへ Push
+            push_res = subprocess.run(
+                ["git", "push", "-u", "origin", head_branch],
+                cwd=cwd, capture_output=True, text=True
+            )
+            if push_res.returncode != 0:
+                logger.warning(f"Git push failed: {push_res.stderr}")
+                state["status"] = "PR_FAILED"
+                state["error_category"] = "PR_ERROR"
+                state["error"] = f"Git push failed: {push_res.stderr}"
+                return state
+
+        # 4. PR の作成
+        pr_res = subprocess.run(
             ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
              "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
-            cwd=cwd, check=True, capture_output=True, text=True
+            cwd=cwd, capture_output=True, text=True
         )
-        state["status"] = "COMPLETED"
+        if pr_res.returncode == 0:
+            state["status"] = "COMPLETED"
+        else:
+            logger.warning(f"PR creation failed: {pr_res.stderr}")
+            state["status"] = "PR_FAILED"
+            state["error_category"] = "PR_ERROR"
+            state["error"] = f"PR creation failed: {pr_res.stderr}"
     except Exception as e:
-        logger.warning(f"PR creation failed or gh CLI unavailable: {e}. Keeping branch diff.")
+        logger.warning(f"Error in done_node: {e}")
         state["status"] = "PR_FAILED"
+        state["error_category"] = "PR_ERROR"
+        state["error"] = str(e)
     return state
 
 
@@ -495,16 +545,51 @@ def execute_issue(
 
     try:
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
-            try:
-                # 作業ブランチ (sbos/<issue-id>) の準備 (PM-036)
-                if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+            # 作業ブランチ (sbos/<issue-id>) の安全な準備 (git switch / pull) (PM-036)
+            if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+                try:
+                    subprocess.run(
+                        ["git", "switch", base_branch],
+                        cwd=cwd, check=True, capture_output=True, text=True
+                    )
                     try:
-                        subprocess.run(["git", "checkout", base_branch], cwd=cwd, capture_output=True)
-                        head_branch = f"sbos/{issue_id}"
-                        subprocess.run(["git", "checkout", "-B", head_branch], cwd=cwd, capture_output=True)
-                    except Exception as ge:
-                        logger.warning(f"Failed git branch setup in {cwd}: {ge}")
+                        subprocess.run(
+                            ["git", "pull", "--ff-only", "origin", base_branch],
+                            cwd=cwd, capture_output=True, text=True
+                        )
+                    except Exception:
+                        pass  # remote may not exist in test env
 
+                    head_branch = f"sbos/{issue_id}"
+                    sw_res = subprocess.run(["git", "switch", head_branch], cwd=cwd, capture_output=True, text=True)
+                    if sw_res.returncode != 0:
+                        subprocess.run(
+                            ["git", "switch", "-c", head_branch, base_branch],
+                            cwd=cwd, check=True, capture_output=True, text=True
+                        )
+                except Exception as ge:
+                    logger.error(f"Failed git branch setup in {cwd}: {ge}")
+                    update_task_state(
+                        project_key,
+                        issue_id,
+                        status="FAILED_SYSTEM",
+                        error_category="SYSTEM_ERROR",
+                        metadata_dir=metadata_dir,
+                    )
+                    record_execution_history(
+                        {
+                            "issue_id": issue_id,
+                            "project_key": project_key,
+                            "cwd": cwd,
+                            "error_category": "SYSTEM_ERROR",
+                            "error": f"Git branch setup failed: {ge}",
+                        },
+                        final_status="FAILED_SYSTEM",
+                        history_file=history_file,
+                    )
+                    return
+
+            try:
                 logger.info("Setting up context and starting graph execution...")
                 workflow = StateGraph(GraphState)
                 workflow.add_node("spec_draft", spec_draft_node)
@@ -681,11 +766,45 @@ def execute_issue(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LangGraph Orchestrator")
-    parser.add_argument("--issue-id", required=True, help="対象のIssue ID (例: TFG-0004)")
-    parser.add_argument("--project-key", required=True, help="対象プロジェクトのキー (例: TFG)")
+    subparsers = parser.add_subparsers(dest="subcommand", help="Subcommands")
+
+    exec_parser = subparsers.add_parser("execute", help="Execute task for issue")
+    exec_parser.add_argument("--issue-id", required=True, help="Target Issue ID (e.g. TFG-0004)")
+    exec_parser.add_argument("--project-key", help="Target Project Key (Resolved from Issue ID if omitted)")
+
+    orch_parser = subparsers.add_parser("orchestrate", help="Orchestrate uncompleted issues")
+    orch_parser.add_argument("--project-key", help="Target Project Key (All if omitted)")
+
     args = parser.parse_args()
 
-    execute_issue(args.issue_id, args.project_key)
+    if args.subcommand == "execute":
+        issue_id = args.issue_id
+        project_key = args.project_key
+        if not project_key and "-" in issue_id:
+            project_key = issue_id.split("-")[0]
+        if not project_key:
+            logger.error("Could not resolve project-key from issue-id.")
+            sys.exit(1)
+        execute_issue(issue_id, project_key)
+    elif args.subcommand == "orchestrate":
+        project_key = args.project_key
+        logger.info(f"Orchestrating uncompleted issues for project_key: {project_key or 'ALL'}")
+        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
+        registry_file = metadata_dir / ".project-registry.json"
+        if registry_file.exists():
+            with open(registry_file, "r", encoding="utf-8") as f:
+                reg = json.load(f)
+            logger.info(f"Registered projects in registry: {list(reg.get('projects', {}).keys())}")
+    else:
+        # 互換性のためフラグ引数での直接呼び出しもサポート
+        legacy_parser = argparse.ArgumentParser()
+        legacy_parser.add_argument("--issue-id", help="Target Issue ID")
+        legacy_parser.add_argument("--project-key", help="Target Project Key")
+        leg_args, _ = legacy_parser.parse_known_args()
+        if leg_args.issue_id and leg_args.project_key:
+            execute_issue(leg_args.issue_id, leg_args.project_key)
+        else:
+            parser.print_help()
 
 
 if __name__ == "__main__":
