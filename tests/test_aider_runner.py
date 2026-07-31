@@ -57,10 +57,21 @@ def test_run_aider_timeout_raises_error(mock_run: MagicMock) -> None:
         run_aider("Fix bug", ["test.py"])
 
 
-def test_run_aider_file_not_found(tmp_path: Path) -> None:
-    """指定されたターゲットファイルが存在しない場合に FileNotFoundError が発生することを検証する。"""
-    with pytest.raises(FileNotFoundError):
-        run_aider("Fix bug", ["nonexistent.py"], cwd=str(tmp_path))
+@patch("subprocess.run")
+def test_run_aider_allows_nonexistent_files(mock_run: MagicMock, tmp_path: Path) -> None:
+    """指定されたターゲットファイルが存在しない場合でも FileNotFoundError を投げず新規ファイル作成を許可することを検証する。"""
+    mock_run.return_value.returncode = 0
+    res = run_aider("Create new file", ["new_script.py"], cwd=str(tmp_path))
+    assert res is True
+    assert mock_run.called
+
+
+def test_get_default_aider_model() -> None:
+    """config/models.json からモデル名を正常取得できることを検証する。"""
+    from tools.aider_runner import get_default_aider_model
+    model = get_default_aider_model()
+    assert isinstance(model, str)
+    assert len(model) > 0
 
 
 @patch("subprocess.run")
@@ -74,3 +85,4 @@ def test_run_aider_sanitizes_ollama_api_base_v1_suffix(mock_run: MagicMock, monk
     assert mock_run.called
     env_passed = mock_run.call_args[1]["env"]
     assert env_passed["OLLAMA_API_BASE"] == "http://localhost:11434"
+

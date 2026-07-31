@@ -536,19 +536,53 @@ def lint_node(state: GraphState) -> GraphState:
 
 def run_pytest_node(state: GraphState) -> GraphState:
     """Pytest による単体テストを実行するノード (DD-003 §4)。
+    pytest-json-report を使用してテスト結果を構造化ログとしてパースし Aider へフィードバックする。
     例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
     logger.info("Executing test_node (Pytest)")
     cwd = state.get("cwd")
+    report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
     try:
-        res = run_cmd(["pytest"], cwd=cwd, timeout=300)
-        state["test_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
+        # pytest-json-report オプションを付加して実行
+        cmd = ["pytest", "--json-report", f"--json-report-file={report_file}"]
+        res = run_cmd(cmd, cwd=cwd, timeout=300)
+
+        # JSON レポートのパース
+        report_data = None
+        failed_details = []
+        if report_file.exists():
+            try:
+                with open(report_file, "r", encoding="utf-8") as f:
+                    report_data = json.load(f)
+
+                tests = report_data.get("tests", [])
+                for t in tests:
+                    if t.get("outcome") == "failed":
+                        nodeid = t.get("nodeid", "unknown_test")
+                        call_info = t.get("call", {})
+                        longrepr = call_info.get("longrepr", "") or t.get("setup", {}).get("longrepr", "")
+                        failed_details.append(f"FAILED {nodeid}:\n{longrepr}")
+            except Exception as pe:
+                logger.warning(f"Failed to parse pytest json report: {pe}")
+
+        state["test_result"] = {
+            "returncode": res.returncode,
+            "stdout": res.stdout,
+            "stderr": res.stderr,
+            "report_summary": report_data.get("summary") if report_data else None,
+        }
+
         if res.returncode == 0:
             state["status"] = "test_passed"
         else:
             state["test_round"] = state.get("test_round", 0) + 1
             state["error_category"] = "TEST_ERROR"
-            state["aider_message"] = f"Pytest failed:\n{res.stdout}"
+            if failed_details:
+                formatted_failures = "\n\n".join(failed_details[:5]) # 上位5件の失敗詳細
+                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}"
+            else:
+                state["aider_message"] = f"Pytest failed:\n{res.stdout}"
+
             if state["test_round"] >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
@@ -558,6 +592,12 @@ def run_pytest_node(state: GraphState) -> GraphState:
         state["status"] = "FAILED_SYSTEM"
         state["error_category"] = "SYSTEM_ERROR"
         state["error"] = str(e)
+    finally:
+        if report_file.exists():
+            try:
+                report_file.unlink()
+            except Exception:
+                pass
     return state
 
 
@@ -798,19 +838,24 @@ def done_node(state: GraphState) -> GraphState:
                 state["error"] = f"Git push failed: {push_res.stderr}"
                 return state
 
-        # 4. PR の作成
-        pr_res = run_cmd(
-            ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
-             "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
-            cwd=cwd, timeout=180
-        )
-        if pr_res.returncode == 0:
-            state["status"] = "COMPLETED"
+            # 4. PR の作成 (is_in_git_workspace ブロック内かつ Push 成功時のみ実行)
+            pr_res = run_cmd(
+                ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
+                 "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
+                cwd=cwd, timeout=180
+            )
+            if pr_res.returncode == 0:
+                state["status"] = "COMPLETED"
+            else:
+                logger.warning(f"PR creation failed: {pr_res.stderr}")
+                state["status"] = "PR_FAILED"
+                state["error_category"] = "PR_ERROR"
+                state["error"] = f"PR creation failed: {pr_res.stderr}"
         else:
-            logger.warning(f"PR creation failed: {pr_res.stderr}")
+            logger.error(f"Directory '{cwd}' is not in a valid git workspace for PR creation.")
             state["status"] = "PR_FAILED"
             state["error_category"] = "PR_ERROR"
-            state["error"] = f"PR creation failed: {pr_res.stderr}"
+            state["error"] = f"Directory '{cwd}' is not in a valid git workspace"
     except Exception as e:
         logger.warning(f"Error in done_node: {e}")
         state["status"] = "PR_FAILED"
@@ -930,7 +975,26 @@ def execute_issue(
 
                     head_branch = f"sbos/{issue_id}"
                     sw_head = run_cmd(["git", "switch", head_branch], cwd=cwd, timeout=60)
-                    if sw_head.returncode != 0:
+                    if sw_head.returncode == 0:
+                        # 既存作業ブランチ再開時のベース追従 (git rebase base_branch)
+                        rebase_res = run_cmd(["git", "rebase", base_branch], cwd=cwd, timeout=120)
+                        if rebase_res.returncode != 0:
+                            run_cmd(["git", "rebase", "--abort"], cwd=cwd, timeout=60)
+                            logger.error(f"git rebase {base_branch} failed: {rebase_res.stderr}")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"git rebase {base_branch} failed: {rebase_res.stderr}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
+                    else:
                         sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
                         if sw_c.returncode != 0:
                             logger.error(f"git switch -c {head_branch} failed: {sw_c.stderr}")

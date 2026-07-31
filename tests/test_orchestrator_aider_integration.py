@@ -206,6 +206,14 @@ def test_done_node_handles_git_failures() -> None:
             assert res["error_category"] == "PR_ERROR"
             assert "PR creation failed" in str(res["error"])
 
+    # 8. Non-git workspace handles PR creation gracefully
+    with patch("tools.orchestrator_graph.is_in_git_workspace", return_value=False):
+        res = done_node(state.copy())
+        assert res["status"] == "PR_FAILED"
+        assert res["error_category"] == "PR_ERROR"
+        assert "not in a valid git workspace" in str(res["error"])
+
+
 
 def test_spec_draft_node_timeout_retry() -> None:
     """Verify that spec_draft_node routes timeout to retry_spec_draft on 1st timeout and FAILED_SYSTEM on 2nd timeout."""
@@ -605,3 +613,106 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
     saved_data = json.loads(state_file.read_text(encoding="utf-8"))
     assert saved_data[issue_id]["status"] == "FAILED_SYSTEM"
     assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"
+
+
+def test_run_pytest_node_json_report_parsing(tmp_path: Path) -> None:
+    """Verify that run_pytest_node executes pytest with --json-report and parses failures for Aider feedback."""
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_pytest_json",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/test.py"],
+        instruction="Fix bug",
+        cwd=str(tmp_path),
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict=None,
+        review_comments=None,
+        review_rounds=[],
+        reviewdog_result=None,
+        history_summary=None,
+        rdjson=None,
+    )
+
+    report_content = {
+        "summary": {"failed": 1, "passed": 0, "total": 1},
+        "tests": [
+            {
+                "nodeid": "tests/test_foo.py::test_bar",
+                "outcome": "failed",
+                "call": {"longrepr": "AssertionError: expected True got False"},
+            }
+        ],
+    }
+    report_file = tmp_path / ".report.json"
+    report_file.write_text(json.dumps(report_content), encoding="utf-8")
+
+    with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=1, stdout="Failed", stderr="")):
+        res = run_pytest_node(state)
+        assert res["status"] == "retry_code"
+        assert res["error_category"] == "TEST_ERROR"
+        assert "AssertionError: expected True got False" in res["aider_message"]
+        assert "tests/test_foo.py::test_bar" in res["aider_message"]
+
+
+def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
+    """Verify that execute_issue performs git rebase base_branch when switching to an existing work branch."""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    history_file = project_root / "tools" / ".cache" / "execution_history.json"
+    project_key = "TFG"
+    issue_id = "TFG-0004"
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    target_file = sat_dir / "src" / "grep" / "office_parser.py"
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("# Target file", encoding="utf-8")
+
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+    (meta_tfg / "project.json").write_text(
+        json.dumps({"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}),
+        encoding="utf-8"
+    )
+
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.write_text(
+        json.dumps({"projects": {"TFG": {"name": "test_file_grep", "dir": "projects/test_file_grep", "meta": "metadata/projects/TFG"}}}),
+        encoding="utf-8",
+    )
+
+    # Simulate git switch head_branch returning 0 (existing branch), but git rebase base_branch returning 1 (rebase conflict)
+    cmd_responses = [
+        MagicMock(returncode=0, stdout=""), # git status --porcelain (clean)
+        MagicMock(returncode=0, stdout=""), # git switch develop
+        MagicMock(returncode=0, stdout=""), # git pull --ff-only origin develop
+        MagicMock(returncode=0, stdout=""), # git switch sbos/TFG-0004 (existing branch!)
+        MagicMock(returncode=1, stderr="Rebase conflict"), # git rebase develop (failed!)
+        MagicMock(returncode=0, stdout=""), # git rebase --abort
+    ]
+
+    with patch.object(ProjectLockManager, "_acquire_lock"), \
+         patch.object(ProjectLockManager, "_release_lock"), \
+         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True), \
+         patch("tools.orchestrator_graph.run_cmd", side_effect=cmd_responses):
+
+        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
+
+    state_file = metadata_dir / "projects" / project_key / "state.json"
+    saved_data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert saved_data[issue_id]["status"] == "FAILED_SYSTEM"
+    assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"
+
