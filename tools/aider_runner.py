@@ -52,7 +52,21 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
         if res.returncode != 0:
             err_msg = res.stderr.lower()
             if "bad revision" in err_msg or "ambiguous argument 'head'" in err_msg or "unknown revision" in err_msg:
-                fallback_res = subprocess.run(
+                # Fallback for initial commit (no HEAD)
+                # Capture both staged and unstaged changes since 'git diff HEAD' is unavailable.
+                diffs = []
+                cached_res = subprocess.run(
+                    ["git", "diff", "--cached"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                if cached_res.returncode == 0 and cached_res.stdout:
+                    diffs.append(cached_res.stdout)
+                
+                unstaged_res = subprocess.run(
                     ["git", "diff"],
                     cwd=cwd,
                     capture_output=True,
@@ -60,8 +74,11 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
                     check=False,
                     timeout=60,
                 )
-                if fallback_res.returncode == 0:
-                    return fallback_res.stdout
+                if unstaged_res.returncode == 0 and unstaged_res.stdout:
+                    diffs.append(unstaged_res.stdout)
+                
+                if cached_res.returncode == 0 and unstaged_res.returncode == 0:
+                    return "\n".join(diffs)
             raise GitDiffError(f"git diff command failed with returncode {res.returncode}: {res.stderr}")
         return res.stdout
     except Exception as e:

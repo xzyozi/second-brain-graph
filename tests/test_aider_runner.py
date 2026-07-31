@@ -88,15 +88,17 @@ def test_run_aider_sanitizes_ollama_api_base_v1_suffix(mock_run: MagicMock, monk
 
 
 def test_get_git_diff_bad_revision_fallback() -> None:
-    """HEAD コミットがない新規リポジトリで git diff HEAD が失敗した際、git diff へフォールバックすることを検証する。"""
+    """HEAD コミットがない新規リポジトリで git diff HEAD が失敗した際、git diff --cached と git diff へフォールバックすることを検証する。"""
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [
             MagicMock(returncode=128, stderr="fatal: bad revision 'HEAD'"),
-            MagicMock(returncode=0, stdout="diff --git a/new_file.py b/new_file.py"),
+            MagicMock(returncode=0, stdout="diff --git a/staged.py b/staged.py"),
+            MagicMock(returncode=0, stdout="diff --git a/unstaged.py b/unstaged.py"),
         ]
         diff = get_git_diff(cwd=".")
-        assert "diff --git" in diff
-        assert mock_run.call_count == 2
+        assert "a/staged.py" in diff
+        assert "a/unstaged.py" in diff
+        assert mock_run.call_count == 3
 
 
 @patch("subprocess.run")
