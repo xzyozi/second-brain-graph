@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """tools/llama_backend.py - llama.cpp (llama-server) の動的制御モジュール."""
 
-from contextlib import contextmanager
 import logging
 import socket
 import subprocess
 import time
-from typing import Generator
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+from typing import Generator
 
 logger = logging.getLogger("llama_backend")
 
@@ -59,7 +59,7 @@ def managed_llama_server(
     max_retries = 60
     ready = False
 
-    for i in range(max_retries):
+    for _i in range(max_retries):
         try:
             req = urllib.request.urlopen(health_url, timeout=2)
             if req.getcode() == 200:

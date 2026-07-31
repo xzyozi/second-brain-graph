@@ -2,15 +2,15 @@
 """tools/backend_coordinator.py - LLMバックエンドの排他併用を管理するCoordinator."""
 
 import contextlib
-from functools import lru_cache
 import json
 import logging
 import os
-from pathlib import Path
 import time
-from typing import Any, Callable, Dict, Iterator, Optional, Union
 import urllib.error
 import urllib.request
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterator, Optional, Union
 
 from filelock import FileLock, Timeout
 
@@ -68,9 +68,9 @@ class GpuLeaseAdapter:
             logger.info("Waiting for GPU lease...")
             self.lock.acquire()
             logger.info("GPU lease acquired.")
-        except Timeout:
+        except Timeout as e:
             logger.error("Failed to acquire GPU lease within timeout.")
-            raise TimeoutError(f"Failed to acquire GPU lease within {self.timeout} seconds.")
+            raise TimeoutError(f"Failed to acquire GPU lease within {self.timeout} seconds.") from e
 
     def release(self) -> None:
         """

@@ -1,7 +1,7 @@
 """Configuration Loader for Second Brain OS Model Management."""
 
-from functools import lru_cache
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
@@ -85,7 +85,7 @@ def load_model_config() -> RootConfig:
             data = json.load(f)
             return RootConfig.model_validate(data)
     except Exception as e:
-        raise RuntimeError(f"Failed to parse or validate config from {config_path}: {e}")
+        raise RuntimeError(f"Failed to parse or validate config from {config_path}: {e}") from e
 
 
 def get_model_params(role: str) -> Dict[str, Any]:

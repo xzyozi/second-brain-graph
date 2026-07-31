@@ -5,18 +5,19 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from tools.aider_runner import AiderRunError
 from tools.orchestrator_graph import (
     GraphState,
     ProjectLockManager,
     cmd_orchestrate,
     code_node,
+    done_node,
     execute_issue,
     lint_node,
     review_node,
     run_pytest_node,
     spec_draft_node,
-    update_task_state,
     validate_issue_id,
     validate_project_consistency,
 )
@@ -35,8 +36,8 @@ def test_validate_issue_id_format() -> None:
     assert validate_issue_id("TFG0004") is False
 
 
-def test_validate_project_consistency_mismatch(tmp_path: Path) -> None:
-    """Verify that validate_project_consistency rejects ID range anomalies and project key mismatches before side-effects."""
+def test_validate_project_consistency_mismatch_and_missing_metadata(tmp_path: Path) -> None:
+    """Verify that validate_project_consistency rejects ID range anomalies, project key mismatches, and missing registry/meta/project.json."""
     metadata_dir = tmp_path / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +48,66 @@ def test_validate_project_consistency_mismatch(tmp_path: Path) -> None:
     # 2. Issue ID prefix vs project_key mismatch
     with pytest.raises(ValueError, match="Project key mismatch"):
         validate_project_consistency("EC-0001", "MOB", metadata_dir=metadata_dir, project_root=tmp_path)
+
+    # 3. Missing registry
+    with pytest.raises(ValueError, match="registry file"):
+        validate_project_consistency("TFG-0004", "TFG", metadata_dir=metadata_dir, project_root=tmp_path)
+
+    # 4. Registry missing project
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.write_text(json.dumps({"projects": {}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="is not registered"):
+        validate_project_consistency("TFG-0004", "TFG", metadata_dir=metadata_dir, project_root=tmp_path)
+
+
+def test_done_node_handles_git_failures() -> None:
+    """Verify that done_node maps git diff --cached, add, commit, push failures to PR_FAILED / PR_ERROR."""
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_exec_done_001",
+        generation=0,
+        status="review_lgtm",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=1,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/grep/office_parser.py"],
+        instruction="Fix bug",
+        cwd="/tmp/fake_repo",
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict="LGTM",
+        review_comments=[],
+        review_rounds=[],
+        history_summary=None,
+        rdjson=None,
+    )
+
+    with patch("tools.orchestrator_graph.Path") as mock_path:
+        mock_path.return_value.exists.return_value = True
+        mock_path.return_value.__truediv__.return_value.exists.return_value = True
+
+        # 1. git diff --cached returns non-zero code
+        with patch("subprocess.run", return_value=MagicMock(returncode=1, stderr="diff error")):
+            res = done_node(state.copy())
+            assert res["status"] == "PR_FAILED"
+            assert res["error_category"] == "PR_ERROR"
+
+        # 2. git diff --cached non-empty staged changes
+        with patch("subprocess.run", side_effect=[
+            MagicMock(returncode=0, stdout="staged_file.py\n"),
+        ]):
+            res = done_node(state.copy())
+            assert res["status"] == "PR_FAILED"
+            assert res["error_category"] == "PR_ERROR"
+            assert "staged changes" in str(res["error"])
 
 
 def test_spec_draft_node_timeout_retry() -> None:
@@ -285,7 +346,7 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     target_file.parent.mkdir(parents=True, exist_ok=True)
     target_file.write_text("# Target file for test", encoding="utf-8")
 
-    # Setup project registry
+    # Setup project registry & metadata
     meta_tfg = metadata_dir / "projects" / "TFG"
     meta_tfg.mkdir(parents=True, exist_ok=True)
     (meta_tfg / "tasks.md").write_text("- [ ] [TFG-0004] office_parser.py test", encoding="utf-8")
@@ -363,10 +424,17 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
     project_key = "UNK"
     issue_id = "UNK-0001"
 
-    # Registry must include UNK key for validate_project_consistency
+    # Setup valid registry and meta for validate_project_consistency
+    meta_unk = metadata_dir / "projects" / "UNK"
+    meta_unk.mkdir(parents=True, exist_ok=True)
+    (meta_unk / "project.json").write_text(json.dumps({"key": "UNK"}), encoding="utf-8")
+
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.parent.mkdir(parents=True, exist_ok=True)
-    registry_file.write_text(json.dumps({"projects": {"UNK": {"dir": "invalid/dir"}}}), encoding="utf-8")
+    registry_file.write_text(
+        json.dumps({"projects": {"UNK": {"dir": "invalid/dir", "meta": "metadata/projects/UNK"}}}),
+        encoding="utf-8"
+    )
 
     with patch("tools.orchestrator_graph.run_aider") as mock_run_aider:
         execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=tmp_path)
