@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """tools/llama_backend.py - llama.cpp (llama-server) の動的制御モジュール."""
 
-import time
-import subprocess
-import logging
-import urllib.request
-import urllib.error
-import socket
 from contextlib import contextmanager
+import logging
+import socket
+import subprocess
+import time
 from typing import Generator
+import urllib.error
+import urllib.request
 
 logger = logging.getLogger("llama_backend")
 
@@ -46,7 +46,7 @@ def managed_llama_server(
 
     logger.info(f"Starting llama-server dynamically on port {port}...")
     logger.debug(f"Command: {' '.join(cmd)}")
-    
+
     # サーバープロセスの起動 (標準出力・エラー出力は親プロセスに流すか捨てる)
     process = subprocess.Popen(
         cmd,
@@ -58,7 +58,7 @@ def managed_llama_server(
     health_url = f"http://localhost:{port}/health"
     max_retries = 60
     ready = False
-    
+
     for i in range(max_retries):
         try:
             req = urllib.request.urlopen(health_url, timeout=2)
@@ -68,12 +68,12 @@ def managed_llama_server(
                 break
         except (urllib.error.URLError, ConnectionResetError):
             pass
-        
+
         # プロセスが予期せず落ちていないか確認
         if process.poll() is not None:
             logger.error(f"llama-server terminated unexpectedly with exit code {process.returncode}")
             raise RuntimeError("llama-server failed to start.")
-            
+
         time.sleep(2)
 
     if not ready:
@@ -93,7 +93,7 @@ def managed_llama_server(
             logger.warning("llama-server did not terminate gracefully, forcing kill...")
             process.kill()
             process.wait()
-            
+
         # ポート解放を監査 (VRAM解放の確実な担保)
         logger.info("Auditing port release...")
         port_freed = False
@@ -104,9 +104,9 @@ def managed_llama_server(
                     port_freed = True
                     break
             time.sleep(1)
-            
+
         if not port_freed:
             raise RuntimeError(f"llama-server failed to free port {port} after termination.")
-            
+
         logger.info("VRAM has been completely freed.")
 
