@@ -127,10 +127,7 @@ def test_done_node_handles_git_failures() -> None:
         rdjson=None,
     )
 
-    with patch("tools.orchestrator_graph.Path") as mock_path:
-        mock_path.return_value.exists.return_value = True
-        mock_path.return_value.__truediv__.return_value.exists.return_value = True
-
+    with patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True):
         # 1. git diff --cached returns non-zero code
         with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=1, stderr="diff error")):
             res = done_node(state.copy())
@@ -145,6 +142,69 @@ def test_done_node_handles_git_failures() -> None:
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
             assert "staged changes" in str(res["error"])
+
+        # 3. git add returns non-zero code
+        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
+            MagicMock(returncode=0, stdout=""), # diff --cached (first)
+            MagicMock(returncode=1, stderr="add error"), # git add
+        ]):
+            res = done_node(state.copy())
+            assert res["status"] == "PR_FAILED"
+            assert res["error_category"] == "PR_ERROR"
+            assert "git add failed" in str(res["error"])
+
+        # 4. git status returns non-zero code
+        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
+            MagicMock(returncode=0, stdout=""), # diff --cached (first)
+            MagicMock(returncode=0, stdout=""), # git add
+            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
+            MagicMock(returncode=1, stderr="status error"), # git status
+        ]):
+            res = done_node(state.copy())
+            assert res["status"] == "PR_FAILED"
+            assert res["error_category"] == "PR_ERROR"
+            assert "git status failed" in str(res["error"])
+
+        # 5. git commit returns non-zero code
+        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
+            MagicMock(returncode=0, stdout=""), # diff --cached (first)
+            MagicMock(returncode=0, stdout=""), # git add
+            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
+            MagicMock(returncode=0, stdout="M src/grep/office_parser.py\n"), # git status (dirty)
+            MagicMock(returncode=1, stderr="commit error"), # git commit
+        ]):
+            res = done_node(state.copy())
+            assert res["status"] == "PR_FAILED"
+            assert res["error_category"] == "PR_ERROR"
+            assert "git commit failed" in str(res["error"])
+
+        # 6. git push returns non-zero code
+        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
+            MagicMock(returncode=0, stdout=""), # diff --cached (first)
+            MagicMock(returncode=0, stdout=""), # git add
+            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
+            MagicMock(returncode=0, stdout="M src/grep/office_parser.py\n"), # git status (dirty)
+            MagicMock(returncode=0, stdout=""), # git commit
+            MagicMock(returncode=1, stderr="push error"), # git push
+        ]):
+            res = done_node(state.copy())
+            assert res["status"] == "PR_FAILED"
+            assert res["error_category"] == "PR_ERROR"
+            assert "Git push failed" in str(res["error"])
+
+        # 7. gh pr create returns non-zero code
+        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
+            MagicMock(returncode=0, stdout=""), # diff --cached (first)
+            MagicMock(returncode=0, stdout=""), # git add
+            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
+            MagicMock(returncode=0, stdout=""), # git status (clean) - skips commit
+            MagicMock(returncode=0, stdout=""), # git push
+            MagicMock(returncode=1, stderr="pr create error"), # gh pr create
+        ]):
+            res = done_node(state.copy())
+            assert res["status"] == "PR_FAILED"
+            assert res["error_category"] == "PR_ERROR"
+            assert "PR creation failed" in str(res["error"])
 
 
 def test_spec_draft_node_timeout_retry() -> None:
@@ -273,6 +333,8 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
 
 def test_nodes_normalize_exceptions_to_failed_system() -> None:
     """Verify that exceptions in lint_node, test_node, and review_node normalize to FAILED_SYSTEM."""
+    from tools.orchestrator_graph import ProcessTimeoutError
+
     state = GraphState(
         issue_id="TFG-0004",
         project_key="TFG",
@@ -302,6 +364,7 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         rdjson=None,
     )
 
+    # Test RuntimeError
     with patch("tools.orchestrator_graph.run_cmd", side_effect=RuntimeError("Subprocess failed")):
         lint_res = lint_node(state.copy())
         assert lint_res["status"] == "FAILED_SYSTEM"
@@ -310,6 +373,16 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         test_res = run_pytest_node(state.copy())
         assert test_res["status"] == "FAILED_SYSTEM"
         assert test_res["error_category"] == "SYSTEM_ERROR"
+
+    # Test ProcessTimeoutError
+    with patch("tools.orchestrator_graph.run_cmd", side_effect=ProcessTimeoutError("Command timed out after 300 seconds")):
+        lint_res_timeout = lint_node(state.copy())
+        assert lint_res_timeout["status"] == "FAILED_SYSTEM"
+        assert lint_res_timeout["error_category"] == "SYSTEM_ERROR"
+
+        test_res_timeout = run_pytest_node(state.copy())
+        assert test_res_timeout["status"] == "FAILED_SYSTEM"
+        assert test_res_timeout["error_category"] == "SYSTEM_ERROR"
 
 
 def test_review_node_fail_closed_on_git_diff_error() -> None:

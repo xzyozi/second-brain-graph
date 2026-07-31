@@ -37,13 +37,18 @@ logger = logging.getLogger("orchestrator_graph")
 ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
 
 
+class ProcessTimeoutError(Exception):
+    """外部プロセス呼び出し時のタイムアウト例外"""
+    pass
+
+
 def run_cmd(
     cmd: List[str],
     cwd: Optional[str] = None,
     input_str: Optional[str] = None,
     timeout: int = 300,
 ) -> subprocess.CompletedProcess:
-    """外部プロセス呼び出しの一元化ラッパー。タイムアウト時は TimeoutError を送出する。"""
+    """外部プロセス呼び出しの一元化ラッパー。タイムアウト時は ProcessTimeoutError を送出する。"""
     try:
         return subprocess.run(
             cmd,
@@ -54,7 +59,20 @@ def run_cmd(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
-        raise TimeoutError(f"Command '{' '.join(cmd)}' timed out after {timeout} seconds") from e
+        raise ProcessTimeoutError(f"Command '{' '.join(cmd)}' timed out after {timeout} seconds") from e
+
+
+def is_in_git_workspace(cwd: Optional[str]) -> bool:
+    """指定されたディレクトリがGitワークスペース内であるか判定する (モノレポ対応)。"""
+    if not cwd:
+        return False
+    if not Path(cwd).exists():
+        return False
+    try:
+        res = run_cmd(["git", "rev-parse", "--is-inside-work-tree"], cwd=cwd, timeout=10)
+        return res.returncode == 0 and res.stdout.strip() == "true"
+    except Exception:
+        return False
 
 
 def validate_issue_id(issue_id: str) -> bool:
@@ -575,7 +593,8 @@ def review_node(state: GraphState) -> GraphState:
             intent="code_review",
             system_prompt=(
                 "You are a reviewer. You must respond with JSON containing a 'verdict' "
-                "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity)."
+                "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity). "
+                "Ensure that the changes align with the Implementation Plan and report any deviations as structural comments."
             ),
             user_prompt=user_prompt,
             expect_json=True
@@ -641,7 +660,7 @@ def review_node(state: GraphState) -> GraphState:
         state["review_rounds"] = rounds
 
         # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存
-        if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+        if is_in_git_workspace(cwd):
             try:
                 rd_input = json.dumps(state["rdjson"])
                 res_rd = run_cmd(
@@ -654,6 +673,15 @@ def review_node(state: GraphState) -> GraphState:
                     "stderr": res_rd.stderr,
                 }
                 logger.info(f"Reviewdog execution completed with code: {res_rd.returncode}")
+                
+                # Reviewdogがエラーで終了した場合は安全停止する
+                if res_rd.returncode != 0:
+                    logger.error(f"Reviewdog execution failed: {res_rd.stderr}")
+                    state["status"] = "FAILED_SYSTEM"
+                    state["error_category"] = "SYSTEM_ERROR"
+                    state["error"] = f"Reviewdog execution failed with code {res_rd.returncode}: {res_rd.stderr}"
+                    return state
+
             except Exception as rde:
                 logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
                 state["reviewdog_result"] = {"returncode": -1, "stdout": "", "stderr": str(rde)}
@@ -668,7 +696,7 @@ def review_node(state: GraphState) -> GraphState:
             else:
                 state["status"] = "retry_code"
     except Exception as e:
-        if "timeout" in str(e).lower():
+        if "timeout" in str(e).lower() or isinstance(e, ProcessTimeoutError):
             logger.warning(f"Timeout caught in review_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
             state["error_category"] = "LLM_TIMEOUT"
@@ -697,7 +725,7 @@ def done_node(state: GraphState) -> GraphState:
     target_files = state.get("target_files", [])
 
     try:
-        if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+        if is_in_git_workspace(cwd):
             # インデックス混入防止 1: 既存 staged / dirty 変更の有無を確認
             diff_cached = run_cmd(["git", "diff", "--cached", "--name-only"], cwd=cwd, timeout=60)
             if diff_cached.returncode != 0:
@@ -847,7 +875,7 @@ def execute_issue(
 
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
             # 作業ツリーの事前チェック (dirty working tree 拒否)
-            if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+            if is_in_git_workspace(cwd):
                 try:
                     init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
                     if init_status.returncode != 0 or init_status.stdout.strip():
@@ -1084,8 +1112,8 @@ def execute_issue(
             )
             logger.info(f"Execution completed for Issue: {issue_id} with status: {final_status}")
 
-    except TimeoutError:
-        logger.warning(f"Execution skipped for {issue_id} due to lock timeout.")
+    except (ProcessTimeoutError, TimeoutError):
+        logger.warning(f"Execution skipped for {issue_id} due to lock or process timeout.")
         update_task_state(
             project_key,
             issue_id,
