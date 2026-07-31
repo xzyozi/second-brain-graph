@@ -129,7 +129,8 @@ def record_execution_history(
     history_file: Optional[Path] = None,
 ) -> None:
     """tools/.cache/execution_history.json へ実行完了・エスカレーション結果を
-    専用の FileLock 保護のもとアトミックに追記保存する (DD-003 §4.1.1)。
+    DD-003 §4.1.1 監査スキーマ (actual_round = max(...), review_rounds, history_summary)
+    に従って専用の FileLock 保護のもとアトミックに追記保存する。
     """
     if history_file is None:
         history_file = Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
@@ -145,19 +146,31 @@ def record_execution_history(
             except Exception as e:
                 logger.warning(f"Failed to read execution_history.json: {e}")
 
+        lint_round = state.get("lint_round", 0)
+        test_round = state.get("test_round", 0)
+        rev_round = state.get("review_round", review_round)
+        actual_round = max(lint_round, test_round, rev_round)
+
         record = {
             "timestamp": datetime.now().isoformat(),
             "issue_id": state.get("issue_id", "unknown"),
             "project_key": state.get("project_key", "unknown"),
             "project_path": state.get("cwd", "unknown"),
             "final_status": final_status,
-            "review_round": review_round,
+            "actual_round": actual_round,
+            "review_round": rev_round,
             "max_round": state.get("max_round", 3),
-            "lint_round": state.get("lint_round", 0),
-            "test_round": state.get("test_round", 0),
+            "lint_round": lint_round,
+            "test_round": test_round,
             "error_category": state.get("error_category"),
             "error_message": state.get("error"),
             "llm_timeout_count": state.get("llm_timeout_count", 0),
+            "review_rounds": state.get("review_rounds", []),
+            "history_summary": {
+                "lint_passed": state.get("status") in ["lint_passed", "test_passed", "review_lgtm", "COMPLETED"],
+                "test_passed": state.get("status") in ["test_passed", "review_lgtm", "COMPLETED"],
+                "review_verdict": final_status,
+            },
         }
 
         records = history_data.get("records", [])
@@ -284,17 +297,26 @@ class GraphState(TypedDict):
     cwd: Optional[str]
     base_branch: str
     aider_message: str
+    impl_plan: Optional[str]
+    lint_result: Optional[Dict[str, Any]]
+    test_result: Optional[Dict[str, Any]]
+    review_rounds: List[Dict[str, Any]]
+    history_summary: Optional[Dict[str, Any]]
+    rdjson: Optional[Dict[str, Any]]
 
 
 def spec_draft_node(state: GraphState) -> GraphState:
+    """Issue に対する実装方針計画を策定し、impl_plan へ構造保存するノード (DD-003 §4)."""
     logger.info("Executing spec_draft_node")
     from tools.llm_client import call_llm
-    call_llm(
+    res = call_llm(
         role="planner",
         intent="spec_draft",
         system_prompt="You are a planner",
         user_prompt=f"Draft spec for {state['issue_id']}"
     )
+    plan_str = res.get("content", str(res)) if isinstance(res, dict) else str(res)
+    state["impl_plan"] = plan_str
     return state
 
 
@@ -305,8 +327,10 @@ def code_node(state: GraphState) -> GraphState:
     """
     logger.info("Executing code_node with AiderRunner")
     instruction = state.get("instruction", "Apply edits")
+    if state.get("impl_plan"):
+        instruction += f"\n\nImplementation Plan:\n{state['impl_plan']}"
     if state.get("aider_message"):
-        instruction += f"\n\n{state['aider_message']}"
+        instruction += f"\n\nFeedback:\n{state['aider_message']}"
 
     target_files = state.get("target_files", [])
     cwd = state.get("cwd")
@@ -340,6 +364,7 @@ def lint_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
     try:
         res = subprocess.run(["ruff", "check", "."], cwd=cwd, capture_output=True, text=True)
+        state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
             state["status"] = "lint_passed"
         else:
@@ -366,6 +391,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
     try:
         res = subprocess.run(["pytest"], cwd=cwd, capture_output=True, text=True)
+        state["test_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
             state["status"] = "test_passed"
         else:
@@ -386,7 +412,8 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
 def review_node(state: GraphState) -> GraphState:
     """Reviewer LLM 呼び出しノード (DD-003 §4)。
-    プロンプトに Git diff を注入し、応答形式の厳格検証を行う。
+    プロンプトに Git diff を注入し、応答形式の厳格検証、RDJSON (Reviewdog) 連携、
+    および review_rounds 履歴の原子的追記を行う。
     例外発生時または不整合時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
     logger.info("Executing review_node")
@@ -421,10 +448,36 @@ def review_node(state: GraphState) -> GraphState:
         if verdict == "LGTM":
             state["status"] = "review_lgtm"
         else:
-            state["review_round"] = state.get("review_round", 0) + 1
+            rev_round = state.get("review_round", 0) + 1
+            state["review_round"] = rev_round
             state["error_category"] = "REVIEW_REJECTED"
-            state["aider_message"] = f"Review comments:\n{res.get('comments', [])}"
-            if state["review_round"] >= state.get("max_round", 3):
+            rev_comments = res.get("comments", [])
+            state["aider_message"] = f"Review comments:\n{rev_comments}"
+
+            # RDJSON / Reviewdog 連携構造化
+            rd_diagnostics = [
+                {
+                    "message": str(c),
+                    "location": {"path": state.get("target_files", [""])[0], "range": {"start": {"line": 1}}},
+                    "severity": "WARNING",
+                }
+                for c in (rev_comments if isinstance(rev_comments, list) else [rev_comments])
+            ]
+            state["rdjson"] = {
+                "source": {"name": "ReviewerLLM", "url": ""},
+                "diagnostics": rd_diagnostics,
+            }
+
+            rounds = state.get("review_rounds", [])
+            rounds.append({
+                "review_round": rev_round,
+                "verdict": verdict,
+                "comments": rev_comments,
+                "rdjson": state["rdjson"],
+            })
+            state["review_rounds"] = rounds
+
+            if rev_round >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
                 state["status"] = "retry_code"
@@ -451,15 +504,34 @@ def done_node(state: GraphState) -> GraphState:
         if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
             # 1. 明示的な git add
             if target_files:
-                subprocess.run(["git", "add", "--"] + target_files, cwd=cwd, capture_output=True, text=True)
+                add_res = subprocess.run(["git", "add", "--"] + target_files, cwd=cwd, capture_output=True, text=True)
+                if add_res.returncode != 0:
+                    logger.error(f"git add failed: {add_res.stderr}")
+                    state["status"] = "PR_FAILED"
+                    state["error_category"] = "PR_ERROR"
+                    state["error"] = f"git add failed: {add_res.stderr}"
+                    return state
 
             # 2. 未コミット差分の存在確認とコミット
             status_res = subprocess.run(["git", "status", "--porcelain"], cwd=cwd, capture_output=True, text=True)
+            if status_res.returncode != 0:
+                logger.error(f"git status failed: {status_res.stderr}")
+                state["status"] = "PR_FAILED"
+                state["error_category"] = "PR_ERROR"
+                state["error"] = f"git status failed: {status_res.stderr}"
+                return state
+
             if status_res.stdout.strip():
-                subprocess.run(
+                commit_res = subprocess.run(
                     ["git", "commit", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
-                    cwd=cwd, check=True, capture_output=True, text=True
+                    cwd=cwd, capture_output=True, text=True
                 )
+                if commit_res.returncode != 0:
+                    logger.error(f"git commit failed: {commit_res.stderr}")
+                    state["status"] = "PR_FAILED"
+                    state["error_category"] = "PR_ERROR"
+                    state["error"] = f"git commit failed: {commit_res.stderr}"
+                    return state
 
             # 3. リモートへ Push
             push_res = subprocess.run(
@@ -548,25 +620,55 @@ def execute_issue(
             # 作業ブランチ (sbos/<issue-id>) の安全な準備 (git switch / pull) (PM-036)
             if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
                 try:
-                    subprocess.run(
+                    sw_base = subprocess.run(
                         ["git", "switch", base_branch],
-                        cwd=cwd, check=True, capture_output=True, text=True
+                        cwd=cwd, capture_output=True, text=True
                     )
-                    try:
-                        subprocess.run(
-                            ["git", "pull", "--ff-only", "origin", base_branch],
-                            cwd=cwd, capture_output=True, text=True
+                    if sw_base.returncode != 0:
+                        logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
+                        update_task_state(
+                            project_key, issue_id, status="FAILED_SYSTEM",
+                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
                         )
-                    except Exception:
-                        pass  # remote may not exist in test env
+                        record_execution_history(
+                            {
+                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                "error_category": "SYSTEM_ERROR",
+                                "error": f"git switch {base_branch} failed: {sw_base.stderr}",
+                            },
+                            final_status="FAILED_SYSTEM", history_file=history_file
+                        )
+                        return
+
+                    pull_res = subprocess.run(
+                        ["git", "pull", "--ff-only", "origin", base_branch],
+                        cwd=cwd, capture_output=True, text=True
+                    )
+                    if pull_res.returncode != 0:
+                        logger.warning(f"git pull --ff-only failed (or remote not set): {pull_res.stderr}")
 
                     head_branch = f"sbos/{issue_id}"
-                    sw_res = subprocess.run(["git", "switch", head_branch], cwd=cwd, capture_output=True, text=True)
-                    if sw_res.returncode != 0:
-                        subprocess.run(
+                    sw_head = subprocess.run(["git", "switch", head_branch], cwd=cwd, capture_output=True, text=True)
+                    if sw_head.returncode != 0:
+                        sw_c = subprocess.run(
                             ["git", "switch", "-c", head_branch, base_branch],
-                            cwd=cwd, check=True, capture_output=True, text=True
+                            cwd=cwd, capture_output=True, text=True
                         )
+                        if sw_c.returncode != 0:
+                            logger.error(f"git switch -c {head_branch} failed: {sw_c.stderr}")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"git switch -c failed: {sw_c.stderr}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
                 except Exception as ge:
                     logger.error(f"Failed git branch setup in {cwd}: {ge}")
                     update_task_state(
@@ -684,13 +786,19 @@ def execute_issue(
                     cwd=cwd,
                     base_branch=base_branch,
                     aider_message="",
+                    impl_plan=None,
+                    lint_result=None,
+                    test_result=None,
+                    review_rounds=[],
+                    history_summary=None,
+                    rdjson=None,
                 )
                 final_state = app.invoke(initial_state)
 
                 final_status = final_state.get("status", "COMPLETED")
                 error_cat = final_state.get("error_category")
 
-                # アトミックに state.json 更新および execution_history.json 追記保存 (DD-003 §4.1.1)
+                # 1. アトミックに state.json 更新
                 update_task_state(
                     project_key,
                     issue_id,
@@ -700,12 +808,17 @@ def execute_issue(
                     error_category=error_cat,
                     metadata_dir=metadata_dir,
                 )
-                record_execution_history(
-                    final_state,
-                    final_status=final_status,
-                    review_round=final_state.get("review_round", 0),
-                    history_file=history_file,
-                )
+                # 2. 確定済ステートを保護しつつ execution_history.json 追記保存
+                try:
+                    record_execution_history(
+                        final_state,
+                        final_status=final_status,
+                        review_round=final_state.get("review_round", 0),
+                        history_file=history_file,
+                    )
+                except Exception as he:
+                    logger.warning(f"Failed to record execution history, keeping final state {final_status}: {he}")
+
                 logger.info(f"Execution completed for Issue: {issue_id} with status: {final_status}")
 
             except Exception as e:
@@ -717,17 +830,20 @@ def execute_issue(
                     error_category="SYSTEM_ERROR",
                     metadata_dir=metadata_dir,
                 )
-                record_execution_history(
-                    {
-                        "issue_id": issue_id,
-                        "project_key": project_key,
-                        "cwd": cwd,
-                        "error_category": "SYSTEM_ERROR",
-                        "error": str(e),
-                    },
-                    final_status="FAILED_SYSTEM",
-                    history_file=history_file,
-                )
+                try:
+                    record_execution_history(
+                        {
+                            "issue_id": issue_id,
+                            "project_key": project_key,
+                            "cwd": cwd,
+                            "error_category": "SYSTEM_ERROR",
+                            "error": str(e),
+                        },
+                        final_status="FAILED_SYSTEM",
+                        history_file=history_file,
+                    )
+                except Exception:
+                    pass
 
     except TimeoutError:
         logger.warning(f"Execution skipped for {issue_id} due to lock timeout.")
@@ -738,17 +854,20 @@ def execute_issue(
             error_category="LOCKED",
             metadata_dir=metadata_dir,
         )
-        record_execution_history(
-            {
-                "issue_id": issue_id,
-                "project_key": project_key,
-                "cwd": cwd,
-                "error_category": "LOCKED",
-                "error": "Failed to acquire lock within timeout",
-            },
-            final_status="SKIPPED_LOCKED",
-            history_file=history_file,
-        )
+        try:
+            record_execution_history(
+                {
+                    "issue_id": issue_id,
+                    "project_key": project_key,
+                    "cwd": cwd,
+                    "error_category": "LOCKED",
+                    "error": "Failed to acquire lock within timeout",
+                },
+                final_status="SKIPPED_LOCKED",
+                history_file=history_file,
+            )
+        except Exception:
+            pass
         write_event(
             project_key,
             {
@@ -762,6 +881,40 @@ def execute_issue(
     except Exception as e:
         logger.error(f"Unexpected error outside lock for {issue_id}: {e}")
         raise
+
+
+def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path] = None) -> None:
+    """tools/.cache/priority-cache.json を読み込み、未完了 Issue の上位3件および提案を表示する (DD-003 §5, §6)."""
+    if cache_file is None:
+        cache_file = Path(__file__).resolve().parent.parent / "tools" / ".cache" / "priority-cache.json"
+    logger.info(f"Orchestrating uncompleted issues (project_key: {project_key or 'ALL'})")
+
+    if not cache_file.exists():
+        logger.info("Priority cache file does not exist. Please run priority cache generator.")
+        return
+
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            cdata = json.load(f)
+        tasks = cdata.get("tasks", [])
+        if project_key:
+            tasks = [t for t in tasks if t.get("project_key") == project_key]
+
+        if not tasks:
+            logger.info("No uncompleted tasks found in priority cache.")
+            return
+
+        sorted_tasks = sorted(tasks, key=lambda x: x.get("score", 0), reverse=True)
+        top_tasks = sorted_tasks[:3]
+
+        logger.info("=== Top 3 Priority Issues ===")
+        for idx, task in enumerate(top_tasks, 1):
+            logger.info(f"[{idx}] ID: {task.get('issue_id')} | Title: {task.get('title')} | Score: {task.get('score')}")
+
+        top_issue = top_tasks[0].get("issue_id")
+        logger.info(f"Suggested Command: python tools/orchestrator_graph.py execute --issue-id {top_issue}")
+    except Exception as e:
+        logger.error(f"Failed to read priority cache: {e}")
 
 
 def main() -> None:
@@ -787,16 +940,8 @@ def main() -> None:
             sys.exit(1)
         execute_issue(issue_id, project_key)
     elif args.subcommand == "orchestrate":
-        project_key = args.project_key
-        logger.info(f"Orchestrating uncompleted issues for project_key: {project_key or 'ALL'}")
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-        registry_file = metadata_dir / ".project-registry.json"
-        if registry_file.exists():
-            with open(registry_file, "r", encoding="utf-8") as f:
-                reg = json.load(f)
-            logger.info(f"Registered projects in registry: {list(reg.get('projects', {}).keys())}")
+        cmd_orchestrate(args.project_key)
     else:
-        # 互換性のためフラグ引数での直接呼び出しもサポート
         legacy_parser = argparse.ArgumentParser()
         legacy_parser.add_argument("--issue-id", help="Target Issue ID")
         legacy_parser.add_argument("--project-key", help="Target Project Key")

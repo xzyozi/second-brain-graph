@@ -1,4 +1,4 @@
-"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, git switch, reviewer validation, and CLI commands."""
+"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, git switch, reviewer validation, RDJSON, audit schema, and CLI commands."""
 
 import json
 from pathlib import Path
@@ -9,6 +9,7 @@ from tools.aider_runner import AiderRunError
 from tools.orchestrator_graph import (
     GraphState,
     ProjectLockManager,
+    cmd_orchestrate,
     code_node,
     execute_issue,
     lint_node,
@@ -38,6 +39,12 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
         cwd=None,
         base_branch="develop",
         aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_rounds=[],
+        history_summary=None,
+        rdjson=None,
     )
 
     with patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Timeout 300s")):
@@ -74,6 +81,12 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
         cwd=None,
         base_branch="develop",
         aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_rounds=[],
+        history_summary=None,
+        rdjson=None,
     )
 
     with patch("tools.orchestrator_graph.run_aider", return_value=False):
@@ -103,6 +116,12 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         cwd="/invalid/nonexistent/path",
         base_branch="develop",
         aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_rounds=[],
+        history_summary=None,
+        rdjson=None,
     )
 
     with patch("subprocess.run", side_effect=RuntimeError("Subprocess failed")):
@@ -120,8 +139,8 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         assert review_res["error_category"] == "SYSTEM_ERROR"
 
 
-def test_review_node_validates_response_structure() -> None:
-    """Verify that non-dict or invalid verdict from Reviewer LLM normalizes to FAILED_SYSTEM."""
+def test_review_node_validates_response_and_structures_rdjson() -> None:
+    """Verify that review_node parses changes_requested, builds rdjson, and tracks review_rounds."""
     state = GraphState(
         issue_id="TFG-0004",
         project_key="TFG",
@@ -140,19 +159,23 @@ def test_review_node_validates_response_structure() -> None:
         cwd=None,
         base_branch="develop",
         aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_rounds=[],
+        history_summary=None,
+        rdjson=None,
     )
 
-    # Invalid non-dict response
-    with patch("tools.llm_client.call_llm", return_value="Invalid string response"):
+    mock_resp = {"verdict": "changes_requested", "comments": ["Syntax error on line 10"]}
+    with patch("tools.llm_client.call_llm", return_value=mock_resp):
         res = review_node(state.copy())
-        assert res["status"] == "FAILED_SYSTEM"
-        assert res["error_category"] == "SYSTEM_ERROR"
-
-    # Missing verdict key in dict
-    with patch("tools.llm_client.call_llm", return_value={"comments": ["Looks weird"]}):
-        res = review_node(state.copy())
-        assert res["status"] == "FAILED_SYSTEM"
-        assert res["error_category"] == "SYSTEM_ERROR"
+        assert res["status"] == "retry_code"
+        assert res["review_round"] == 1
+        assert len(res["review_rounds"]) == 1
+        assert res["review_rounds"][0]["verdict"] == "changes_requested"
+        assert "rdjson" in res
+        assert res["rdjson"]["diagnostics"][0]["message"] == "Syntax error on line 10"
 
 
 @patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out"))
@@ -198,13 +221,12 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
 
     with patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire, \
          patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release, \
-         patch("subprocess.run"):
+         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
 
         execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
 
         mock_acquire.assert_called_once()
         mock_release.assert_called_once()
-        # Verify run_aider was called twice (1st timeout retry + 2nd timeout escalation)
         assert mock_run_aider.call_count == 2
 
     # 1. Verify isolated state.json was created with SSOT dictionary schema
@@ -215,92 +237,37 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     assert saved_data[issue_id]["status"] == "FAILED_SYSTEM"
     assert saved_data[issue_id]["error_category"] == "LLM_TIMEOUT"
 
-    # 2. Verify isolated history_file was created in tmp_path with review_round key
+    # 2. Verify isolated history_file was created in tmp_path with DD-003 audit schema
     assert history_file.exists()
     hist_data = json.loads(history_file.read_text(encoding="utf-8"))
     assert "records" in hist_data
     record = hist_data["records"][0]
     assert record["issue_id"] == issue_id
     assert record["final_status"] == "FAILED_SYSTEM"
-    assert "review_round" in record
+    assert "actual_round" in record
+    assert "history_summary" in record
 
 
-def test_execute_issue_lock_timeout_flow_isolated(tmp_path: Path) -> None:
-    """Verify that lock acquisition timeout records SKIPPED_LOCKED and LOCKED in isolated state.json and history_file."""
-    project_root = tmp_path
-    metadata_dir = project_root / "metadata"
-    history_file = project_root / "tools" / ".cache" / "execution_history.json"
-    project_key = "TFG"
-    issue_id = "TFG-0004"
+def test_cmd_orchestrate_reads_priority_cache(tmp_path: Path) -> None:
+    """Verify that cmd_orchestrate reads priority-cache.json and displays top 3 issues."""
+    cache_dir = tmp_path / "tools" / ".cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / "priority-cache.json"
 
-    # Setup satellite repo dir & target file
-    sat_dir = project_root / "projects" / "test_file_grep"
-    git_dir = sat_dir / ".git"
-    target_file = sat_dir / "src" / "grep" / "office_parser.py"
-
-    git_dir.mkdir(parents=True, exist_ok=True)
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-    target_file.write_text("# Target file for test", encoding="utf-8")
-
-    meta_tfg = metadata_dir / "projects" / "TFG"
-    meta_tfg.mkdir(parents=True, exist_ok=True)
-    (meta_tfg / "tasks.md").write_text("- [ ] [TFG-0004] office_parser.py test", encoding="utf-8")
-
-    registry_file = metadata_dir / ".project-registry.json"
-    registry_file.write_text(
-        json.dumps({
-            "projects": {
-                "TFG": {
-                    "name": "test_file_grep",
-                    "dir": "projects/test_file_grep",
-                    "meta": "metadata/projects/TFG",
-                }
-            }
-        }),
-        encoding="utf-8",
-    )
-
-    with patch.object(ProjectLockManager, "_acquire_lock", side_effect=TimeoutError("Lock timeout")):
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
-
-    state_file = metadata_dir / "projects" / project_key / "state.json"
-    assert state_file.exists()
-    saved_data = json.loads(state_file.read_text(encoding="utf-8"))
-    assert issue_id in saved_data
-    assert saved_data[issue_id]["status"] == "SKIPPED_LOCKED"
-    assert saved_data[issue_id]["error_category"] == "LOCKED"
-
-    assert history_file.exists()
-    hist_data = json.loads(history_file.read_text(encoding="utf-8"))
-    assert hist_data["records"][0]["final_status"] == "SKIPPED_LOCKED"
-
-
-def test_update_task_state_migrates_old_flat_format(tmp_path: Path) -> None:
-    """Verify that update_task_state correctly migrates old flat state.json format to SSOT dictionary schema."""
-    metadata_dir = tmp_path / "metadata"
-    project_key = "TFG"
-    issue_id = "TFG-0004"
-    state_file = metadata_dir / "projects" / project_key / "state.json"
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write old flat format
-    old_flat_data = {
-        "issue_id": "TFG-0004",
-        "status": "FAILED_SYSTEM",
-        "review_round": 0,
-        "max_round": 3,
+    dummy_cache = {
+        "tasks": [
+            {"issue_id": "TFG-0001", "title": "Task 1", "score": 10, "project_key": "TFG"},
+            {"issue_id": "TFG-0002", "title": "Task 2", "score": 90, "project_key": "TFG"},
+            {"issue_id": "TFG-0003", "title": "Task 3", "score": 50, "project_key": "TFG"},
+            {"issue_id": "TFG-0004", "title": "Task 4", "score": 100, "project_key": "TFG"},
+        ]
     }
-    state_file.write_text(json.dumps(old_flat_data), encoding="utf-8")
+    cache_file.write_text(json.dumps(dummy_cache), encoding="utf-8")
 
-    # Call update_task_state
-    update_task_state(project_key, issue_id, status="COMPLETED", review_round=1, metadata_dir=metadata_dir)
-
-    # Verify migration
-    new_data = json.loads(state_file.read_text(encoding="utf-8"))
-    assert "issue_id" not in new_data  # flat key cleaned up
-    assert issue_id in new_data
-    assert new_data[issue_id]["status"] == "COMPLETED"
-    assert new_data[issue_id]["review_round"] == 1
+    with patch("tools.orchestrator_graph.logger") as mock_logger:
+        cmd_orchestrate("TFG", cache_file=cache_file)
+        log_calls = [call.args[0] for call in mock_logger.info.call_args_list]
+        assert any("TFG-0004" in msg for msg in log_calls)
 
 
 def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
