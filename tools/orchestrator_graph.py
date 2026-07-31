@@ -826,9 +826,9 @@ def done_node(state: GraphState) -> GraphState:
                     state["error"] = f"git commit failed: {commit_res.stderr}"
                     return state
 
-            # 3. リモートへ Push
+            # 3. リモートへ Push (--force-with-lease を追加し rebase 後の Push 競合を防止)
             push_res = run_cmd(
-                ["git", "push", "-u", "origin", head_branch],
+                ["git", "push", "--force-with-lease", "-u", "origin", head_branch],
                 cwd=cwd, timeout=180
             )
             if push_res.returncode != 0:
