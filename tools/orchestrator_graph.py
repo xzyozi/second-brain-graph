@@ -34,12 +34,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger("orchestrator_graph")
 
-ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-\d{4}(-[A-Z])?$")
+ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
 
 
 def validate_issue_id(issue_id: str) -> bool:
-    """Issue ID の形式を正規表現で検証する (MULTI-001 §2②・§4)."""
+    """Issue ID の形式および連番範囲 (0001〜9999) を検証する (MULTI-001 §2②・§4)."""
     return bool(ISSUE_ID_PATTERN.match(issue_id))
+
+
+def validate_project_consistency(
+    issue_id: str,
+    project_key: str,
+    metadata_dir: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+) -> None:
+    """Issue ID 形式、プレフィックス、CLI project_key、台帳キー、
+    project.json["key"] の整合性を検証する (MULTI-001 §2②・§4)。
+    """
+    if not validate_issue_id(issue_id):
+        raise ValueError(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001' (range 0001-9999).")
+
+    prefix = issue_id.split("-")[0]
+    if prefix != project_key:
+        raise ValueError(
+            f"Project key mismatch: Issue ID prefix '{prefix}' does not match project_key '{project_key}'."
+        )
+
+    if metadata_dir is None:
+        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+
+    reg_file = metadata_dir / ".project-registry.json"
+    if reg_file.exists():
+        with open(reg_file, "r", encoding="utf-8") as f:
+            reg = json.load(f)
+        if project_key not in reg.get("projects", {}):
+            raise ValueError(f"Project key '{project_key}' is not registered in .project-registry.json.")
+
+        meta_rel = reg["projects"][project_key].get("meta")
+        if meta_rel:
+            proj_json = project_root / meta_rel / "project.json"
+            if proj_json.exists():
+                with open(proj_json, "r", encoding="utf-8") as pf:
+                    pdata = json.load(pf)
+                    pkey = pdata.get("key")
+                    if pkey and pkey != project_key:
+                        raise ValueError(
+                            f"Project key mismatch in project.json: expected '{project_key}', got '{pkey}'."
+                        )
 
 
 class ProjectLockManager:
@@ -351,7 +394,7 @@ def spec_draft_node(state: GraphState) -> GraphState:
             if state["llm_timeout_count"] >= 2:
                 state["status"] = "FAILED_SYSTEM"
             else:
-                state["status"] = "retry_code"
+                state["status"] = "retry_spec_draft"
         else:
             logger.error(f"Error in spec_draft_node: {e}")
             state["status"] = "FAILED_SYSTEM"
@@ -547,7 +590,7 @@ def review_node(state: GraphState) -> GraphState:
             if state["llm_timeout_count"] >= 2:
                 state["status"] = "FAILED_SYSTEM"
             else:
-                state["status"] = "retry_code"
+                state["status"] = "retry_review"
         else:
             logger.error(f"Error in review_node: {e}")
             state["status"] = "FAILED_SYSTEM"
@@ -663,10 +706,8 @@ def execute_issue(
     project_root: Optional[Path] = None,
     allow_offline_git: bool = True,
 ) -> None:
-    # 規約準拠の Issue ID 正規表現検証
-    if not validate_issue_id(issue_id):
-        logger.error(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001'.")
-        raise ValueError(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001'.")
+    # 規約準拠の Issue ID 範囲およびプロジェクトキー整合検証
+    validate_project_consistency(issue_id, project_key, metadata_dir=metadata_dir, project_root=project_root)
 
     execution_id = uuid.uuid4().hex
     logger.info(f"Starting execution for Issue: {issue_id}, Execution ID: {execution_id}")
@@ -801,7 +842,19 @@ def execute_issue(
                 workflow.add_node("escalate_node", escalate_node)
 
                 workflow.set_entry_point("spec_draft")
-                workflow.add_edge("spec_draft", "code_node")
+
+                def route_after_spec(s: GraphState) -> str:
+                    if s.get("status") == "FAILED_SYSTEM":
+                        return "escalate_node"
+                    if s.get("status") == "retry_spec_draft":
+                        return "spec_draft"
+                    return "code_node"
+
+                workflow.add_conditional_edges("spec_draft", route_after_spec, {
+                    "escalate_node": "escalate_node",
+                    "spec_draft": "spec_draft",
+                    "code_node": "code_node",
+                })
 
                 def route_after_code(s: GraphState) -> str:
                     if s.get("status") == "FAILED_SYSTEM":
@@ -849,6 +902,8 @@ def execute_issue(
                 def route_after_review(s: GraphState) -> str:
                     if s.get("status") == "FAILED_SYSTEM":
                         return "escalate_node"
+                    if s.get("status") == "retry_review":
+                        return "review_node"
                     if s.get("status") == "review_lgtm":
                         return "done_node"
                     if s.get("status") == "FAILED_B7":
@@ -858,6 +913,7 @@ def execute_issue(
                 workflow.add_conditional_edges("review_node", route_after_review, {
                     "done_node": "done_node",
                     "escalate_node": "escalate_node",
+                    "review_node": "review_node",
                     "code_node": "code_node",
                 })
 
@@ -1034,16 +1090,14 @@ def main() -> None:
 
     if args.subcommand == "execute":
         issue_id = args.issue_id
-        if not validate_issue_id(issue_id):
-            logger.error(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001'.")
-            sys.exit(1)
-
         project_key = args.project_key
         if not project_key and "-" in issue_id:
             project_key = issue_id.split("-")[0]
         if not project_key:
             logger.error("Could not resolve project-key from issue-id.")
             sys.exit(1)
+
+        validate_project_consistency(issue_id, project_key)
         execute_issue(issue_id, project_key)
     elif args.subcommand == "orchestrate":
         cmd_orchestrate(args.project_key)
@@ -1053,9 +1107,7 @@ def main() -> None:
         legacy_parser.add_argument("--project-key", help="Target Project Key")
         leg_args, _ = legacy_parser.parse_known_args()
         if leg_args.issue_id and leg_args.project_key:
-            if not validate_issue_id(leg_args.issue_id):
-                logger.error(f"Invalid Issue ID format: '{leg_args.issue_id}'.")
-                sys.exit(1)
+            validate_project_consistency(leg_args.issue_id, leg_args.project_key)
             execute_issue(leg_args.issue_id, leg_args.project_key)
         else:
             parser.print_help()

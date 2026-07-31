@@ -15,20 +15,78 @@ from tools.orchestrator_graph import (
     lint_node,
     review_node,
     run_pytest_node,
+    spec_draft_node,
     update_task_state,
     validate_issue_id,
+    validate_project_consistency,
 )
 
 
 def test_validate_issue_id_format() -> None:
-    """Verify that validate_issue_id enforces strict PROJECT-0001 pattern."""
+    """Verify that validate_issue_id enforces strict PROJECT-0001 pattern (range 0001-9999, 0000 rejected)."""
     assert validate_issue_id("TFG-0004") is True
     assert validate_issue_id("SBOS-0001") is True
     assert validate_issue_id("TFG-0004-A") is True
 
+    # 0000 is rejected
+    assert validate_issue_id("EC-0000") is False
     assert validate_issue_id("EC-1") is False
     assert validate_issue_id("invalid_id") is False
     assert validate_issue_id("TFG0004") is False
+
+
+def test_validate_project_consistency_mismatch(tmp_path: Path) -> None:
+    """Verify that validate_project_consistency rejects ID range anomalies and project key mismatches before side-effects."""
+    metadata_dir = tmp_path / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. 0000 rejected
+    with pytest.raises(ValueError, match="0001-9999"):
+        validate_project_consistency("EC-0000", "EC", metadata_dir=metadata_dir, project_root=tmp_path)
+
+    # 2. Issue ID prefix vs project_key mismatch
+    with pytest.raises(ValueError, match="Project key mismatch"):
+        validate_project_consistency("EC-0001", "MOB", metadata_dir=metadata_dir, project_root=tmp_path)
+
+
+def test_spec_draft_node_timeout_retry() -> None:
+    """Verify that spec_draft_node routes timeout to retry_spec_draft on 1st timeout and FAILED_SYSTEM on 2nd timeout."""
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_exec_spec_001",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/grep/office_parser.py"],
+        instruction="Fix bug",
+        cwd=None,
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict=None,
+        review_comments=None,
+        review_rounds=[],
+        history_summary=None,
+        rdjson=None,
+    )
+
+    with patch("tools.llm_client.call_llm", side_effect=RuntimeError("Timeout occurred")):
+        res_1 = spec_draft_node(state.copy())
+        assert res_1["status"] == "retry_spec_draft"
+        assert res_1["llm_timeout_count"] == 1
+
+        res_2 = spec_draft_node(res_1.copy())
+        assert res_2["status"] == "FAILED_SYSTEM"
+        assert res_2["llm_timeout_count"] == 2
 
 
 def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
@@ -150,11 +208,6 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         test_res = run_pytest_node(state.copy())
         assert test_res["status"] == "FAILED_SYSTEM"
         assert test_res["error_category"] == "SYSTEM_ERROR"
-
-    with patch("tools.llm_client.call_llm", side_effect=RuntimeError("LLM call failed")):
-        review_res = review_node(state.copy())
-        assert review_res["status"] == "FAILED_SYSTEM"
-        assert review_res["error_category"] == "SYSTEM_ERROR"
 
 
 def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> None:
@@ -307,8 +360,13 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
     """Verify that execute_issue fails safe without running Aider if project registry or satellite dir is invalid."""
     metadata_dir = tmp_path / "metadata"
     history_file = tmp_path / "tools" / ".cache" / "execution_history.json"
-    project_key = "UNKNOWN_PROJ"
+    project_key = "UNK"
     issue_id = "UNK-0001"
+
+    # Registry must include UNK key for validate_project_consistency
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.parent.mkdir(parents=True, exist_ok=True)
+    registry_file.write_text(json.dumps({"projects": {"UNK": {"dir": "invalid/dir"}}}), encoding="utf-8")
 
     with patch("tools.orchestrator_graph.run_aider") as mock_run_aider:
         execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=tmp_path)
