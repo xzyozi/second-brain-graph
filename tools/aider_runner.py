@@ -7,8 +7,8 @@ import os
 import subprocess
 from typing import List, Optional
 
-from tools.config_loader import load_model_config, ProfileConfig
 from tools.backend_coordinator import get_coordinator
+from tools.config_loader import ProfileConfig, load_model_config
 
 
 class AiderRunError(Exception):
@@ -30,12 +30,14 @@ def run_aider(
     def _do_run_aider(profile: ProfileConfig) -> bool:
         config = load_model_config()
         aider_cfg = config.aider
-        
+
         target_model = model or profile.model
         if not target_model:
             raise ValueError("Profile provided by Coordinator is missing 'model'.")
 
-        if profile.backend == "ollama" and not (target_model.startswith("ollama/") or target_model.startswith("ollama_chat/")):
+        is_ollama = profile.backend == "ollama"
+        has_prefix = target_model.startswith("ollama/") or target_model.startswith("ollama_chat/")
+        if is_ollama and not has_prefix:
             target_model = f"ollama/{target_model}"
 
         no_auto_commits = aider_cfg.no_auto_commits

@@ -8,8 +8,18 @@ from tools.aider_runner import AiderRunError, get_git_diff, run_aider
 from tools.config_loader import ProfileConfig
 
 
+def make_ollama_profile(model: str = "ollama/qwen2.5-coder:14b") -> ProfileConfig:
+    """Helper to construct a valid Ollama ProfileConfig for testing."""
+    return ProfileConfig(
+        backend="ollama",
+        model=model,
+        openai_endpoint="http://localhost:11434/v1",
+        ollama_management_endpoint="http://localhost:11434",
+    )
+
+
 @patch("subprocess.run")
-def test_get_git_diff_success(mock_run):
+def test_get_git_diff_success(mock_run: MagicMock) -> None:
     mock_res = MagicMock()
     mock_res.stdout = "diff --git a/file.txt b/file.txt"
     mock_res.returncode = 0
@@ -27,7 +37,7 @@ def test_get_git_diff_success(mock_run):
 
 
 @patch("subprocess.run")
-def test_get_git_diff_failure(mock_run):
+def test_get_git_diff_failure(mock_run: MagicMock) -> None:
     mock_run.side_effect = Exception("Git not found")
     diff = get_git_diff(cwd=".")
     assert diff == ""
@@ -36,7 +46,9 @@ def test_get_git_diff_failure(mock_run):
 @patch("tools.aider_runner.get_coordinator")
 @patch("tools.aider_runner.load_model_config")
 @patch("subprocess.run")
-def test_run_aider_success(mock_run, mock_load_config, mock_get_coordinator):
+def test_run_aider_success(
+    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
+) -> None:
     mock_res = MagicMock()
     mock_res.returncode = 0
     mock_run.return_value = mock_res
@@ -45,13 +57,8 @@ def test_run_aider_success(mock_run, mock_load_config, mock_get_coordinator):
     mock_cfg.aider.no_auto_commits = True
     mock_load_config.return_value = mock_cfg
 
-    def dummy_execute(intent, request):
-        profile = ProfileConfig(
-            backend="ollama",
-            model="ollama/qwen2.5-coder:14b",
-            openai_endpoint="http://localhost:11434/v1",
-            ollama_management_endpoint="http://localhost:11434",
-        )
+    def dummy_execute(intent: str, request: dict) -> bool:
+        profile = make_ollama_profile()
         return request["action"](profile)
 
     coordinator = MagicMock()
@@ -80,7 +87,9 @@ def test_run_aider_success(mock_run, mock_load_config, mock_get_coordinator):
 @patch("tools.aider_runner.get_coordinator")
 @patch("tools.aider_runner.load_model_config")
 @patch("subprocess.run")
-def test_run_aider_custom_model_and_timeout(mock_run, mock_load_config, mock_get_coordinator):
+def test_run_aider_custom_model_and_timeout(
+    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
+) -> None:
     mock_res = MagicMock()
     mock_res.returncode = 0
     mock_run.return_value = mock_res
@@ -89,13 +98,8 @@ def test_run_aider_custom_model_and_timeout(mock_run, mock_load_config, mock_get
     mock_cfg.aider.no_auto_commits = False
     mock_load_config.return_value = mock_cfg
 
-    def dummy_execute(intent, request):
-        profile = ProfileConfig(
-            backend="ollama",
-            model="default-model",
-            openai_endpoint="http://localhost:11434/v1",
-            ollama_management_endpoint="http://localhost:11434",
-        )
+    def dummy_execute(intent: str, request: dict) -> bool:
+        profile = make_ollama_profile(model="default-model")
         return request["action"](profile)
 
     coordinator = MagicMock()
@@ -121,20 +125,17 @@ def test_run_aider_custom_model_and_timeout(mock_run, mock_load_config, mock_get
 @patch("tools.aider_runner.get_coordinator")
 @patch("tools.aider_runner.load_model_config")
 @patch("subprocess.run")
-def test_run_aider_timeout_raises_error(mock_run, mock_load_config, mock_get_coordinator):
+def test_run_aider_timeout_raises_error(
+    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
+) -> None:
     mock_run.side_effect = subprocess.TimeoutExpired(cmd=["aider"], timeout=300)
 
     mock_cfg = MagicMock()
     mock_cfg.aider.no_auto_commits = True
     mock_load_config.return_value = mock_cfg
 
-    def dummy_execute(intent, request):
-        profile = ProfileConfig(
-            backend="ollama",
-            model="ollama/qwen2.5-coder:14b",
-            openai_endpoint="http://localhost:11434/v1",
-            ollama_management_endpoint="http://localhost:11434",
-        )
+    def dummy_execute(intent: str, request: dict) -> bool:
+        profile = make_ollama_profile()
         return request["action"](profile)
 
     coordinator = MagicMock()
@@ -150,20 +151,17 @@ def test_run_aider_timeout_raises_error(mock_run, mock_load_config, mock_get_coo
 @patch("tools.aider_runner.get_coordinator")
 @patch("tools.aider_runner.load_model_config")
 @patch("subprocess.run")
-def test_run_aider_file_not_found(mock_run, mock_load_config, mock_get_coordinator):
+def test_run_aider_file_not_found(
+    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
+) -> None:
     mock_run.side_effect = FileNotFoundError()
 
     mock_cfg = MagicMock()
     mock_cfg.aider.no_auto_commits = True
     mock_load_config.return_value = mock_cfg
 
-    def dummy_execute(intent, request):
-        profile = ProfileConfig(
-            backend="ollama",
-            model="ollama/qwen2.5-coder:14b",
-            openai_endpoint="http://localhost:11434/v1",
-            ollama_management_endpoint="http://localhost:11434",
-        )
+    def dummy_execute(intent: str, request: dict) -> bool:
+        profile = make_ollama_profile()
         return request["action"](profile)
 
     coordinator = MagicMock()
@@ -172,3 +170,34 @@ def test_run_aider_file_not_found(mock_run, mock_load_config, mock_get_coordinat
 
     result = run_aider("fix bug", ["main.py"])
     assert result is False
+
+
+@patch("tools.aider_runner.get_coordinator")
+@patch("tools.aider_runner.load_model_config")
+@patch("subprocess.run")
+def test_run_aider_sanitizes_ollama_api_base_v1_suffix(
+    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
+) -> None:
+    """Verify that trailing /v1 is stripped from OLLAMA_API_BASE in subprocess env."""
+    mock_res = MagicMock()
+    mock_res.returncode = 0
+    mock_run.return_value = mock_res
+
+    mock_cfg = MagicMock()
+    mock_cfg.aider.no_auto_commits = True
+    mock_load_config.return_value = mock_cfg
+
+    def dummy_execute(intent: str, request: dict) -> bool:
+        profile = make_ollama_profile()
+        # Simulate patch_env setting OLLAMA_API_BASE with /v1
+        import os
+        with patch.dict(os.environ, {"OLLAMA_API_BASE": "http://localhost:11434/v1"}):
+            return request["action"](profile)
+
+    coordinator = MagicMock()
+    coordinator.execute.side_effect = dummy_execute
+    mock_get_coordinator.return_value = coordinator
+
+    run_aider("test v1 strip", ["file.py"])
+    env_used = mock_run.call_args[1]["env"]
+    assert env_used["OLLAMA_API_BASE"] == "http://localhost:11434"

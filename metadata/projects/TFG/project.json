@@ -1,0 +1,9 @@
+{
+  "key": "TFG",
+  "name": "test_file_grep",
+  "description": "Office/Text files grep search engine validation sub-project",
+  "constraints": {
+    "external_modules_forbidden": false,
+    "allowed_imports": []
+  }
+}
