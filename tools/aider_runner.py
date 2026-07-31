@@ -37,7 +37,9 @@ def get_default_aider_model() -> str:
 
 
 def get_git_diff(cwd: Optional[str] = None) -> str:
-    """現在の Git 作業ツリーの差分を取得する。失敗時は GitDiffError を送出する (fail-closed)."""
+    """現在の Git 作業ツリーの差分を取得する。失敗時は GitDiffError を送出する (fail-closed).
+    初期コミット前のリポジトリ等で HEAD が存在しない場合はフォールバックして差分を取得する。
+    """
     try:
         res = subprocess.run(
             ["git", "diff", "HEAD"],
@@ -48,6 +50,18 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
             timeout=60,
         )
         if res.returncode != 0:
+            err_msg = res.stderr.lower()
+            if "bad revision" in err_msg or "ambiguous argument 'head'" in err_msg or "unknown revision" in err_msg:
+                fallback_res = subprocess.run(
+                    ["git", "diff"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                if fallback_res.returncode == 0:
+                    return fallback_res.stdout
             raise GitDiffError(f"git diff command failed with returncode {res.returncode}: {res.stderr}")
         return res.stdout
     except Exception as e:
@@ -62,14 +76,24 @@ def run_aider(
     cwd: Optional[str] = None,
     model: Optional[str] = None,
     timeout: int = 300,
+    edit_format: Optional[str] = None,
 ) -> bool:
     """Aider CLI を subprocess 経由で非対話形式で実行する。
     - Ollama API ベースが指定されている場合、末尾の /v1 サフィックスを自動除去する。
-    - タイムアウト時は AiderRunError を発生させる。
+    - config/models.json から edit_format を動的に設定可能。
+    - タイムアウトおよび非ゼロ終了時は AiderRunError を発生させる。
     - 対象ファイルが存在しない場合は警告ログを出力し、新規ファイル作成を許可する。
     """
     if model is None:
         model = get_default_aider_model()
+
+    if edit_format is None:
+        try:
+            from tools.config_loader import get_aider_config
+            aider_cfg = get_aider_config()
+            edit_format = aider_cfg.edit_format
+        except Exception as e:
+            logger.warning(f"Failed to load Aider edit_format config: {e}")
 
     if cwd:
         cwd_path = Path(cwd)
@@ -93,8 +117,13 @@ def run_aider(
         "--model", model,
         "--no-auto-commits",
         "--yes-always",
-        "--message", instruction,
-    ] + target_files
+    ]
+
+    if edit_format:
+        cmd.extend(["--edit-format", edit_format])
+
+    cmd.extend(["--message", instruction])
+    cmd.extend(target_files)
 
     try:
         result = subprocess.run(
@@ -105,9 +134,15 @@ def run_aider(
             text=True,
             timeout=timeout,
         )
-        return result.returncode == 0
+        if result.returncode != 0:
+            logger.error(f"Aider failed with exit code {result.returncode}: {result.stderr}")
+            raise AiderRunError(f"Aider process failed with returncode {result.returncode}: {result.stderr}")
+        return True
     except subprocess.TimeoutExpired as e:
         raise AiderRunError(f"Aider execution timed out after {timeout} seconds") from e
+    except AiderRunError:
+        raise
     except Exception as e:
         raise AiderRunError(f"Failed to run Aider CLI: {e}") from e
+
 

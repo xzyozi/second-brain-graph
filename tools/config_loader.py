@@ -103,3 +103,10 @@ def get_backend_execution_config() -> BackendExecutionConfig:
     """Get backend execution routing and profiles."""
     config = load_model_config()
     return config.backend_execution
+
+
+def get_aider_config() -> AiderConfig:
+    """Get Aider execution configuration."""
+    config = load_model_config()
+    return config.aider
+

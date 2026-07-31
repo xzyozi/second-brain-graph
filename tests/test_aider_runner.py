@@ -86,3 +86,35 @@ def test_run_aider_sanitizes_ollama_api_base_v1_suffix(mock_run: MagicMock, monk
     env_passed = mock_run.call_args[1]["env"]
     assert env_passed["OLLAMA_API_BASE"] == "http://localhost:11434"
 
+
+def test_get_git_diff_bad_revision_fallback() -> None:
+    """HEAD コミットがない新規リポジトリで git diff HEAD が失敗した際、git diff へフォールバックすることを検証する。"""
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=128, stderr="fatal: bad revision 'HEAD'"),
+            MagicMock(returncode=0, stdout="diff --git a/new_file.py b/new_file.py"),
+        ]
+        diff = get_git_diff(cwd=".")
+        assert "diff --git" in diff
+        assert mock_run.call_count == 2
+
+
+@patch("subprocess.run")
+def test_run_aider_nonzero_exit_raises_error(mock_run: MagicMock) -> None:
+    """Aider が非ゼロ終了コードを返した場合に AiderRunError が発生することを検証する。"""
+    mock_run.return_value.returncode = 1
+    mock_run.return_value.stderr = "Aider process error"
+    with pytest.raises(AiderRunError, match="returncode 1"):
+        run_aider("Fix bug", ["test.py"])
+
+
+@patch("subprocess.run")
+def test_run_aider_includes_edit_format(mock_run: MagicMock) -> None:
+    """run_aider に edit_format パラメータまたは config 設定が指定された場合、--edit-format が CLI に渡されることを検証する。"""
+    mock_run.return_value.returncode = 0
+    run_aider("Fix bug", ["test.py"], edit_format="diff")
+    cmd = mock_run.call_args[0][0]
+    assert "--edit-format" in cmd
+    assert "diff" in cmd
+
+
