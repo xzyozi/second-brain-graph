@@ -92,7 +92,7 @@ def run_aider(
     target_files: List[str],
     cwd: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: int = 300,
+    timeout: int = 600,
     edit_format: Optional[str] = None,
 ) -> bool:
     """Aider CLI を subprocess 経由で非対話形式で実行する。

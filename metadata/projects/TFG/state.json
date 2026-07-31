@@ -5,5 +5,12 @@
     "max_round": 3,
     "error_category": null,
     "updated_at": "2026-07-30T21:58:00Z"
+  },
+  "TFG-0005": {
+    "status": "FAILED_B7",
+    "review_round": 3,
+    "max_round": 3,
+    "error_category": "REVIEW_REJECTED",
+    "updated_at": "2026-07-31T17:05:14.061936+00:00"
   }
 }

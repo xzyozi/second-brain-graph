@@ -26,9 +26,9 @@
     "fallback": "disabled",
     "gpu_lease_timeout": 120,
     "routes": {
-      "spec_draft": "reasoning_economy",
-      "task_decomposition": "reasoning_economy",
-      "task_prioritization": "reasoning_economy",
+      "spec_draft": "coding_ollama",
+      "task_decomposition": "coding_ollama",
+      "task_prioritization": "coding_ollama",
       "code_edit": "coding_ollama",
       "aider_edit": "coding_ollama",
       "code_review": "coding_ollama"

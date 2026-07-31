@@ -490,6 +490,17 @@ def code_node(state: GraphState) -> GraphState:
     try:
         run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
         state["status"] = "code_completed"
+        # Aider が編集・新規作成したファイルを動的に target_files へ追加
+        if cwd and is_in_git_workspace(cwd):
+            st_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=30)
+            if st_res.returncode == 0:
+                for line in st_res.stdout.splitlines():
+                    if line.strip():
+                        parts = line.strip().split(maxsplit=1)
+                        if len(parts) == 2:
+                            rel_path = parts[1].strip().replace("\\", "/")
+                            if rel_path not in state["target_files"]:
+                                state["target_files"].append(rel_path)
     except AiderRunError as e:
         logger.warning(f"AiderRunError caught in code_node: {e}")
         state["error"] = str(e)
@@ -512,8 +523,10 @@ def lint_node(state: GraphState) -> GraphState:
     """
     logger.info("Executing lint_node (Ruff check)")
     cwd = state.get("cwd")
+    target_files = state.get("target_files", [])
     try:
-        res = run_cmd(["ruff", "check", "."], cwd=cwd, timeout=300)
+        cmd = ["ruff", "check"] + (target_files if target_files else ["."])
+        res = run_cmd(cmd, cwd=cwd, timeout=300)
         state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
             state["status"] = "lint_passed"
@@ -838,18 +851,24 @@ def done_node(state: GraphState) -> GraphState:
                 return state
 
             # 4. PR の作成 (is_in_git_workspace ブロック内かつ Push 成功時のみ実行)
-            pr_res = run_cmd(
-                ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
-                 "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
-                cwd=cwd, timeout=180
-            )
-            if pr_res.returncode == 0:
-                state["status"] = "COMPLETED"
-            else:
-                logger.warning(f"PR creation failed: {pr_res.stderr}")
+            try:
+                pr_res = run_cmd(
+                    ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
+                     "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
+                    cwd=cwd, timeout=180
+                )
+                if pr_res.returncode == 0:
+                    state["status"] = "COMPLETED"
+                else:
+                    logger.warning(f"PR creation failed: {pr_res.stderr}")
+                    state["status"] = "PR_FAILED"
+                    state["error_category"] = "PR_ERROR"
+                    state["error"] = f"PR creation failed: {pr_res.stderr}"
+            except Exception as e:
+                logger.warning(f"PR creation skipped or failed (gh CLI error): {e}")
                 state["status"] = "PR_FAILED"
                 state["error_category"] = "PR_ERROR"
-                state["error"] = f"PR creation failed: {pr_res.stderr}"
+                state["error"] = f"PR creation failed: {e}"
         else:
             logger.error(f"Directory '{cwd}' is not in a valid git workspace for PR creation.")
             state["status"] = "PR_FAILED"
