@@ -1,4 +1,4 @@
-"""Integration tests for orchestrator_graph Aider handling, state transitions, isolation, and lock verification."""
+"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, and lock verification."""
 
 import json
 from pathlib import Path
@@ -11,6 +11,7 @@ from tools.orchestrator_graph import (
     ProjectLockManager,
     code_node,
     execute_issue,
+    update_task_state,
 )
 
 
@@ -26,10 +27,14 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
         error_category=None,
         llm_timeout_count=0,
         review_round=0,
+        lint_round=0,
+        test_round=0,
         max_round=3,
-        target_files=["main.py"],
+        target_files=["src/grep/office_parser.py"],
         instruction="Fix bug",
         cwd=None,
+        base_branch="develop",
+        aider_message="",
     )
 
     with patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Timeout 300s")):
@@ -58,10 +63,14 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
         error_category=None,
         llm_timeout_count=0,
         review_round=0,
+        lint_round=0,
+        test_round=0,
         max_round=3,
-        target_files=["main.py"],
+        target_files=["src/grep/office_parser.py"],
         instruction="Fix bug",
         cwd=None,
+        base_branch="develop",
+        aider_message="",
     )
 
     with patch("tools.orchestrator_graph.run_aider", return_value=False):
@@ -73,15 +82,16 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
 
 @patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out"))
 @patch("tools.llm_client.call_llm")
-def test_execute_issue_aider_timeout_flow_isolated(
+def test_execute_issue_aider_timeout_flow_fully_isolated(
     mock_call_llm: MagicMock, mock_run_aider: MagicMock, tmp_path: Path
 ) -> None:
-    """Verify full graph execution flow when Aider times out using isolated tmp_path for metadata and lock verification."""
+    """Verify full graph execution flow with complete test isolation (metadata_dir and history_file in tmp_path)."""
     metadata_dir = tmp_path / "metadata"
+    history_file = tmp_path / "tools" / ".cache" / "execution_history.json"
     project_key = "TFG"
     issue_id = "TFG-0004"
 
-    # Create dummy registry
+    # Create dummy project registry
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.parent.mkdir(parents=True, exist_ok=True)
     registry_file.write_text(
@@ -100,13 +110,12 @@ def test_execute_issue_aider_timeout_flow_isolated(
     with patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire, \
          patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release:
 
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir)
+        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file)
 
-        # Verify lock acquisition and release calls
         mock_acquire.assert_called_once()
         mock_release.assert_called_once()
 
-    # Verify state.json was created under isolated tmp_path conforming to SSOT dictionary schema
+    # 1. Verify isolated state.json was created with SSOT dictionary schema
     state_file = metadata_dir / "projects" / project_key / "state.json"
     assert state_file.exists()
     saved_data = json.loads(state_file.read_text(encoding="utf-8"))
@@ -114,15 +123,41 @@ def test_execute_issue_aider_timeout_flow_isolated(
     assert saved_data[issue_id]["status"] == "FAILED_SYSTEM"
     assert saved_data[issue_id]["error_category"] == "LLM_TIMEOUT"
 
+    # 2. Verify isolated history_file was created in tmp_path with review_round key
+    assert history_file.exists()
+    hist_data = json.loads(history_file.read_text(encoding="utf-8"))
+    assert "records" in hist_data
+    record = hist_data["records"][0]
+    assert record["issue_id"] == issue_id
+    assert record["final_status"] == "FAILED_SYSTEM"
+    assert "review_round" in record
 
-def test_execute_issue_lock_timeout_flow(tmp_path: Path) -> None:
-    """Verify that lock acquisition timeout records SKIPPED_LOCKED and LOCKED error_category in state.json."""
+
+def test_execute_issue_lock_timeout_flow_isolated(tmp_path: Path) -> None:
+    """Verify that lock acquisition timeout records SKIPPED_LOCKED and LOCKED in isolated state.json and history_file."""
     metadata_dir = tmp_path / "metadata"
+    history_file = tmp_path / "tools" / ".cache" / "execution_history.json"
     project_key = "TFG"
     issue_id = "TFG-0004"
 
+    # Create dummy project registry
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.parent.mkdir(parents=True, exist_ok=True)
+    registry_file.write_text(
+        json.dumps({
+            "projects": {
+                "TFG": {
+                    "name": "test_file_grep",
+                    "dir": "projects/test_file_grep",
+                    "meta": "metadata/projects/TFG",
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+
     with patch.object(ProjectLockManager, "_acquire_lock", side_effect=TimeoutError("Lock timeout")):
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir)
+        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file)
 
     state_file = metadata_dir / "projects" / project_key / "state.json"
     assert state_file.exists()
@@ -130,3 +165,53 @@ def test_execute_issue_lock_timeout_flow(tmp_path: Path) -> None:
     assert issue_id in saved_data
     assert saved_data[issue_id]["status"] == "SKIPPED_LOCKED"
     assert saved_data[issue_id]["error_category"] == "LOCKED"
+
+    assert history_file.exists()
+    hist_data = json.loads(history_file.read_text(encoding="utf-8"))
+    assert hist_data["records"][0]["final_status"] == "SKIPPED_LOCKED"
+
+
+def test_update_task_state_migrates_old_flat_format(tmp_path: Path) -> None:
+    """Verify that update_task_state correctly migrates old flat state.json format to SSOT dictionary schema."""
+    metadata_dir = tmp_path / "metadata"
+    project_key = "TFG"
+    issue_id = "TFG-0004"
+    state_file = metadata_dir / "projects" / project_key / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write old flat format
+    old_flat_data = {
+        "issue_id": "TFG-0004",
+        "status": "FAILED_SYSTEM",
+        "review_round": 0,
+        "max_round": 3,
+    }
+    state_file.write_text(json.dumps(old_flat_data), encoding="utf-8")
+
+    # Call update_task_state
+    update_task_state(project_key, issue_id, status="COMPLETED", review_round=1, metadata_dir=metadata_dir)
+
+    # Verify migration
+    new_data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "issue_id" not in new_data  # flat key cleaned up
+    assert issue_id in new_data
+    assert new_data[issue_id]["status"] == "COMPLETED"
+    assert new_data[issue_id]["review_round"] == 1
+
+
+def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
+    """Verify that execute_issue fails safe without running Aider if project registry or satellite dir is invalid."""
+    metadata_dir = tmp_path / "metadata"
+    history_file = tmp_path / "tools" / ".cache" / "execution_history.json"
+    project_key = "UNKNOWN_PROJ"
+    issue_id = "UNK-0001"
+
+    with patch("tools.orchestrator_graph.run_aider") as mock_run_aider:
+        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file)
+        mock_run_aider.assert_not_called()
+
+    state_file = metadata_dir / "projects" / project_key / "state.json"
+    assert state_file.exists()
+    saved_data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert saved_data[issue_id]["status"] == "FAILED_SYSTEM"
+    assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"

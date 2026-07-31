@@ -1,13 +1,9 @@
 {
-  "issue_id": "TFG-0004",
-  "project_key": "TFG",
-  "execution_id": "150e9046b1964a65bdaa8113080c3ade",
-  "generation": 2,
-  "status": "FAILED_SYSTEM",
-  "error": "Aider execution timed out",
-  "error_category": "LLM_TIMEOUT",
-  "llm_timeout_count": 2,
-  "target_files": [],
-  "instruction": "Implement issue TFG-0004",
-  "cwd": null
+  "TFG-0004": {
+    "status": "PENDING",
+    "review_round": 0,
+    "max_round": 3,
+    "error_category": null,
+    "updated_at": "2026-07-30T21:58:00Z"
+  }
 }
