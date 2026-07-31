@@ -13,6 +13,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any, Dict, List, Optional, TypedDict
 import uuid
@@ -90,7 +91,6 @@ def update_task_state(
         try:
             with open(state_file, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
-                # マイグレーション: 旧フラット形式 (issue_id キーがルートに存在しない) の場合
                 if "issue_id" in raw_data and not any(isinstance(v, dict) for v in raw_data.values()):
                     old_id = raw_data.get("issue_id", issue_id)
                     state_data[old_id] = {
@@ -130,7 +130,6 @@ def record_execution_history(
 ) -> None:
     """tools/.cache/execution_history.json へ実行完了・エスカレーション結果を
     専用の FileLock 保護のもとアトミックに追記保存する (DD-003 §4.1.1)。
-    キー名は規格に合わせて review_round とします。
     """
     if history_file is None:
         history_file = Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
@@ -191,14 +190,20 @@ def write_event(project_key: str, event_data: Dict[str, Any], metadata_dir: Opti
         os.fsync(f.fileno())
 
 
-def resolve_project_context(project_key: str, metadata_dir: Optional[Path] = None) -> Dict[str, Any]:
+def resolve_project_context(
+    project_key: str,
+    metadata_dir: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     """.project-registry.json からプロジェクトの dir, meta を解決し、
-    対象ファイル target_files と base_branch を特定する (MULTI-001 §2③・§2④・§5)。
+    実在する対象ファイル target_files と base_branch を特定する (MULTI-001 §2③・§2④・§5)。
     """
     if metadata_dir is None:
         metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-    registry_file = metadata_dir / ".project-registry.json"
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
 
+    registry_file = metadata_dir / ".project-registry.json"
     if not registry_file.exists():
         logger.warning(f"Project registry file {registry_file} does not exist.")
         return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
@@ -217,8 +222,7 @@ def resolve_project_context(project_key: str, metadata_dir: Optional[Path] = Non
         if not rel_dir:
             return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
 
-        root_dir = Path(__file__).resolve().parent.parent
-        cwd_path = root_dir / rel_dir
+        cwd_path = project_root / rel_dir
         cwd = str(cwd_path)
 
         # フェイルセーフ: 実在するディレクトリかつ Git リポジトリであることを検証
@@ -227,27 +231,36 @@ def resolve_project_context(project_key: str, metadata_dir: Optional[Path] = Non
             return {"cwd": cwd, "target_files": [], "base_branch": "develop", "valid": False}
 
         base_branch = "develop"
-        target_files = []
+        raw_target_files = []
 
         if meta_dir:
-            project_json = root_dir / meta_dir / "project.json"
+            project_json = project_root / meta_dir / "project.json"
             if project_json.exists():
                 with open(project_json, "r", encoding="utf-8") as pf:
                     pdata = json.load(pf)
                     base_branch = pdata.get("base_branch", "develop")
 
-            # tasks.md や構成から編集対象ファイルを動的抽出 (例: office_parser.py)
-            tasks_md = root_dir / meta_dir / "tasks.md"
+            tasks_md = project_root / meta_dir / "tasks.md"
             if tasks_md.exists():
                 text = tasks_md.read_text(encoding="utf-8")
                 if "office_parser" in text or "TFG" in project_key:
-                    target_files.append("src/grep/office_parser.py")
+                    raw_target_files.append("src/grep/office_parser.py")
 
-        if not target_files:
-            # 安全デフォルトとして src ディレクトリ配下を割り当てる
-            target_files.append("src/grep/office_parser.py")
+        if not raw_target_files:
+            raw_target_files.append("src/grep/office_parser.py")
 
-        return {"cwd": cwd, "target_files": target_files, "base_branch": base_branch, "valid": True}
+        # ターゲットファイルの実在性を検証
+        valid_target_files = []
+        for tf in raw_target_files:
+            abs_tf = cwd_path / tf
+            if abs_tf.exists() and abs_tf.is_file():
+                valid_target_files.append(tf)
+
+        if not valid_target_files:
+            logger.error(f"No valid target files found in satellite repo for project {project_key}.")
+            return {"cwd": cwd, "target_files": [], "base_branch": base_branch, "valid": False}
+
+        return {"cwd": cwd, "target_files": valid_target_files, "base_branch": base_branch, "valid": True}
     except Exception as e:
         logger.error(f"Failed to resolve project context for {project_key}: {e}")
         return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
@@ -320,9 +333,10 @@ def code_node(state: GraphState) -> GraphState:
 
 
 def lint_node(state: GraphState) -> GraphState:
-    """Ruff による静的解析を実行するノード (DD-003 §4)。"""
+    """Ruff による静的解析を実行するノード (DD-003 §4)。
+    例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
+    """
     logger.info("Executing lint_node (Ruff check)")
-    import subprocess
     cwd = state.get("cwd")
     try:
         res = subprocess.run(["ruff", "check", "."], cwd=cwd, capture_output=True, text=True)
@@ -338,14 +352,17 @@ def lint_node(state: GraphState) -> GraphState:
                 state["status"] = "retry_code"
     except Exception as e:
         logger.error(f"Error running lint: {e}")
-        state["status"] = "lint_passed"  # fallback if ruff not available
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(e)
     return state
 
 
-def test_node(state: GraphState) -> GraphState:
-    """Pytest による単体テストを実行するノード (DD-003 §4)。"""
+def run_pytest_node(state: GraphState) -> GraphState:
+    """Pytest による単体テストを実行するノード (DD-003 §4)。
+    例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
+    """
     logger.info("Executing test_node (Pytest)")
-    import subprocess
     cwd = state.get("cwd")
     try:
         res = subprocess.run(["pytest"], cwd=cwd, capture_output=True, text=True)
@@ -361,12 +378,16 @@ def test_node(state: GraphState) -> GraphState:
                 state["status"] = "retry_code"
     except Exception as e:
         logger.error(f"Error running pytest: {e}")
-        state["status"] = "test_passed"  # fallback
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(e)
     return state
 
 
 def review_node(state: GraphState) -> GraphState:
-    """Reviewer LLM 呼び出しノード (DD-003 §4)。"""
+    """Reviewer LLM 呼び出しノード (DD-003 §4)。
+    例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
+    """
     logger.info("Executing review_node")
     from tools.llm_client import call_llm
     try:
@@ -390,18 +411,27 @@ def review_node(state: GraphState) -> GraphState:
                 state["status"] = "retry_code"
     except Exception as e:
         logger.error(f"Error in review_node: {e}")
-        state["status"] = "review_lgtm"
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(e)
     return state
 
 
 def done_node(state: GraphState) -> GraphState:
     """PR 作成および完了ノード (DD-003 §4)。"""
     logger.info("Executing done_node (PR creation)")
-    import subprocess
     cwd = state.get("cwd")
     base_branch = state.get("base_branch", "develop")
     head_branch = f"sbos/{state['issue_id']}"
     try:
+        if cwd and Path(cwd).exists():
+            try:
+                subprocess.run(
+                    ["git", "commit", "-a", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
+                    cwd=cwd, check=True, capture_output=True
+                )
+            except Exception:
+                pass  # no uncommitted diff is acceptable
         subprocess.run(
             ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
              "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
@@ -429,11 +459,12 @@ def execute_issue(
     project_key: str,
     metadata_dir: Optional[Path] = None,
     history_file: Optional[Path] = None,
+    project_root: Optional[Path] = None,
 ) -> None:
     execution_id = uuid.uuid4().hex
     logger.info(f"Starting execution for Issue: {issue_id}, Execution ID: {execution_id}")
 
-    ctx = resolve_project_context(project_key, metadata_dir=metadata_dir)
+    ctx = resolve_project_context(project_key, metadata_dir=metadata_dir, project_root=project_root)
     cwd = ctx.get("cwd")
     target_files = ctx.get("target_files", [])
     base_branch = ctx.get("base_branch", "develop")
@@ -465,12 +496,21 @@ def execute_issue(
     try:
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
             try:
+                # 作業ブランチ (sbos/<issue-id>) の準備 (PM-036)
+                if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+                    try:
+                        subprocess.run(["git", "checkout", base_branch], cwd=cwd, capture_output=True)
+                        head_branch = f"sbos/{issue_id}"
+                        subprocess.run(["git", "checkout", "-B", head_branch], cwd=cwd, capture_output=True)
+                    except Exception as ge:
+                        logger.warning(f"Failed git branch setup in {cwd}: {ge}")
+
                 logger.info("Setting up context and starting graph execution...")
                 workflow = StateGraph(GraphState)
                 workflow.add_node("spec_draft", spec_draft_node)
                 workflow.add_node("code_node", code_node)
                 workflow.add_node("lint_node", lint_node)
-                workflow.add_node("test_node", test_node)
+                workflow.add_node("test_node", run_pytest_node)
                 workflow.add_node("review_node", review_node)
                 workflow.add_node("done_node", done_node)
                 workflow.add_node("escalate_node", escalate_node)
@@ -492,6 +532,8 @@ def execute_issue(
                 })
 
                 def route_after_lint(s: GraphState) -> str:
+                    if s.get("status") == "FAILED_SYSTEM":
+                        return "escalate_node"
                     if s.get("status") == "lint_passed":
                         return "test_node"
                     if s.get("status") == "FAILED_B7":
@@ -505,6 +547,8 @@ def execute_issue(
                 })
 
                 def route_after_test(s: GraphState) -> str:
+                    if s.get("status") == "FAILED_SYSTEM":
+                        return "escalate_node"
                     if s.get("status") == "test_passed":
                         return "review_node"
                     if s.get("status") == "FAILED_B7":
@@ -518,6 +562,8 @@ def execute_issue(
                 })
 
                 def route_after_review(s: GraphState) -> str:
+                    if s.get("status") == "FAILED_SYSTEM":
+                        return "escalate_node"
                     if s.get("status") == "review_lgtm":
                         return "done_node"
                     if s.get("status") == "FAILED_B7":

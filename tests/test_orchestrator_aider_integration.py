@@ -11,6 +11,9 @@ from tools.orchestrator_graph import (
     ProjectLockManager,
     code_node,
     execute_issue,
+    lint_node,
+    review_node,
+    run_pytest_node,
     update_task_state,
 )
 
@@ -80,20 +83,71 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
         assert "Aider execution returned False" in str(state_after_failure["error"])
 
 
+def test_nodes_normalize_exceptions_to_failed_system() -> None:
+    """Verify that exceptions in lint_node, test_node, and review_node normalize to FAILED_SYSTEM."""
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_exec_003",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/grep/office_parser.py"],
+        instruction="Fix bug",
+        cwd="/invalid/nonexistent/path",
+        base_branch="develop",
+        aider_message="",
+    )
+
+    with patch("subprocess.run", side_effect=RuntimeError("Subprocess failed")):
+        lint_res = lint_node(state.copy())
+        assert lint_res["status"] == "FAILED_SYSTEM"
+        assert lint_res["error_category"] == "SYSTEM_ERROR"
+
+        test_res = run_pytest_node(state.copy())
+        assert test_res["status"] == "FAILED_SYSTEM"
+        assert test_res["error_category"] == "SYSTEM_ERROR"
+
+    with patch("tools.llm_client.call_llm", side_effect=RuntimeError("LLM call failed")):
+        review_res = review_node(state.copy())
+        assert review_res["status"] == "FAILED_SYSTEM"
+        assert review_res["error_category"] == "SYSTEM_ERROR"
+
+
 @patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out"))
 @patch("tools.llm_client.call_llm")
 def test_execute_issue_aider_timeout_flow_fully_isolated(
     mock_call_llm: MagicMock, mock_run_aider: MagicMock, tmp_path: Path
 ) -> None:
-    """Verify full graph execution flow with complete test isolation (metadata_dir and history_file in tmp_path)."""
-    metadata_dir = tmp_path / "metadata"
-    history_file = tmp_path / "tools" / ".cache" / "execution_history.json"
+    """Verify full graph execution flow when Aider times out using isolated project_root and metadata_dir."""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    history_file = project_root / "tools" / ".cache" / "execution_history.json"
     project_key = "TFG"
     issue_id = "TFG-0004"
 
-    # Create dummy project registry
+    # Setup satellite repo dir & target file inside project_root for context resolution
+    sat_dir = project_root / "projects" / "test_file_grep"
+    git_dir = sat_dir / ".git"
+    target_file = sat_dir / "src" / "grep" / "office_parser.py"
+
+    git_dir.mkdir(parents=True, exist_ok=True)
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("# Target file for test", encoding="utf-8")
+
+    # Setup project registry
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+    (meta_tfg / "tasks.md").write_text("- [ ] [TFG-0004] office_parser.py test", encoding="utf-8")
+    (meta_tfg / "project.json").write_text(json.dumps({"key": "TFG", "base_branch": "develop"}), encoding="utf-8")
+
     registry_file = metadata_dir / ".project-registry.json"
-    registry_file.parent.mkdir(parents=True, exist_ok=True)
     registry_file.write_text(
         json.dumps({
             "projects": {
@@ -108,12 +162,15 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     )
 
     with patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire, \
-         patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release:
+         patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release, \
+         patch("subprocess.run"):
 
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file)
+        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
 
         mock_acquire.assert_called_once()
         mock_release.assert_called_once()
+        # Verify run_aider was called twice (1st timeout retry + 2nd timeout escalation)
+        assert mock_run_aider.call_count == 2
 
     # 1. Verify isolated state.json was created with SSOT dictionary schema
     state_file = metadata_dir / "projects" / project_key / "state.json"
@@ -135,14 +192,26 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
 
 def test_execute_issue_lock_timeout_flow_isolated(tmp_path: Path) -> None:
     """Verify that lock acquisition timeout records SKIPPED_LOCKED and LOCKED in isolated state.json and history_file."""
-    metadata_dir = tmp_path / "metadata"
-    history_file = tmp_path / "tools" / ".cache" / "execution_history.json"
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    history_file = project_root / "tools" / ".cache" / "execution_history.json"
     project_key = "TFG"
     issue_id = "TFG-0004"
 
-    # Create dummy project registry
+    # Setup satellite repo dir & target file
+    sat_dir = project_root / "projects" / "test_file_grep"
+    git_dir = sat_dir / ".git"
+    target_file = sat_dir / "src" / "grep" / "office_parser.py"
+
+    git_dir.mkdir(parents=True, exist_ok=True)
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("# Target file for test", encoding="utf-8")
+
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+    (meta_tfg / "tasks.md").write_text("- [ ] [TFG-0004] office_parser.py test", encoding="utf-8")
+
     registry_file = metadata_dir / ".project-registry.json"
-    registry_file.parent.mkdir(parents=True, exist_ok=True)
     registry_file.write_text(
         json.dumps({
             "projects": {
@@ -157,7 +226,7 @@ def test_execute_issue_lock_timeout_flow_isolated(tmp_path: Path) -> None:
     )
 
     with patch.object(ProjectLockManager, "_acquire_lock", side_effect=TimeoutError("Lock timeout")):
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file)
+        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
 
     state_file = metadata_dir / "projects" / project_key / "state.json"
     assert state_file.exists()
@@ -207,7 +276,7 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
     issue_id = "UNK-0001"
 
     with patch("tools.orchestrator_graph.run_aider") as mock_run_aider:
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file)
+        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=tmp_path)
         mock_run_aider.assert_not_called()
 
     state_file = metadata_dir / "projects" / project_key / "state.json"
