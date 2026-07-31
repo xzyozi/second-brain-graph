@@ -473,8 +473,9 @@ def spec_draft_node(state: GraphState) -> GraphState:
 
 def code_node(state: GraphState) -> GraphState:
     """Aider CLI を呼んでコード編集を実施するノード。
-    ・AiderRunError 発生時: LLM_TIMEOUT としてカウンタ加算、1回目は再試行、2回目は FAILED_SYSTEM とする。
-    ・False 返却時: 即座に FAILED_SYSTEM に正規化して終端停止する。
+    ・AiderRunError 発生時:
+      - 'timed out' を含む場合: LLM_TIMEOUT としてカウンタ加算、1回目は再試行、2回目は FAILED_SYSTEM とする。
+      - その他の異常終了: SYSTEM_ERROR として即座に FAILED_SYSTEM に正規化して安全停止する。
     """
     logger.info("Executing code_node with AiderRunner")
     instruction = state.get("instruction", "Apply edits")
@@ -487,23 +488,21 @@ def code_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
 
     try:
-        success = run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
-        if success:
-            state["status"] = "code_completed"
-        else:
-            logger.error("Aider execution returned False (non-zero exit code or CLI missing).")
-            state["status"] = "FAILED_SYSTEM"
-            state["error_category"] = "SYSTEM_ERROR"
-            state["error"] = "Aider execution returned False"
+        run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
+        state["status"] = "code_completed"
     except AiderRunError as e:
         logger.warning(f"AiderRunError caught in code_node: {e}")
-        state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
-        state["error_category"] = "LLM_TIMEOUT"
         state["error"] = str(e)
-        if state["llm_timeout_count"] >= 2:
-            state["status"] = "FAILED_SYSTEM"
+        if "timed out" in str(e).lower():
+            state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
+            state["error_category"] = "LLM_TIMEOUT"
+            if state["llm_timeout_count"] >= 2:
+                state["status"] = "FAILED_SYSTEM"
+            else:
+                state["status"] = "retry_code"
         else:
-            state["status"] = "retry_code"
+            state["status"] = "FAILED_SYSTEM"
+            state["error_category"] = "SYSTEM_ERROR"
     return state
 
 

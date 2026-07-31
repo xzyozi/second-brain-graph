@@ -287,7 +287,7 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
         rdjson=None,
     )
 
-    with patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Timeout 300s")):
+    with patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out after 300 seconds")):
         # First timeout -> retry
         state_after_first = code_node(initial_state)
         assert state_after_first["llm_timeout_count"] == 1
@@ -301,8 +301,8 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
         assert state_after_second["status"] == "FAILED_SYSTEM"
 
 
-def test_code_node_handles_aider_false_return_as_failed_system() -> None:
-    """Test that code_node normalizes Aider False return value to FAILED_SYSTEM and SYSTEM_ERROR."""
+def test_code_node_handles_aider_nonzero_exit_as_failed_system() -> None:
+    """Test that code_node normalizes non-timeout AiderRunError to FAILED_SYSTEM and SYSTEM_ERROR without retry."""
     initial_state = GraphState(
         issue_id="TFG-0004",
         project_key="TFG",
@@ -332,11 +332,12 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
         rdjson=None,
     )
 
-    with patch("tools.orchestrator_graph.run_aider", return_value=False):
+    with patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider process failed with returncode 1")):
         state_after_failure = code_node(initial_state)
         assert state_after_failure["status"] == "FAILED_SYSTEM"
         assert state_after_failure["error_category"] == "SYSTEM_ERROR"
-        assert "Aider execution returned False" in str(state_after_failure["error"])
+        assert "returncode 1" in str(state_after_failure["error"])
+        assert state_after_failure.get("llm_timeout_count", 0) == 0
 
 
 def test_nodes_normalize_exceptions_to_failed_system() -> None:
