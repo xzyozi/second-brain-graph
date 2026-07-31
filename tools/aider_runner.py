@@ -1,96 +1,92 @@
-"""Aider Runner module for Second Brain OS.
-
-Executes Aider CLI using configured models (e.g. Gemini 4 / Code Py).
+#!/usr/bin/env python3
+"""
+tools/aider_runner.py - Aider CLI 実行ラッパーモジュール (TFG-0004 仕様準拠).
 """
 
 import os
 import subprocess
+from pathlib import Path
 from typing import List, Optional
-
-from tools.backend_coordinator import get_coordinator
-from tools.config_loader import ProfileConfig, load_model_config
 
 
 class AiderRunError(Exception):
-    """Raised when Aider CLI execution fails or times out."""
+    """Aider 実行時のタイムアウトおよびシステムエラー例外"""
     pass
 
 
-def run_aider(
-    instruction: str,
-    target_files: List[str],
-    model: Optional[str] = None,
-    cwd: Optional[str] = None,
-    timeout: Optional[int] = 600,
-) -> bool:
-    """Run Aider CLI to apply non-destructive code edits based on instruction."""
-    coordinator = get_coordinator()
-    intent = "aider_edit"
-
-    def _do_run_aider(profile: ProfileConfig) -> bool:
-        config = load_model_config()
-        aider_cfg = config.aider
-
-        target_model = model or profile.model
-        if not target_model:
-            raise ValueError("Profile provided by Coordinator is missing 'model'.")
-
-        is_ollama = profile.backend == "ollama"
-        has_prefix = target_model.startswith("ollama/") or target_model.startswith("ollama_chat/")
-        if is_ollama and not has_prefix:
-            target_model = f"ollama/{target_model}"
-
-        no_auto_commits = aider_cfg.no_auto_commits
-
-        cmd = ["aider", "--model", target_model, "--yes-always"]
-
-        if no_auto_commits:
-            cmd.append("--no-auto-commits")
-
-        cmd.extend(["--message", instruction])
-        cmd.extend(target_files)
-
-        env = os.environ.copy()
-        # Coordinator のアダプタが patch_env で設定した OLLAMA_API_BASE 等を継承する
-        if "OLLAMA_API_BASE" in env and env["OLLAMA_API_BASE"].endswith("/v1"):
-            env["OLLAMA_API_BASE"] = env["OLLAMA_API_BASE"].removesuffix("/v1")
-
-        eff_timeout = timeout if timeout is not None else getattr(aider_cfg, "timeout", 600)
-
-        try:
-            print(f"[AiderRunner] Running Aider with model '{target_model}' on {target_files}...")
-            res = subprocess.run(cmd, cwd=cwd, env=env, check=True, timeout=eff_timeout)
-            return res.returncode == 0
-        except subprocess.TimeoutExpired as e:
-            msg = f"Aider実行がタイムアウトしました (timeout={eff_timeout})"
-            print(f"[AiderRunner] Error: {msg}")
-            raise AiderRunError(msg) from e
-        except FileNotFoundError:
-            print("[AiderRunner] Error: Aider CLI is not installed in the current environment.")
-            return False
-        except subprocess.CalledProcessError as e:
-            print(f"[AiderRunner] Aider execution failed with exit code {e.returncode}")
-            return False
-        except Exception as e:
-            print(f"[AiderRunner] Unexpected error executing Aider: {e}")
-            return False
-
-    return coordinator.execute(intent, {"action": _do_run_aider})
+class GitDiffError(Exception):
+    """Git diff 取得失敗時の例外 (fail-closed 契約)"""
+    pass
 
 
 def get_git_diff(cwd: Optional[str] = None) -> str:
-    """Get the current uncommitted git diff for the target project repository."""
+    """現在の Git 作業ツリーの差分を取得する。失敗時は GitDiffError を送出する (fail-closed)."""
     try:
         res = subprocess.run(
             ["git", "diff", "HEAD"],
             cwd=cwd,
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
+            timeout=60,
         )
+        if res.returncode != 0:
+            raise GitDiffError(f"git diff command failed with returncode {res.returncode}: {res.stderr}")
         return res.stdout
     except Exception as e:
-        print(f"[AiderRunner] Failed to fetch git diff: {e}")
-        return ""
+        if isinstance(e, GitDiffError):
+            raise
+        raise GitDiffError(f"Failed to execute git diff: {e}") from e
 
 
+def run_aider(
+    instruction: str,
+    target_files: List[str],
+    cwd: Optional[str] = None,
+    model: str = "ollama/qwen2.5-coder:7b-instruct",
+    timeout: int = 300,
+) -> bool:
+    """Aider CLI を subprocess 経由で非対話形式で実行する。
+    - Ollama API ベースが指定されている場合、末尾の /v1 サフィックスを自動除去する。
+    - タイムアウト時は AiderRunError を発生させる。
+    - 対象ファイルが存在しない場合は FileNotFoundError を発生させる。
+    """
+    if cwd:
+        cwd_path = Path(cwd)
+        for tf in target_files:
+            abs_path = cwd_path / tf
+            if not abs_path.exists():
+                raise FileNotFoundError(f"Target file does not exist: {abs_path}")
+
+    env = os.environ.copy()
+
+    # Ollama API ベースサフィックスの自動サニタイズ
+    if "OLLAMA_API_BASE" in env:
+        api_base = env["OLLAMA_API_BASE"]
+        if api_base.endswith("/v1"):
+            env["OLLAMA_API_BASE"] = api_base[:-3]
+        elif api_base.endswith("/v1/"):
+            env["OLLAMA_API_BASE"] = api_base[:-4]
+
+    cmd = [
+        "aider",
+        "--model", model,
+        "--no-auto-commits",
+        "--yes-always",
+        "--message", instruction,
+    ] + target_files
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired as e:
+        raise AiderRunError(f"Aider execution timed out after {timeout} seconds") from e
+    except Exception as e:
+        raise AiderRunError(f"Failed to run Aider CLI: {e}") from e

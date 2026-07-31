@@ -25,7 +25,7 @@ from langgraph.graph import END, StateGraph
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.aider_runner import AiderRunError, get_git_diff, run_aider
+from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
 
 # ロガー設定
 logging.basicConfig(
@@ -35,6 +35,26 @@ logging.basicConfig(
 logger = logging.getLogger("orchestrator_graph")
 
 ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
+
+
+def run_cmd(
+    cmd: List[str],
+    cwd: Optional[str] = None,
+    input_str: Optional[str] = None,
+    timeout: int = 300,
+) -> subprocess.CompletedProcess:
+    """外部プロセス呼び出しの一元化ラッパー。タイムアウト時は TimeoutError を送出する。"""
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=cwd,
+            input=input_str,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise TimeoutError(f"Command '{' '.join(cmd)}' timed out after {timeout} seconds") from e
 
 
 def validate_issue_id(issue_id: str) -> bool:
@@ -194,8 +214,8 @@ def record_execution_history(
     history_file: Optional[Path] = None,
 ) -> None:
     """tools/.cache/execution_history.json へ実行完了・エスカレーション結果を
-    DD-003 §4.1.1 監査スキーマ (actual_round = max(...), review_rounds, history_summary.review_verdict)
-    に従って専用の FileLock 保護のもとアトミックに追記保存する。
+    DD-003 §4.1.1 監査スキーマ (actual_round = max(...), review_rounds, history_summary.review_verdict,
+    lint_passed/test_passed の returncode 正本化) に従って専用の FileLock 保護のもとアトミックに追記保存する。
     """
     if history_file is None:
         history_file = Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
@@ -217,6 +237,11 @@ def record_execution_history(
         actual_round = max(lint_round, test_round, rev_round)
         rev_verdict = state.get("review_verdict", "PENDING")
 
+        lint_res = state.get("lint_result")
+        test_res = state.get("test_result")
+        lint_passed = lint_res.get("returncode") == 0 if isinstance(lint_res, dict) and "returncode" in lint_res else None
+        test_passed = test_res.get("returncode") == 0 if isinstance(test_res, dict) and "returncode" in test_res else None
+
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "issue_id": state.get("issue_id", "unknown"),
@@ -232,9 +257,10 @@ def record_execution_history(
             "error_message": state.get("error"),
             "llm_timeout_count": state.get("llm_timeout_count", 0),
             "review_rounds": state.get("review_rounds", []),
+            "reviewdog_result": state.get("reviewdog_result"),
             "history_summary": {
-                "lint_passed": state.get("status") in ["lint_passed", "test_passed", "review_lgtm", "COMPLETED"],
-                "test_passed": state.get("status") in ["test_passed", "review_lgtm", "COMPLETED"],
+                "lint_passed": lint_passed,
+                "test_passed": test_passed,
                 "review_verdict": rev_verdict,
             },
         }
@@ -288,7 +314,7 @@ def resolve_project_context(
     project_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """.project-registry.json からプロジェクトの dir, meta を解決し、
-    実在する対象ファイル target_files と base_branch を特定する (MULTI-001 §2③・§2④・§5)。
+    特定のファイル名にハードコードせず、任意の衛星リポジトリの対象ファイルを動的に検出・解決する (MULTI-001 §2③・§4)。
     """
     if metadata_dir is None:
         metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
@@ -323,7 +349,7 @@ def resolve_project_context(
             return {"cwd": cwd, "target_files": [], "base_branch": "develop", "valid": False}
 
         base_branch = "develop"
-        raw_target_files = []
+        raw_target_files: List[str] = []
 
         if meta_dir:
             project_json = project_root / meta_dir / "project.json"
@@ -331,15 +357,24 @@ def resolve_project_context(
                 with open(project_json, "r", encoding="utf-8") as pf:
                     pdata = json.load(pf)
                     base_branch = pdata.get("base_branch", "develop")
+                    if "target_files" in pdata and isinstance(pdata["target_files"], list):
+                        raw_target_files.extend(pdata["target_files"])
 
             tasks_md = project_root / meta_dir / "tasks.md"
             if tasks_md.exists():
                 text = tasks_md.read_text(encoding="utf-8")
-                if "office_parser" in text or "TFG" in project_key:
-                    raw_target_files.append("src/grep/office_parser.py")
+                # tasks.md 内に記述された *.py や src/ パスを動的抽出
+                matches = re.findall(r"[\w/.-]+\.py", text)
+                for m in matches:
+                    if m not in raw_target_files:
+                        raw_target_files.append(m)
 
+        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在する Python ファイルを自動検出 (ハードコード排除)
         if not raw_target_files:
-            raw_target_files.append("src/grep/office_parser.py")
+            for py_file in cwd_path.rglob("*.py"):
+                rel_p = str(py_file.relative_to(cwd_path)).replace("\\", "/")
+                if not any(excluded in rel_p for excluded in [".venv", "venv", "__pycache__", "build", "dist"]):
+                    raw_target_files.append(rel_p)
 
         # ターゲットファイルの実在性を検証
         valid_target_files = []
@@ -380,8 +415,9 @@ class GraphState(TypedDict):
     lint_result: Optional[Dict[str, Any]]
     test_result: Optional[Dict[str, Any]]
     review_verdict: Optional[str]
-    review_comments: Optional[List[str]]
+    review_comments: Optional[List[Dict[str, Any]]]
     review_rounds: List[Dict[str, Any]]
+    reviewdog_result: Optional[Dict[str, Any]]
     history_summary: Optional[Dict[str, Any]]
     rdjson: Optional[Dict[str, Any]]
 
@@ -460,7 +496,7 @@ def lint_node(state: GraphState) -> GraphState:
     logger.info("Executing lint_node (Ruff check)")
     cwd = state.get("cwd")
     try:
-        res = subprocess.run(["ruff", "check", "."], cwd=cwd, capture_output=True, text=True)
+        res = run_cmd(["ruff", "check", "."], cwd=cwd, timeout=300)
         state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
             state["status"] = "lint_passed"
@@ -487,7 +523,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
     logger.info("Executing test_node (Pytest)")
     cwd = state.get("cwd")
     try:
-        res = subprocess.run(["pytest"], cwd=cwd, capture_output=True, text=True)
+        res = run_cmd(["pytest"], cwd=cwd, timeout=300)
         state["test_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
             state["status"] = "test_passed"
@@ -509,16 +545,27 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
 def review_node(state: GraphState) -> GraphState:
     """Reviewer LLM 呼び出しノード (DD-003 §4)。
-    プロンプトに Git diff を注入し、応答形式の厳格検証、RDJSON 標準入力による Reviewdog パイプ連携、
-    および LGTM を含む全レビューの review_rounds 履歴原子的保存を行う。
-    例外発生時または不整合時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
+    プロンプトに impl_plan と Git diff を注入し、応答形式の厳格検証、
+    構造化コメント (file, line, message, severity)、RDJSON 標準入力による Reviewdog パイプ連携と実行結果監査保存、
+    および LGTM を含む全レビューの review_rounds 履歴保存を行う。
     """
     logger.info("Executing review_node")
     from tools.llm_client import call_llm
     cwd = state.get("cwd")
-    diff_text = get_git_diff(cwd) if cwd else ""
+
+    try:
+        diff_text = get_git_diff(cwd) if cwd else ""
+    except GitDiffError as gde:
+        logger.error(f"git diff failed in review_node: {gde}")
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(gde)
+        return state
+
+    impl_plan_text = state.get("impl_plan") or "(No implementation plan provided)"
     user_prompt = (
         f"Review changes for {state['issue_id']}.\n\n"
+        f"Implementation Plan:\n{impl_plan_text}\n\n"
         f"Git diff:\n{diff_text if diff_text else '(No git diff detected)'}"
     )
 
@@ -528,7 +575,7 @@ def review_node(state: GraphState) -> GraphState:
             intent="code_review",
             system_prompt=(
                 "You are a reviewer. You must respond with JSON containing a 'verdict' "
-                "('LGTM' or 'changes_requested') and 'comments'."
+                "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity)."
             ),
             user_prompt=user_prompt,
             expect_json=True
@@ -542,20 +589,41 @@ def review_node(state: GraphState) -> GraphState:
             return state
 
         verdict = res["verdict"]
-        rev_comments = res.get("comments", [])
+        raw_comments = res.get("comments", [])
+
+        # コメント構造化 ({file, line, message, severity}) の保証
+        structured_comments: List[Dict[str, Any]] = []
+        target_file = state.get("target_files", [""])[0]
+        if isinstance(raw_comments, list):
+            for item in raw_comments:
+                if isinstance(item, dict):
+                    structured_comments.append({
+                        "file": item.get("file", target_file),
+                        "line": item.get("line", 1),
+                        "message": str(item.get("message", "")),
+                        "severity": item.get("severity", "WARNING"),
+                    })
+                else:
+                    structured_comments.append({
+                        "file": target_file,
+                        "line": 1,
+                        "message": str(item),
+                        "severity": "WARNING",
+                    })
+
         rev_round = state.get("review_round", 0) + 1
         state["review_round"] = rev_round
         state["review_verdict"] = verdict
-        state["review_comments"] = rev_comments if isinstance(rev_comments, list) else [str(rev_comments)]
+        state["review_comments"] = structured_comments
 
         # RDJSON 構造化
         rd_diagnostics = [
             {
-                "message": str(c),
-                "location": {"path": state.get("target_files", [""])[0], "range": {"start": {"line": 1}}},
-                "severity": "WARNING",
+                "message": c["message"],
+                "location": {"path": c["file"], "range": {"start": {"line": c["line"]}}},
+                "severity": c["severity"],
             }
-            for c in (rev_comments if isinstance(rev_comments, list) else [rev_comments])
+            for c in structured_comments
         ]
         state["rdjson"] = {
             "source": {"name": "ReviewerLLM", "url": ""},
@@ -567,28 +635,34 @@ def review_node(state: GraphState) -> GraphState:
         rounds.append({
             "review_round": rev_round,
             "verdict": verdict,
-            "comments": rev_comments,
+            "comments": structured_comments,
             "rdjson": state["rdjson"],
         })
         state["review_rounds"] = rounds
 
-        # Reviewdog 標準入力 (input=...) パイプ連携
+        # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存
         if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
             try:
                 rd_input = json.dumps(state["rdjson"])
-                res_rd = subprocess.run(
+                res_rd = run_cmd(
                     ["reviewdog", "-f=rdjson", "-diff=git diff HEAD"],
-                    input=rd_input, text=True, cwd=cwd, capture_output=True
+                    cwd=cwd, input_str=rd_input, timeout=120
                 )
-                logger.info(f"Reviewdog pipe execution code: {res_rd.returncode}")
+                state["reviewdog_result"] = {
+                    "returncode": res_rd.returncode,
+                    "stdout": res_rd.stdout,
+                    "stderr": res_rd.stderr,
+                }
+                logger.info(f"Reviewdog execution completed with code: {res_rd.returncode}")
             except Exception as rde:
-                logger.warning(f"Reviewdog pipe execution skipped or unavailable: {rde}")
+                logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
+                state["reviewdog_result"] = {"returncode": -1, "stdout": "", "stderr": str(rde)}
 
         if verdict == "LGTM":
             state["status"] = "review_lgtm"
         else:
             state["error_category"] = "REVIEW_REJECTED"
-            state["aider_message"] = f"Review comments:\n{rev_comments}"
+            state["aider_message"] = f"Review comments:\n{json.dumps(structured_comments, ensure_ascii=False)}"
             if rev_round >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
@@ -613,7 +687,7 @@ def review_node(state: GraphState) -> GraphState:
 
 def done_node(state: GraphState) -> GraphState:
     """PR 作成および完了ノード (DD-003 §4)。
-    既存インデックス非空チェック -> 明示的 git add -> git commit -> git push -> gh pr create パイプラインを実行。
+    dirty working tree 拒否 -> git add -> ステージ済みファイル検証 -> git commit -> git push -> gh pr create パイプラインを実行。
     失敗時は PR_FAILED / PR_ERROR としてブランチと差分を安全保持する。
     """
     logger.info("Executing done_node (PR creation pipeline)")
@@ -624,11 +698,8 @@ def done_node(state: GraphState) -> GraphState:
 
     try:
         if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
-            # インデックス混入防止: 既存 staged 変更の有無を確認
-            diff_cached = subprocess.run(
-                ["git", "diff", "--cached", "--name-only"],
-                cwd=cwd, capture_output=True, text=True
-            )
+            # インデックス混入防止 1: 既存 staged / dirty 変更の有無を確認
+            diff_cached = run_cmd(["git", "diff", "--cached", "--name-only"], cwd=cwd, timeout=60)
             if diff_cached.returncode != 0:
                 logger.error(f"git diff --cached failed: {diff_cached.stderr}")
                 state["status"] = "PR_FAILED"
@@ -645,7 +716,7 @@ def done_node(state: GraphState) -> GraphState:
 
             # 1. 明示的な git add
             if target_files:
-                add_res = subprocess.run(["git", "add", "--"] + target_files, cwd=cwd, capture_output=True, text=True)
+                add_res = run_cmd(["git", "add", "--"] + target_files, cwd=cwd, timeout=60)
                 if add_res.returncode != 0:
                     logger.error(f"git add failed: {add_res.stderr}")
                     state["status"] = "PR_FAILED"
@@ -653,8 +724,21 @@ def done_node(state: GraphState) -> GraphState:
                     state["error"] = f"git add failed: {add_res.stderr}"
                     return state
 
+                # インデックス混入防止 2: add 後のステージ済みファイル集合を検証
+                staged_res = run_cmd(["git", "diff", "--cached", "--name-only"], cwd=cwd, timeout=60)
+                if staged_res.returncode == 0:
+                    staged_files = [f.strip().replace("\\", "/") for f in staged_res.stdout.splitlines() if f.strip()]
+                    normalized_targets = [t.strip().replace("\\", "/") for t in target_files]
+                    unauthorized = [sf for sf in staged_files if sf not in normalized_targets]
+                    if unauthorized:
+                        logger.error(f"Unauthorized staged files detected after git add: {unauthorized}")
+                        state["status"] = "PR_FAILED"
+                        state["error_category"] = "PR_ERROR"
+                        state["error"] = f"Unauthorized staged files detected after git add: {unauthorized}"
+                        return state
+
             # 2. 未コミット差分の存在確認とコミット
-            status_res = subprocess.run(["git", "status", "--porcelain"], cwd=cwd, capture_output=True, text=True)
+            status_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
             if status_res.returncode != 0:
                 logger.error(f"git status failed: {status_res.stderr}")
                 state["status"] = "PR_FAILED"
@@ -663,9 +747,9 @@ def done_node(state: GraphState) -> GraphState:
                 return state
 
             if status_res.stdout.strip():
-                commit_res = subprocess.run(
+                commit_res = run_cmd(
                     ["git", "commit", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
-                    cwd=cwd, capture_output=True, text=True
+                    cwd=cwd, timeout=120
                 )
                 if commit_res.returncode != 0:
                     logger.error(f"git commit failed: {commit_res.stderr}")
@@ -675,9 +759,9 @@ def done_node(state: GraphState) -> GraphState:
                     return state
 
             # 3. リモートへ Push
-            push_res = subprocess.run(
+            push_res = run_cmd(
                 ["git", "push", "-u", "origin", head_branch],
-                cwd=cwd, capture_output=True, text=True
+                cwd=cwd, timeout=180
             )
             if push_res.returncode != 0:
                 logger.warning(f"Git push failed: {push_res.stderr}")
@@ -687,10 +771,10 @@ def done_node(state: GraphState) -> GraphState:
                 return state
 
         # 4. PR の作成
-        pr_res = subprocess.run(
+        pr_res = run_cmd(
             ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
              "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
-            cwd=cwd, capture_output=True, text=True
+            cwd=cwd, timeout=180
         )
         if pr_res.returncode == 0:
             state["status"] = "COMPLETED"
@@ -762,13 +846,27 @@ def execute_issue(
             return
 
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
-            # 作業ブランチ (sbos/<issue-id>) の安全な準備 (git switch / pull) (PM-036)
+            # 作業ツリーの事前チェック (dirty working tree 拒否)
             if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
                 try:
-                    sw_base = subprocess.run(
-                        ["git", "switch", base_branch],
-                        cwd=cwd, capture_output=True, text=True
-                    )
+                    init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
+                    if init_status.returncode != 0 or init_status.stdout.strip():
+                        logger.error(f"Dirty working tree detected before execution in {cwd}. Aborting.")
+                        update_task_state(
+                            project_key, issue_id, status="FAILED_SYSTEM",
+                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                        )
+                        safe_record_execution_history(
+                            {
+                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                "error_category": "SYSTEM_ERROR",
+                                "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
+                            },
+                            final_status="FAILED_SYSTEM", history_file=history_file
+                        )
+                        return
+
+                    sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
                     if sw_base.returncode != 0:
                         logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
                         update_task_state(
@@ -785,10 +883,7 @@ def execute_issue(
                         )
                         return
 
-                    pull_res = subprocess.run(
-                        ["git", "pull", "--ff-only", "origin", base_branch],
-                        cwd=cwd, capture_output=True, text=True
-                    )
+                    pull_res = run_cmd(["git", "pull", "--ff-only", "origin", base_branch], cwd=cwd, timeout=120)
                     if pull_res.returncode != 0 and not allow_offline_git:
                         logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
                         update_task_state(
@@ -806,12 +901,9 @@ def execute_issue(
                         return
 
                     head_branch = f"sbos/{issue_id}"
-                    sw_head = subprocess.run(["git", "switch", head_branch], cwd=cwd, capture_output=True, text=True)
+                    sw_head = run_cmd(["git", "switch", head_branch], cwd=cwd, timeout=60)
                     if sw_head.returncode != 0:
-                        sw_c = subprocess.run(
-                            ["git", "switch", "-c", head_branch, base_branch],
-                            cwd=cwd, capture_output=True, text=True
-                        )
+                        sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
                         if sw_c.returncode != 0:
                             logger.error(f"git switch -c {head_branch} failed: {sw_c.stderr}")
                             update_task_state(
@@ -964,6 +1056,7 @@ def execute_issue(
                 review_verdict=None,
                 review_comments=None,
                 review_rounds=[],
+                reviewdog_result=None,
                 history_summary=None,
                 rdjson=None,
             )

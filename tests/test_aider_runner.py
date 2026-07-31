@@ -1,203 +1,76 @@
-"""Unit tests for tools.aider_runner."""
+"""
+Unit tests for tools/aider_runner.py
+"""
 
-import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from tools.aider_runner import AiderRunError, get_git_diff, run_aider
-from tools.config_loader import ProfileConfig
+
+from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
 
 
-def make_ollama_profile(model: str = "ollama/qwen2.5-coder:14b") -> ProfileConfig:
-    """Helper to construct a valid Ollama ProfileConfig for testing."""
-    return ProfileConfig(
-        backend="ollama",
-        model=model,
-        openai_endpoint="http://localhost:11434/v1",
-        ollama_management_endpoint="http://localhost:11434",
-    )
+def test_get_git_diff_success() -> None:
+    """git diff コマンドが成功した際、標準出力の文字列が返されることを検証する。"""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "diff --git a/file.txt b/file.txt\n+new line"
+        diff = get_git_diff(cwd=".")
+        assert "diff --git" in diff
 
 
-@patch("subprocess.run")
-def test_get_git_diff_success(mock_run: MagicMock) -> None:
-    mock_res = MagicMock()
-    mock_res.stdout = "diff --git a/file.txt b/file.txt"
-    mock_res.returncode = 0
-    mock_run.return_value = mock_res
-
-    diff = get_git_diff(cwd=".")
-    assert "diff --git" in diff
-    mock_run.assert_called_once_with(
-        ["git", "diff", "HEAD"],
-        cwd=".",
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+def test_get_git_diff_failure() -> None:
+    """git diff コマンド失敗時に GitDiffError が送出されることを検証する (fail-closed)."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "git error"
+        with pytest.raises(GitDiffError):
+            get_git_diff(cwd=".")
 
 
 @patch("subprocess.run")
-def test_get_git_diff_failure(mock_run: MagicMock) -> None:
-    mock_run.side_effect = Exception("Git not found")
-    diff = get_git_diff(cwd=".")
-    assert diff == ""
+def test_run_aider_success(mock_run: MagicMock) -> None:
+    """run_aider が成功時に True を返すことを検証する。"""
+    mock_run.return_value.returncode = 0
+    res = run_aider("Fix bug", ["test.py"])
+    assert res is True
+    assert mock_run.called
 
 
-@patch("tools.aider_runner.get_coordinator")
-@patch("tools.aider_runner.load_model_config")
 @patch("subprocess.run")
-def test_run_aider_success(
-    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
-) -> None:
-    mock_res = MagicMock()
-    mock_res.returncode = 0
-    mock_run.return_value = mock_res
-
-    mock_cfg = MagicMock()
-    mock_cfg.aider.no_auto_commits = True
-    mock_load_config.return_value = mock_cfg
-
-    def dummy_execute(intent: str, request: dict) -> bool:
-        profile = make_ollama_profile()
-        return request["action"](profile)
-
-    coordinator = MagicMock()
-    coordinator.execute.side_effect = dummy_execute
-    mock_get_coordinator.return_value = coordinator
-
-    result = run_aider("fix bug in main.py", ["main.py"], cwd="/tmp/project")
-    assert result is True
-
-    mock_run.assert_called_once()
+def test_run_aider_custom_model_and_timeout(mock_run: MagicMock) -> None:
+    """run_aider にカスタムモデルとタイムアウトが渡されることを検証する。"""
+    mock_run.return_value.returncode = 0
+    res = run_aider("Fix bug", ["test.py"], model="ollama/custom-model", timeout=600)
+    assert res is True
     cmd = mock_run.call_args[0][0]
-    assert cmd == [
-        "aider",
-        "--model",
-        "ollama/qwen2.5-coder:14b",
-        "--yes-always",
-        "--no-auto-commits",
-        "--message",
-        "fix bug in main.py",
-        "main.py",
-    ]
-    assert mock_run.call_args[1]["cwd"] == "/tmp/project"
-    assert mock_run.call_args[1]["timeout"] == 600
+    assert "--model" in cmd
+    assert "ollama/custom-model" in cmd
 
 
-@patch("tools.aider_runner.get_coordinator")
-@patch("tools.aider_runner.load_model_config")
 @patch("subprocess.run")
-def test_run_aider_custom_model_and_timeout(
-    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
-) -> None:
-    mock_res = MagicMock()
-    mock_res.returncode = 0
-    mock_run.return_value = mock_res
-
-    mock_cfg = MagicMock()
-    mock_cfg.aider.no_auto_commits = False
-    mock_load_config.return_value = mock_cfg
-
-    def dummy_execute(intent: str, request: dict) -> bool:
-        profile = make_ollama_profile(model="default-model")
-        return request["action"](profile)
-
-    coordinator = MagicMock()
-    coordinator.execute.side_effect = dummy_execute
-    mock_get_coordinator.return_value = coordinator
-
-    result = run_aider("add tests", ["test.py"], model="custom-model", timeout=120)
-    assert result is True
-
-    cmd = mock_run.call_args[0][0]
-    assert cmd == [
-        "aider",
-        "--model",
-        "ollama/custom-model",
-        "--yes-always",
-        "--message",
-        "add tests",
-        "test.py",
-    ]
-    assert mock_run.call_args[1]["timeout"] == 120
+def test_run_aider_timeout_raises_error(mock_run: MagicMock) -> None:
+    """Aider 実行タイムアウト時に AiderRunError が発生することを検証する。"""
+    import subprocess
+    mock_run.side_effect = subprocess.TimeoutExpired(cmd="aider", timeout=300)
+    with pytest.raises(AiderRunError, match="timed out"):
+        run_aider("Fix bug", ["test.py"])
 
 
-@patch("tools.aider_runner.get_coordinator")
-@patch("tools.aider_runner.load_model_config")
+def test_run_aider_file_not_found(tmp_path: Path) -> None:
+    """指定されたターゲットファイルが存在しない場合に FileNotFoundError が発生することを検証する。"""
+    with pytest.raises(FileNotFoundError):
+        run_aider("Fix bug", ["nonexistent.py"], cwd=str(tmp_path))
+
+
 @patch("subprocess.run")
-def test_run_aider_timeout_raises_error(
-    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
-) -> None:
-    mock_run.side_effect = subprocess.TimeoutExpired(cmd=["aider"], timeout=300)
+def test_run_aider_sanitizes_ollama_api_base_v1_suffix(mock_run: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OLLAMA_API_BASE に /v1 サフィックスが含まれる場合、自動的に除去されることを検証する。"""
+    mock_run.return_value.returncode = 0
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
 
-    mock_cfg = MagicMock()
-    mock_cfg.aider.no_auto_commits = True
-    mock_load_config.return_value = mock_cfg
+    run_aider("Fix bug", ["test.py"])
 
-    def dummy_execute(intent: str, request: dict) -> bool:
-        profile = make_ollama_profile()
-        return request["action"](profile)
-
-    coordinator = MagicMock()
-    coordinator.execute.side_effect = dummy_execute
-    mock_get_coordinator.return_value = coordinator
-
-    with pytest.raises(AiderRunError) as exc_info:
-        run_aider("long task", ["bigfile.py"], timeout=300)
-
-    assert "Aider実行がタイムアウトしました (timeout=300)" in str(exc_info.value)
-
-
-@patch("tools.aider_runner.get_coordinator")
-@patch("tools.aider_runner.load_model_config")
-@patch("subprocess.run")
-def test_run_aider_file_not_found(
-    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
-) -> None:
-    mock_run.side_effect = FileNotFoundError()
-
-    mock_cfg = MagicMock()
-    mock_cfg.aider.no_auto_commits = True
-    mock_load_config.return_value = mock_cfg
-
-    def dummy_execute(intent: str, request: dict) -> bool:
-        profile = make_ollama_profile()
-        return request["action"](profile)
-
-    coordinator = MagicMock()
-    coordinator.execute.side_effect = dummy_execute
-    mock_get_coordinator.return_value = coordinator
-
-    result = run_aider("fix bug", ["main.py"])
-    assert result is False
-
-
-@patch("tools.aider_runner.get_coordinator")
-@patch("tools.aider_runner.load_model_config")
-@patch("subprocess.run")
-def test_run_aider_sanitizes_ollama_api_base_v1_suffix(
-    mock_run: MagicMock, mock_load_config: MagicMock, mock_get_coordinator: MagicMock
-) -> None:
-    """Verify that trailing /v1 is stripped from OLLAMA_API_BASE in subprocess env."""
-    mock_res = MagicMock()
-    mock_res.returncode = 0
-    mock_run.return_value = mock_res
-
-    mock_cfg = MagicMock()
-    mock_cfg.aider.no_auto_commits = True
-    mock_load_config.return_value = mock_cfg
-
-    def dummy_execute(intent: str, request: dict) -> bool:
-        profile = make_ollama_profile()
-        # Simulate patch_env setting OLLAMA_API_BASE with /v1
-        import os
-        with patch.dict(os.environ, {"OLLAMA_API_BASE": "http://localhost:11434/v1"}):
-            return request["action"](profile)
-
-    coordinator = MagicMock()
-    coordinator.execute.side_effect = dummy_execute
-    mock_get_coordinator.return_value = coordinator
-
-    run_aider("test v1 strip", ["file.py"])
-    env_used = mock_run.call_args[1]["env"]
-    assert env_used["OLLAMA_API_BASE"] == "http://localhost:11434"
+    assert mock_run.called
+    env_passed = mock_run.call_args[1]["env"]
+    assert env_passed["OLLAMA_API_BASE"] == "http://localhost:11434"

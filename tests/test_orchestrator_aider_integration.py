@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.aider_runner import AiderRunError
+from tools.aider_runner import AiderRunError, GitDiffError
 from tools.orchestrator_graph import (
     GraphState,
     ProjectLockManager,
@@ -15,6 +15,7 @@ from tools.orchestrator_graph import (
     done_node,
     execute_issue,
     lint_node,
+    resolve_project_context,
     review_node,
     run_pytest_node,
     spec_draft_node,
@@ -60,8 +61,43 @@ def test_validate_project_consistency_mismatch_and_missing_metadata(tmp_path: Pa
         validate_project_consistency("TFG-0004", "TFG", metadata_dir=metadata_dir, project_root=tmp_path)
 
 
+def test_generic_satellite_context_resolution(tmp_path: Path) -> None:
+    """Verify that resolve_project_context dynamically resolves targets without hardcoded filenames."""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    sat_dir = project_root / "projects" / "custom_satellite"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    target_file = sat_dir / "src" / "custom_module.py"
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("# Custom satellite file", encoding="utf-8")
+
+    meta_custom = metadata_dir / "projects" / "CST"
+    meta_custom.mkdir(parents=True, exist_ok=True)
+    (meta_custom / "project.json").write_text(json.dumps({"key": "CST", "base_branch": "main"}), encoding="utf-8")
+
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.write_text(
+        json.dumps({
+            "projects": {
+                "CST": {
+                    "name": "custom_satellite",
+                    "dir": "projects/custom_satellite",
+                    "meta": "metadata/projects/CST",
+                }
+            }
+        }),
+        encoding="utf-8"
+    )
+
+    ctx = resolve_project_context("CST", metadata_dir=metadata_dir, project_root=project_root)
+    assert ctx["valid"] is True
+    assert ctx["base_branch"] == "main"
+    assert "src/custom_module.py" in ctx["target_files"]
+
+
 def test_done_node_handles_git_failures() -> None:
-    """Verify that done_node maps git diff --cached, add, commit, push failures to PR_FAILED / PR_ERROR."""
+    """Verify that done_node maps git diff --cached, add, commit, push, gh pr create failures to PR_FAILED / PR_ERROR."""
     state = GraphState(
         issue_id="TFG-0004",
         project_key="TFG",
@@ -86,6 +122,7 @@ def test_done_node_handles_git_failures() -> None:
         review_verdict="LGTM",
         review_comments=[],
         review_rounds=[],
+        reviewdog_result=None,
         history_summary=None,
         rdjson=None,
     )
@@ -95,13 +132,13 @@ def test_done_node_handles_git_failures() -> None:
         mock_path.return_value.__truediv__.return_value.exists.return_value = True
 
         # 1. git diff --cached returns non-zero code
-        with patch("subprocess.run", return_value=MagicMock(returncode=1, stderr="diff error")):
+        with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=1, stderr="diff error")):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
 
         # 2. git diff --cached non-empty staged changes
-        with patch("subprocess.run", side_effect=[
+        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
             MagicMock(returncode=0, stdout="staged_file.py\n"),
         ]):
             res = done_node(state.copy())
@@ -136,6 +173,7 @@ def test_spec_draft_node_timeout_retry() -> None:
         review_verdict=None,
         review_comments=None,
         review_rounds=[],
+        reviewdog_result=None,
         history_summary=None,
         rdjson=None,
     )
@@ -176,6 +214,7 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
         review_verdict=None,
         review_comments=None,
         review_rounds=[],
+        reviewdog_result=None,
         history_summary=None,
         rdjson=None,
     )
@@ -220,6 +259,7 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
         review_verdict=None,
         review_comments=None,
         review_rounds=[],
+        reviewdog_result=None,
         history_summary=None,
         rdjson=None,
     )
@@ -257,11 +297,12 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         review_verdict=None,
         review_comments=None,
         review_rounds=[],
+        reviewdog_result=None,
         history_summary=None,
         rdjson=None,
     )
 
-    with patch("subprocess.run", side_effect=RuntimeError("Subprocess failed")):
+    with patch("tools.orchestrator_graph.run_cmd", side_effect=RuntimeError("Subprocess failed")):
         lint_res = lint_node(state.copy())
         assert lint_res["status"] == "FAILED_SYSTEM"
         assert lint_res["error_category"] == "SYSTEM_ERROR"
@@ -269,6 +310,43 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         test_res = run_pytest_node(state.copy())
         assert test_res["status"] == "FAILED_SYSTEM"
         assert test_res["error_category"] == "SYSTEM_ERROR"
+
+
+def test_review_node_fail_closed_on_git_diff_error() -> None:
+    """Verify that review_node stops with FAILED_SYSTEM if get_git_diff raises GitDiffError."""
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_exec_diff_err",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/grep/office_parser.py"],
+        instruction="Fix bug",
+        cwd="/fake/path",
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict=None,
+        review_comments=None,
+        review_rounds=[],
+        reviewdog_result=None,
+        history_summary=None,
+        rdjson=None,
+    )
+
+    with patch("tools.orchestrator_graph.get_git_diff", side_effect=GitDiffError("git diff failed")):
+        res = review_node(state)
+        assert res["status"] == "FAILED_SYSTEM"
+        assert res["error_category"] == "SYSTEM_ERROR"
 
 
 def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> None:
@@ -297,13 +375,18 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
         review_verdict=None,
         review_comments=None,
         review_rounds=[],
+        reviewdog_result=None,
         history_summary=None,
         rdjson=None,
     )
 
     # 1. Test changes_requested
-    mock_resp = {"verdict": "changes_requested", "comments": ["Syntax error on line 10"]}
-    with patch("tools.llm_client.call_llm", return_value=mock_resp):
+    mock_resp = {
+        "verdict": "changes_requested",
+        "comments": [{"file": "src/grep/office_parser.py", "line": 10, "message": "Syntax error", "severity": "WARNING"}]
+    }
+    with patch("tools.llm_client.call_llm", return_value=mock_resp), \
+         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"):
         res = review_node(state.copy())
         assert res["status"] == "retry_code"
         assert res["review_round"] == 1
@@ -311,13 +394,14 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
         assert len(res["review_rounds"]) == 1
         assert res["review_rounds"][0]["verdict"] == "changes_requested"
         assert "rdjson" in res
-        assert res["rdjson"]["diagnostics"][0]["message"] == "Syntax error on line 10"
+        assert res["rdjson"]["diagnostics"][0]["message"] == "Syntax error"
 
     # 2. Test LGTM with fresh state
     state_lgtm = state.copy()
     state_lgtm["review_rounds"] = []
-    mock_lgtm = {"verdict": "LGTM", "comments": ["Looks good"]}
-    with patch("tools.llm_client.call_llm", return_value=mock_lgtm):
+    mock_lgtm = {"verdict": "LGTM", "comments": []}
+    with patch("tools.llm_client.call_llm", return_value=mock_lgtm), \
+         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"):
         res_lgtm = review_node(state_lgtm)
         assert res_lgtm["status"] == "review_lgtm"
         assert res_lgtm["review_verdict"] == "LGTM"
@@ -350,7 +434,10 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     meta_tfg = metadata_dir / "projects" / "TFG"
     meta_tfg.mkdir(parents=True, exist_ok=True)
     (meta_tfg / "tasks.md").write_text("- [ ] [TFG-0004] office_parser.py test", encoding="utf-8")
-    (meta_tfg / "project.json").write_text(json.dumps({"key": "TFG", "base_branch": "develop"}), encoding="utf-8")
+    (meta_tfg / "project.json").write_text(
+        json.dumps({"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}),
+        encoding="utf-8"
+    )
 
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.write_text(
@@ -368,7 +455,7 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
 
     with patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire, \
          patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release, \
-         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
+         patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")):
 
         execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
 
