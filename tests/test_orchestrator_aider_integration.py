@@ -1,4 +1,4 @@
-"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, git switch, reviewer validation, RDJSON, audit schema, and CLI commands."""
+"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, git switch, reviewer validation, RDJSON, audit schema, regex validation, and CLI commands."""
 
 import json
 from pathlib import Path
@@ -16,7 +16,19 @@ from tools.orchestrator_graph import (
     review_node,
     run_pytest_node,
     update_task_state,
+    validate_issue_id,
 )
+
+
+def test_validate_issue_id_format() -> None:
+    """Verify that validate_issue_id enforces strict PROJECT-0001 pattern."""
+    assert validate_issue_id("TFG-0004") is True
+    assert validate_issue_id("SBOS-0001") is True
+    assert validate_issue_id("TFG-0004-A") is True
+
+    assert validate_issue_id("EC-1") is False
+    assert validate_issue_id("invalid_id") is False
+    assert validate_issue_id("TFG0004") is False
 
 
 def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
@@ -42,6 +54,8 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
         impl_plan=None,
         lint_result=None,
         test_result=None,
+        review_verdict=None,
+        review_comments=None,
         review_rounds=[],
         history_summary=None,
         rdjson=None,
@@ -84,6 +98,8 @@ def test_code_node_handles_aider_false_return_as_failed_system() -> None:
         impl_plan=None,
         lint_result=None,
         test_result=None,
+        review_verdict=None,
+        review_comments=None,
         review_rounds=[],
         history_summary=None,
         rdjson=None,
@@ -119,6 +135,8 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         impl_plan=None,
         lint_result=None,
         test_result=None,
+        review_verdict=None,
+        review_comments=None,
         review_rounds=[],
         history_summary=None,
         rdjson=None,
@@ -139,8 +157,8 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         assert review_res["error_category"] == "SYSTEM_ERROR"
 
 
-def test_review_node_validates_response_and_structures_rdjson() -> None:
-    """Verify that review_node parses changes_requested, builds rdjson, and tracks review_rounds."""
+def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> None:
+    """Verify that review_node parses LGTM and changes_requested, builds rdjson, and tracks all review_rounds."""
     state = GraphState(
         issue_id="TFG-0004",
         project_key="TFG",
@@ -162,20 +180,35 @@ def test_review_node_validates_response_and_structures_rdjson() -> None:
         impl_plan=None,
         lint_result=None,
         test_result=None,
+        review_verdict=None,
+        review_comments=None,
         review_rounds=[],
         history_summary=None,
         rdjson=None,
     )
 
+    # 1. Test changes_requested
     mock_resp = {"verdict": "changes_requested", "comments": ["Syntax error on line 10"]}
     with patch("tools.llm_client.call_llm", return_value=mock_resp):
         res = review_node(state.copy())
         assert res["status"] == "retry_code"
         assert res["review_round"] == 1
+        assert res["review_verdict"] == "changes_requested"
         assert len(res["review_rounds"]) == 1
         assert res["review_rounds"][0]["verdict"] == "changes_requested"
         assert "rdjson" in res
         assert res["rdjson"]["diagnostics"][0]["message"] == "Syntax error on line 10"
+
+    # 2. Test LGTM with fresh state
+    state_lgtm = state.copy()
+    state_lgtm["review_rounds"] = []
+    mock_lgtm = {"verdict": "LGTM", "comments": ["Looks good"]}
+    with patch("tools.llm_client.call_llm", return_value=mock_lgtm):
+        res_lgtm = review_node(state_lgtm)
+        assert res_lgtm["status"] == "review_lgtm"
+        assert res_lgtm["review_verdict"] == "LGTM"
+        assert len(res_lgtm["review_rounds"]) == 1
+        assert res_lgtm["review_rounds"][0]["verdict"] == "LGTM"
 
 
 @patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out"))
@@ -248,18 +281,18 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     assert "history_summary" in record
 
 
-def test_cmd_orchestrate_reads_priority_cache(tmp_path: Path) -> None:
-    """Verify that cmd_orchestrate reads priority-cache.json and displays top 3 issues."""
+def test_cmd_orchestrate_reads_canonical_issues_schema(tmp_path: Path) -> None:
+    """Verify that cmd_orchestrate reads canonical priority-cache.json with {"issues": [{"id": "..."}]} structure."""
     cache_dir = tmp_path / "tools" / ".cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / "priority-cache.json"
 
     dummy_cache = {
-        "tasks": [
-            {"issue_id": "TFG-0001", "title": "Task 1", "score": 10, "project_key": "TFG"},
-            {"issue_id": "TFG-0002", "title": "Task 2", "score": 90, "project_key": "TFG"},
-            {"issue_id": "TFG-0003", "title": "Task 3", "score": 50, "project_key": "TFG"},
-            {"issue_id": "TFG-0004", "title": "Task 4", "score": 100, "project_key": "TFG"},
+        "issues": [
+            {"id": "TFG-0001", "title": "Task 1", "score": 10, "project_key": "TFG"},
+            {"id": "TFG-0002", "title": "Task 2", "score": 90, "project_key": "TFG"},
+            {"id": "TFG-0003", "title": "Task 3", "score": 50, "project_key": "TFG"},
+            {"id": "TFG-0004", "title": "Task 4", "score": 100, "project_key": "TFG"},
         ]
     }
     cache_file.write_text(json.dumps(dummy_cache), encoding="utf-8")

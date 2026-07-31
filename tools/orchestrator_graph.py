@@ -8,11 +8,12 @@ Rev.2.7 〜 新アーキテクチャ。
 """
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional, TypedDict
@@ -32,6 +33,13 @@ logging.basicConfig(
     format='[%(asctime)s] %(name)s %(levelname)s: %(message)s'
 )
 logger = logging.getLogger("orchestrator_graph")
+
+ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-\d{4}(-[A-Z])?$")
+
+
+def validate_issue_id(issue_id: str) -> bool:
+    """Issue ID の形式を正規表現で検証する (MULTI-001 §2②・§4)."""
+    return bool(ISSUE_ID_PATTERN.match(issue_id))
 
 
 class ProjectLockManager:
@@ -98,7 +106,7 @@ def update_task_state(
                         "review_round": raw_data.get("review_round", 0),
                         "max_round": raw_data.get("max_round", 3),
                         "error_category": raw_data.get("error_category"),
-                        "updated_at": raw_data.get("updated_at", datetime.now().isoformat()),
+                        "updated_at": raw_data.get("updated_at", datetime.now(timezone.utc).isoformat()),
                     }
                 else:
                     state_data = raw_data
@@ -110,7 +118,7 @@ def update_task_state(
         "review_round": review_round,
         "max_round": max_round,
         "error_category": error_category,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     temp_file = state_file.with_name(f"state.json.{uuid.uuid4().hex}.tmp")
@@ -129,7 +137,7 @@ def record_execution_history(
     history_file: Optional[Path] = None,
 ) -> None:
     """tools/.cache/execution_history.json へ実行完了・エスカレーション結果を
-    DD-003 §4.1.1 監査スキーマ (actual_round = max(...), review_rounds, history_summary)
+    DD-003 §4.1.1 監査スキーマ (actual_round = max(...), review_rounds, history_summary.review_verdict)
     に従って専用の FileLock 保護のもとアトミックに追記保存する。
     """
     if history_file is None:
@@ -150,9 +158,10 @@ def record_execution_history(
         test_round = state.get("test_round", 0)
         rev_round = state.get("review_round", review_round)
         actual_round = max(lint_round, test_round, rev_round)
+        rev_verdict = state.get("review_verdict", "PENDING")
 
         record = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "issue_id": state.get("issue_id", "unknown"),
             "project_key": state.get("project_key", "unknown"),
             "project_path": state.get("cwd", "unknown"),
@@ -169,7 +178,7 @@ def record_execution_history(
             "history_summary": {
                 "lint_passed": state.get("status") in ["lint_passed", "test_passed", "review_lgtm", "COMPLETED"],
                 "test_passed": state.get("status") in ["test_passed", "review_lgtm", "COMPLETED"],
-                "review_verdict": final_status,
+                "review_verdict": rev_verdict,
             },
         }
 
@@ -184,6 +193,19 @@ def record_execution_history(
             os.fsync(f.fileno())
 
         os.replace(temp_file, history_file)
+
+
+def safe_record_execution_history(
+    state: Dict[str, Any],
+    final_status: str,
+    review_round: int = 0,
+    history_file: Optional[Path] = None,
+) -> None:
+    """履歴保存時の例外を捕捉し、確定済み state.json を汚染させない統一保護ヘルパー。"""
+    try:
+        record_execution_history(state, final_status=final_status, review_round=review_round, history_file=history_file)
+    except Exception as e:
+        logger.warning(f"Failed to record execution history safely (keeping state '{final_status}'): {e}")
 
 
 def write_event(project_key: str, event_data: Dict[str, Any], metadata_dir: Optional[Path] = None) -> None:
@@ -300,6 +322,8 @@ class GraphState(TypedDict):
     impl_plan: Optional[str]
     lint_result: Optional[Dict[str, Any]]
     test_result: Optional[Dict[str, Any]]
+    review_verdict: Optional[str]
+    review_comments: Optional[List[str]]
     review_rounds: List[Dict[str, Any]]
     history_summary: Optional[Dict[str, Any]]
     rdjson: Optional[Dict[str, Any]]
@@ -309,14 +333,30 @@ def spec_draft_node(state: GraphState) -> GraphState:
     """Issue に対する実装方針計画を策定し、impl_plan へ構造保存するノード (DD-003 §4)."""
     logger.info("Executing spec_draft_node")
     from tools.llm_client import call_llm
-    res = call_llm(
-        role="planner",
-        intent="spec_draft",
-        system_prompt="You are a planner",
-        user_prompt=f"Draft spec for {state['issue_id']}"
-    )
-    plan_str = res.get("content", str(res)) if isinstance(res, dict) else str(res)
-    state["impl_plan"] = plan_str
+    try:
+        res = call_llm(
+            role="planner",
+            intent="spec_draft",
+            system_prompt="You are a planner",
+            user_prompt=f"Draft spec for {state['issue_id']}"
+        )
+        plan_str = res.get("content", str(res)) if isinstance(res, dict) else str(res)
+        state["impl_plan"] = plan_str
+    except Exception as e:
+        if "timeout" in str(e).lower():
+            logger.warning(f"Timeout caught in spec_draft_node: {e}")
+            state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
+            state["error_category"] = "LLM_TIMEOUT"
+            state["error"] = str(e)
+            if state["llm_timeout_count"] >= 2:
+                state["status"] = "FAILED_SYSTEM"
+            else:
+                state["status"] = "retry_code"
+        else:
+            logger.error(f"Error in spec_draft_node: {e}")
+            state["status"] = "FAILED_SYSTEM"
+            state["error_category"] = "SYSTEM_ERROR"
+            state["error"] = str(e)
     return state
 
 
@@ -412,8 +452,8 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
 def review_node(state: GraphState) -> GraphState:
     """Reviewer LLM 呼び出しノード (DD-003 §4)。
-    プロンプトに Git diff を注入し、応答形式の厳格検証、RDJSON (Reviewdog) 連携、
-    および review_rounds 履歴の原子的追記を行う。
+    プロンプトに Git diff を注入し、応答形式の厳格検証、RDJSON / Reviewdog 連携、
+    および LGTM を含む全レビューの review_rounds 履歴原子的保存を行う。
     例外発生時または不整合時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
     logger.info("Executing review_node")
@@ -445,53 +485,80 @@ def review_node(state: GraphState) -> GraphState:
             return state
 
         verdict = res["verdict"]
+        rev_comments = res.get("comments", [])
+        rev_round = state.get("review_round", 0) + 1
+        state["review_round"] = rev_round
+        state["review_verdict"] = verdict
+        state["review_comments"] = rev_comments if isinstance(rev_comments, list) else [str(rev_comments)]
+
+        # RDJSON / Reviewdog 連携構造化
+        rd_diagnostics = [
+            {
+                "message": str(c),
+                "location": {"path": state.get("target_files", [""])[0], "range": {"start": {"line": 1}}},
+                "severity": "WARNING",
+            }
+            for c in (rev_comments if isinstance(rev_comments, list) else [rev_comments])
+        ]
+        state["rdjson"] = {
+            "source": {"name": "ReviewerLLM", "url": ""},
+            "diagnostics": rd_diagnostics,
+        }
+
+        # 全レビュー (LGTM を含む) を review_rounds に記録
+        rounds = state.get("review_rounds", [])
+        rounds.append({
+            "review_round": rev_round,
+            "verdict": verdict,
+            "comments": rev_comments,
+            "rdjson": state["rdjson"],
+        })
+        state["review_rounds"] = rounds
+
+        # Reviewdog 連携試行
+        if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+            try:
+                rd_file = Path(cwd) / ".rdjson.tmp"
+                rd_file.write_text(json.dumps(state["rdjson"]), encoding="utf-8")
+                subprocess.run(
+                    ["reviewdog", "-f=rdjson", "-diff=git diff HEAD"],
+                    cwd=cwd, capture_output=True, text=True
+                )
+                if rd_file.exists():
+                    rd_file.unlink()
+            except Exception as rde:
+                logger.warning(f"Reviewdog execution skipped or unavailable: {rde}")
+
         if verdict == "LGTM":
             state["status"] = "review_lgtm"
         else:
-            rev_round = state.get("review_round", 0) + 1
-            state["review_round"] = rev_round
             state["error_category"] = "REVIEW_REJECTED"
-            rev_comments = res.get("comments", [])
             state["aider_message"] = f"Review comments:\n{rev_comments}"
-
-            # RDJSON / Reviewdog 連携構造化
-            rd_diagnostics = [
-                {
-                    "message": str(c),
-                    "location": {"path": state.get("target_files", [""])[0], "range": {"start": {"line": 1}}},
-                    "severity": "WARNING",
-                }
-                for c in (rev_comments if isinstance(rev_comments, list) else [rev_comments])
-            ]
-            state["rdjson"] = {
-                "source": {"name": "ReviewerLLM", "url": ""},
-                "diagnostics": rd_diagnostics,
-            }
-
-            rounds = state.get("review_rounds", [])
-            rounds.append({
-                "review_round": rev_round,
-                "verdict": verdict,
-                "comments": rev_comments,
-                "rdjson": state["rdjson"],
-            })
-            state["review_rounds"] = rounds
-
             if rev_round >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
                 state["status"] = "retry_code"
     except Exception as e:
-        logger.error(f"Error in review_node: {e}")
-        state["status"] = "FAILED_SYSTEM"
-        state["error_category"] = "SYSTEM_ERROR"
-        state["error"] = str(e)
+        if "timeout" in str(e).lower():
+            logger.warning(f"Timeout caught in review_node: {e}")
+            state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
+            state["error_category"] = "LLM_TIMEOUT"
+            state["error"] = str(e)
+            if state["llm_timeout_count"] >= 2:
+                state["status"] = "FAILED_SYSTEM"
+            else:
+                state["status"] = "retry_code"
+        else:
+            logger.error(f"Error in review_node: {e}")
+            state["status"] = "FAILED_SYSTEM"
+            state["error_category"] = "SYSTEM_ERROR"
+            state["error"] = str(e)
     return state
 
 
 def done_node(state: GraphState) -> GraphState:
     """PR 作成および完了ノード (DD-003 §4)。
-    明示的 git add -> git commit -> git push -> gh pr create パイプラインを実行。
+    既存インデックス非空チェック -> 明示的 git add -> git commit -> git push -> gh pr create パイプラインを実行。
     失敗時は PR_FAILED / PR_ERROR としてブランチと差分を安全保持する。
     """
     logger.info("Executing done_node (PR creation pipeline)")
@@ -502,6 +569,18 @@ def done_node(state: GraphState) -> GraphState:
 
     try:
         if cwd and Path(cwd).exists() and (Path(cwd) / ".git").exists():
+            # インデックス混入防止: 既存 staged 変更の有無を確認
+            diff_cached = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=cwd, capture_output=True, text=True
+            )
+            if diff_cached.stdout.strip():
+                logger.error("Existing staged changes detected in git index before commit. Aborting.")
+                state["status"] = "PR_FAILED"
+                state["error_category"] = "PR_ERROR"
+                state["error"] = "Existing staged changes detected in index before commit"
+                return state
+
             # 1. 明示的な git add
             if target_files:
                 add_res = subprocess.run(["git", "add", "--"] + target_files, cwd=cwd, capture_output=True, text=True)
@@ -582,7 +661,13 @@ def execute_issue(
     metadata_dir: Optional[Path] = None,
     history_file: Optional[Path] = None,
     project_root: Optional[Path] = None,
+    allow_offline_git: bool = True,
 ) -> None:
+    # 規約準拠の Issue ID 正規表現検証
+    if not validate_issue_id(issue_id):
+        logger.error(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001'.")
+        raise ValueError(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001'.")
+
     execution_id = uuid.uuid4().hex
     logger.info(f"Starting execution for Issue: {issue_id}, Execution ID: {execution_id}")
 
@@ -602,7 +687,7 @@ def execute_issue(
             error_category="SYSTEM_ERROR",
             metadata_dir=metadata_dir,
         )
-        record_execution_history(
+        safe_record_execution_history(
             {
                 "issue_id": issue_id,
                 "project_key": project_key,
@@ -630,7 +715,7 @@ def execute_issue(
                             project_key, issue_id, status="FAILED_SYSTEM",
                             error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
                         )
-                        record_execution_history(
+                        safe_record_execution_history(
                             {
                                 "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
                                 "error_category": "SYSTEM_ERROR",
@@ -644,8 +729,21 @@ def execute_issue(
                         ["git", "pull", "--ff-only", "origin", base_branch],
                         cwd=cwd, capture_output=True, text=True
                     )
-                    if pull_res.returncode != 0:
-                        logger.warning(f"git pull --ff-only failed (or remote not set): {pull_res.stderr}")
+                    if pull_res.returncode != 0 and not allow_offline_git:
+                        logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
+                        update_task_state(
+                            project_key, issue_id, status="FAILED_SYSTEM",
+                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                        )
+                        safe_record_execution_history(
+                            {
+                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                "error_category": "SYSTEM_ERROR",
+                                "error": f"git pull --ff-only failed: {pull_res.stderr}",
+                            },
+                            final_status="FAILED_SYSTEM", history_file=history_file
+                        )
+                        return
 
                     head_branch = f"sbos/{issue_id}"
                     sw_head = subprocess.run(["git", "switch", head_branch], cwd=cwd, capture_output=True, text=True)
@@ -660,7 +758,7 @@ def execute_issue(
                                 project_key, issue_id, status="FAILED_SYSTEM",
                                 error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
                             )
-                            record_execution_history(
+                            safe_record_execution_history(
                                 {
                                     "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
                                     "error_category": "SYSTEM_ERROR",
@@ -678,7 +776,7 @@ def execute_issue(
                         error_category="SYSTEM_ERROR",
                         metadata_dir=metadata_dir,
                     )
-                    record_execution_history(
+                    safe_record_execution_history(
                         {
                             "issue_id": issue_id,
                             "project_key": project_key,
@@ -789,6 +887,8 @@ def execute_issue(
                     impl_plan=None,
                     lint_result=None,
                     test_result=None,
+                    review_verdict=None,
+                    review_comments=None,
                     review_rounds=[],
                     history_summary=None,
                     rdjson=None,
@@ -808,17 +908,13 @@ def execute_issue(
                     error_category=error_cat,
                     metadata_dir=metadata_dir,
                 )
-                # 2. 確定済ステートを保護しつつ execution_history.json 追記保存
-                try:
-                    record_execution_history(
-                        final_state,
-                        final_status=final_status,
-                        review_round=final_state.get("review_round", 0),
-                        history_file=history_file,
-                    )
-                except Exception as he:
-                    logger.warning(f"Failed to record execution history, keeping final state {final_status}: {he}")
-
+                # 2. 確定済ステートを保護する統一ヘルパーで execution_history.json 追記保存
+                safe_record_execution_history(
+                    final_state,
+                    final_status=final_status,
+                    review_round=final_state.get("review_round", 0),
+                    history_file=history_file,
+                )
                 logger.info(f"Execution completed for Issue: {issue_id} with status: {final_status}")
 
             except Exception as e:
@@ -830,20 +926,17 @@ def execute_issue(
                     error_category="SYSTEM_ERROR",
                     metadata_dir=metadata_dir,
                 )
-                try:
-                    record_execution_history(
-                        {
-                            "issue_id": issue_id,
-                            "project_key": project_key,
-                            "cwd": cwd,
-                            "error_category": "SYSTEM_ERROR",
-                            "error": str(e),
-                        },
-                        final_status="FAILED_SYSTEM",
-                        history_file=history_file,
-                    )
-                except Exception:
-                    pass
+                safe_record_execution_history(
+                    {
+                        "issue_id": issue_id,
+                        "project_key": project_key,
+                        "cwd": cwd,
+                        "error_category": "SYSTEM_ERROR",
+                        "error": str(e),
+                    },
+                    final_status="FAILED_SYSTEM",
+                    history_file=history_file,
+                )
 
     except TimeoutError:
         logger.warning(f"Execution skipped for {issue_id} due to lock timeout.")
@@ -854,20 +947,17 @@ def execute_issue(
             error_category="LOCKED",
             metadata_dir=metadata_dir,
         )
-        try:
-            record_execution_history(
-                {
-                    "issue_id": issue_id,
-                    "project_key": project_key,
-                    "cwd": cwd,
-                    "error_category": "LOCKED",
-                    "error": "Failed to acquire lock within timeout",
-                },
-                final_status="SKIPPED_LOCKED",
-                history_file=history_file,
-            )
-        except Exception:
-            pass
+        safe_record_execution_history(
+            {
+                "issue_id": issue_id,
+                "project_key": project_key,
+                "cwd": cwd,
+                "error_category": "LOCKED",
+                "error": "Failed to acquire lock within timeout",
+            },
+            final_status="SKIPPED_LOCKED",
+            history_file=history_file,
+        )
         write_event(
             project_key,
             {
@@ -884,7 +974,9 @@ def execute_issue(
 
 
 def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path] = None) -> None:
-    """tools/.cache/priority-cache.json を読み込み、未完了 Issue の上位3件および提案を表示する (DD-003 §5, §6)."""
+    """tools/.cache/priority-cache.json を読み込み、未完了 Issue の上位3件および提案を表示する (DD-003 §5, §6).
+    正本構造 {"issues": [{"id": "...", "score": ...}]} を最優先パースする。
+    """
     if cache_file is None:
         cache_file = Path(__file__).resolve().parent.parent / "tools" / ".cache" / "priority-cache.json"
     logger.info(f"Orchestrating uncompleted issues (project_key: {project_key or 'ALL'})")
@@ -896,22 +988,32 @@ def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path
     try:
         with open(cache_file, "r", encoding="utf-8") as f:
             cdata = json.load(f)
-        tasks = cdata.get("tasks", [])
-        if project_key:
-            tasks = [t for t in tasks if t.get("project_key") == project_key]
 
-        if not tasks:
-            logger.info("No uncompleted tasks found in priority cache.")
+        raw_items = cdata.get("issues") or cdata.get("tasks") or []
+        items = []
+        for item in raw_items:
+            iid = item.get("id") or item.get("issue_id")
+            title = item.get("title", "")
+            score = item.get("score", 0)
+            pkey = item.get("project_key") or (iid.split("-")[0] if iid and "-" in iid else None)
+            if iid:
+                items.append({"issue_id": iid, "title": title, "score": score, "project_key": pkey})
+
+        if project_key:
+            items = [i for i in items if i.get("project_key") == project_key]
+
+        if not items:
+            logger.info("No uncompleted issues found in priority cache.")
             return
 
-        sorted_tasks = sorted(tasks, key=lambda x: x.get("score", 0), reverse=True)
-        top_tasks = sorted_tasks[:3]
+        sorted_items = sorted(items, key=lambda x: x.get("score", 0), reverse=True)
+        top_items = sorted_items[:3]
 
         logger.info("=== Top 3 Priority Issues ===")
-        for idx, task in enumerate(top_tasks, 1):
-            logger.info(f"[{idx}] ID: {task.get('issue_id')} | Title: {task.get('title')} | Score: {task.get('score')}")
+        for idx, item in enumerate(top_items, 1):
+            logger.info(f"[{idx}] ID: {item.get('issue_id')} | Title: {item.get('title')} | Score: {item.get('score')}")
 
-        top_issue = top_tasks[0].get("issue_id")
+        top_issue = top_items[0].get("issue_id")
         logger.info(f"Suggested Command: python tools/orchestrator_graph.py execute --issue-id {top_issue}")
     except Exception as e:
         logger.error(f"Failed to read priority cache: {e}")
@@ -932,6 +1034,10 @@ def main() -> None:
 
     if args.subcommand == "execute":
         issue_id = args.issue_id
+        if not validate_issue_id(issue_id):
+            logger.error(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001'.")
+            sys.exit(1)
+
         project_key = args.project_key
         if not project_key and "-" in issue_id:
             project_key = issue_id.split("-")[0]
@@ -947,6 +1053,9 @@ def main() -> None:
         legacy_parser.add_argument("--project-key", help="Target Project Key")
         leg_args, _ = legacy_parser.parse_known_args()
         if leg_args.issue_id and leg_args.project_key:
+            if not validate_issue_id(leg_args.issue_id):
+                logger.error(f"Invalid Issue ID format: '{leg_args.issue_id}'.")
+                sys.exit(1)
             execute_issue(leg_args.issue_id, leg_args.project_key)
         else:
             parser.print_help()
