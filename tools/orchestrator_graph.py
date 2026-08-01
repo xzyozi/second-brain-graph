@@ -521,7 +521,7 @@ def code_node(state: GraphState) -> GraphState:
                         parts = line.strip().split(maxsplit=1)
                         if len(parts) == 2:
                             rel_path = parts[1].strip().replace("\\", "/")
-                            if rel_path not in state["target_files"]:
+                            if rel_path.endswith(".py") and rel_path not in state["target_files"]:
                                 state["target_files"].append(rel_path)
     except AiderRunError as e:
         logger.warning(f"AiderRunError caught in code_node: {e}")
@@ -549,9 +549,9 @@ def lint_node(state: GraphState) -> GraphState:
     try:
         existing_targets = [
             tf for tf in target_files
-            if cwd and (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file()
+            if tf.endswith(".py") and cwd and (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file()
         ]
-        targets_to_check = existing_targets if existing_targets else target_files
+        targets_to_check = existing_targets if existing_targets else [tf for tf in target_files if tf.endswith(".py")]
         if not targets_to_check:
             state["status"] = "lint_passed"
             return state
