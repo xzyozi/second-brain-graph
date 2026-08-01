@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import uuid
@@ -901,9 +902,20 @@ def done_node(state: GraphState) -> GraphState:
                 return state
 
             # 4. PR の作成 (gh CLI が未インストールまたはエラーの場合は Web PR 案内を出力して COMPLETED 扱いにする)
+            gh_bin = shutil.which("gh") or "gh"
+            if not shutil.which(gh_bin):
+                for candidate in [
+                    r"C:\Program Files\GitHub CLI\gh.exe",
+                    r"C:\Program Files (x86)\GitHub CLI\gh.exe",
+                    os.path.expanduser(r"~\AppData\Local\Programs\GitHub CLI\gh.exe"),
+                ]:
+                    if os.path.exists(candidate):
+                        gh_bin = candidate
+                        break
+
             try:
                 pr_res = run_cmd(
-                    ["gh", "pr", "create", "--base", base_branch, "--head", head_branch,
+                    [gh_bin, "pr", "create", "--base", base_branch, "--head", head_branch,
                      "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
                     cwd=cwd, timeout=180
                 )
