@@ -1055,43 +1055,24 @@ def execute_issue(
                         return
 
                     head_branch = f"{work_branch_prefix}{issue_id}"
-                    sw_head = run_cmd(["git", "switch", head_branch], cwd=cwd, timeout=60)
-                    if sw_head.returncode == 0:
-                        # 既存作業ブランチ再開時のベース追従 (git rebase base_branch)
-                        rebase_res = run_cmd(["git", "rebase", base_branch], cwd=cwd, timeout=120)
-                        if rebase_res.returncode != 0:
-                            run_cmd(["git", "rebase", "--abort"], cwd=cwd, timeout=60)
-                            logger.error(f"git rebase {base_branch} failed: {rebase_res.stderr}")
-                            update_task_state(
-                                project_key, issue_id, status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git rebase {base_branch} failed: {rebase_res.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM", history_file=history_file
-                            )
-                            return
-                    else:
-                        sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
-                        if sw_c.returncode != 0:
-                            logger.error(f"git switch -c {head_branch} failed: {sw_c.stderr}")
-                            update_task_state(
-                                project_key, issue_id, status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git switch -c failed: {sw_c.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM", history_file=history_file
-                            )
-                            return
+                    # 既存の同名ローカル作業ブランチがあれば強制削除し、常に base_branch からフレッシュに新規分岐する
+                    run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
+                    sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
+                    if sw_c.returncode != 0:
+                        logger.error(f"git switch -c {head_branch} {base_branch} failed: {sw_c.stderr}")
+                        update_task_state(
+                            project_key, issue_id, status="FAILED_SYSTEM",
+                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                        )
+                        safe_record_execution_history(
+                            {
+                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                "error_category": "SYSTEM_ERROR",
+                                "error": f"git switch -c failed: {sw_c.stderr}",
+                            },
+                            final_status="FAILED_SYSTEM", history_file=history_file
+                        )
+                        return
                 except Exception as ge:
                     logger.error(f"Failed git branch setup in {cwd}: {ge}")
                     update_task_state(
