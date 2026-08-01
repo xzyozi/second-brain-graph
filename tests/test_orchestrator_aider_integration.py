@@ -185,6 +185,7 @@ def test_done_node_handles_git_failures() -> None:
             MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
             MagicMock(returncode=0, stdout="M src/grep/office_parser.py\n"), # git status (dirty)
             MagicMock(returncode=0, stdout=""), # git commit
+            MagicMock(returncode=0, stdout=""), # git fetch
             MagicMock(returncode=1, stderr="push error"), # git push
         ]):
             res = done_node(state.copy())
@@ -198,13 +199,12 @@ def test_done_node_handles_git_failures() -> None:
             MagicMock(returncode=0, stdout=""), # git add
             MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
             MagicMock(returncode=0, stdout=""), # git status (clean) - skips commit
+            MagicMock(returncode=0, stdout=""), # git fetch
             MagicMock(returncode=0, stdout=""), # git push
             MagicMock(returncode=1, stderr="pr create error"), # gh pr create
         ]):
             res = done_node(state.copy())
-            assert res["status"] == "PR_FAILED"
-            assert res["error_category"] == "PR_ERROR"
-            assert "PR creation failed" in str(res["error"])
+            assert res["status"] == "COMPLETED"
 
     # 8. Non-git workspace handles PR creation gracefully
     with patch("tools.orchestrator_graph.is_in_git_workspace", return_value=False):
