@@ -378,17 +378,18 @@ def resolve_project_context(
                     pdata = json.load(pf)
                     base_branch = pdata.get("base_branch", "develop")
                     work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
-                    if "target_files" in pdata and isinstance(pdata["target_files"], list):
+                    if "target_files" in pdata and isinstance(pdata["target_files"], list) and pdata["target_files"]:
                         raw_target_files.extend(pdata["target_files"])
 
-            tasks_md = project_root / meta_dir / "tasks.md"
-            if tasks_md.exists():
-                text = tasks_md.read_text(encoding="utf-8")
-                # tasks.md 内に記述された *.py や src/ パスを動的抽出
-                matches = re.findall(r"[\w/.-]+\.py", text)
-                for m in matches:
-                    if m not in raw_target_files:
-                        raw_target_files.append(m)
+            if not raw_target_files:
+                tasks_md = project_root / meta_dir / "tasks.md"
+                if tasks_md.exists():
+                    text = tasks_md.read_text(encoding="utf-8")
+                    # tasks.md 内に記述された *.py や src/ パスを動的抽出
+                    matches = re.findall(r"[\w/.-]+\.py", text)
+                    for m in matches:
+                        if m not in raw_target_files:
+                            raw_target_files.append(m)
 
         # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在する Python ファイルを自動検出 (ハードコード排除)
         if not raw_target_files:
