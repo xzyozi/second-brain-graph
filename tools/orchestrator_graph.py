@@ -367,6 +367,7 @@ def resolve_project_context(
             return {"cwd": cwd, "target_files": [], "base_branch": "develop", "valid": False}
 
         base_branch = "develop"
+        work_branch_prefix = "sbos/"
         raw_target_files: List[str] = []
 
         if meta_dir:
@@ -375,6 +376,7 @@ def resolve_project_context(
                 with open(project_json, "r", encoding="utf-8") as pf:
                     pdata = json.load(pf)
                     base_branch = pdata.get("base_branch", "develop")
+                    work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
                     if "target_files" in pdata and isinstance(pdata["target_files"], list):
                         raw_target_files.extend(pdata["target_files"])
 
@@ -403,12 +405,12 @@ def resolve_project_context(
 
         if not valid_target_files:
             logger.error(f"No valid target files found in satellite repo for project {project_key}.")
-            return {"cwd": cwd, "target_files": [], "base_branch": base_branch, "valid": False}
+            return {"cwd": cwd, "target_files": [], "base_branch": base_branch, "work_branch_prefix": work_branch_prefix, "valid": False}
 
-        return {"cwd": cwd, "target_files": valid_target_files, "base_branch": base_branch, "valid": True}
+        return {"cwd": cwd, "target_files": valid_target_files, "base_branch": base_branch, "work_branch_prefix": work_branch_prefix, "valid": True}
     except Exception as e:
         logger.error(f"Failed to resolve project context for {project_key}: {e}")
-        return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
+        return {"cwd": None, "target_files": [], "base_branch": "develop", "work_branch_prefix": "sbos/", "valid": False}
 
 
 class GraphState(TypedDict):
@@ -445,11 +447,23 @@ def spec_draft_node(state: GraphState) -> GraphState:
     logger.info("Executing spec_draft_node")
     from tools.llm_client import call_llm
     try:
+        system_prompt = (
+            "You are a technical planner. You must define a strict Definition of Done (DoD) for the issue.\n"
+            "Your plan MUST explicitly state:\n"
+            "1. Allowed Files: Which specific files are permitted to be modified.\n"
+            "2. Forbidden Actions: Existing signatures, interfaces, or unrelated configuration files (like settings.json) that MUST NOT be altered.\n"
+            "3. Step-by-step implementation logic."
+        )
+        target_files_str = ", ".join(state.get("target_files", []))
+        user_prompt = (
+            f"Draft spec for issue {state['issue_id']}.\n"
+            f"Target Files in Repository: {target_files_str or 'None'}"
+        )
         res = call_llm(
             role="planner",
             intent="spec_draft",
-            system_prompt="You are a planner",
-            user_prompt=f"Draft spec for {state['issue_id']}"
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
         )
         plan_str = res.get("content", str(res)) if isinstance(res, dict) else str(res)
         state["impl_plan"] = plan_str
@@ -478,14 +492,19 @@ def code_node(state: GraphState) -> GraphState:
       - その他の異常終了: SYSTEM_ERROR として即座に FAILED_SYSTEM に正規化して安全停止する。
     """
     logger.info("Executing code_node with AiderRunner")
+    target_files = state.get("target_files", [])
+    cwd = state.get("cwd")
+
     instruction = state.get("instruction", "Apply edits")
     if state.get("impl_plan"):
         instruction += f"\n\nImplementation Plan:\n{state['impl_plan']}"
+
+    if target_files:
+        target_files_str = ", ".join(target_files)
+        instruction += f"\n\n[SCOPE RESTRICTION]\nYou are ONLY permitted to modify the following files: {target_files_str}. DO NOT modify, touch, or create any other files."
+
     if state.get("aider_message"):
         instruction += f"\n\nFeedback:\n{state['aider_message']}"
-
-    target_files = state.get("target_files", [])
-    cwd = state.get("cwd")
 
     try:
         run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
@@ -742,7 +761,24 @@ def review_node(state: GraphState) -> GraphState:
             state["status"] = "review_lgtm"
         else:
             state["error_category"] = "REVIEW_REJECTED"
-            state["aider_message"] = f"Review comments:\n{json.dumps(structured_comments, ensure_ascii=False)}"
+            is_structural_violation = any(
+                str(c.get("severity", "")).lower() in ["major", "structural"] for c in structured_comments
+            )
+            unauthorized_files = [
+                c.get("file") for c in structured_comments
+                if c.get("file") and c.get("file") not in state.get("target_files", []) and c.get("file") != "N/A"
+            ]
+
+            feedback_msg = f"Review comments:\n{json.dumps(structured_comments, ensure_ascii=False)}"
+
+            if unauthorized_files:
+                unique_unauth = list(set(unauthorized_files))
+                feedback_msg += f"\n\n【CRITICAL INSTRUCTION】 You MUST immediately revert all changes made to the following unauthorized files: {', '.join(unique_unauth)}."
+
+            if is_structural_violation:
+                feedback_msg += "\n\n【CRITICAL INSTRUCTION】 A major structural violation was detected. Do NOT attempt to 'fix' by deleting existing interfaces. Revert to the original signature and re-implement safely."
+
+            state["aider_message"] = feedback_msg
             if rev_round >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
@@ -911,6 +947,7 @@ def execute_issue(
         cwd = ctx.get("cwd")
         target_files = ctx.get("target_files", [])
         base_branch = ctx.get("base_branch", "develop")
+        work_branch_prefix = ctx.get("work_branch_prefix", "sbos/")
         is_valid = ctx.get("valid", False)
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
@@ -991,7 +1028,7 @@ def execute_issue(
                         )
                         return
 
-                    head_branch = f"sbos/{issue_id}"
+                    head_branch = f"{work_branch_prefix}{issue_id}"
                     sw_head = run_cmd(["git", "switch", head_branch], cwd=cwd, timeout=60)
                     if sw_head.returncode == 0:
                         # 既存作業ブランチ再開時のベース追従 (git rebase base_branch)
