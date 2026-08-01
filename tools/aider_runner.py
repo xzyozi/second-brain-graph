@@ -129,20 +129,29 @@ def run_aider(
         elif api_base.endswith("/v1/"):
             env["OLLAMA_API_BASE"] = api_base[:-4]
 
-    cmd = [
-        "aider",
-        "--model", model,
-        "--no-auto-commits",
-        "--yes-always",
-    ]
-
-    if edit_format:
-        cmd.extend(["--edit-format", edit_format])
-
-    cmd.extend(["--message", instruction])
-    cmd.extend(target_files)
-
+    msg_file = None
     try:
+        cmd = [
+            "aider",
+            "--model", model,
+            "--no-auto-commits",
+            "--yes-always",
+        ]
+
+        if edit_format:
+            cmd.extend(["--edit-format", edit_format])
+
+        # Windows コマンドライン長制限 (WinError 206) 回避のため --message-file を使用
+        if cwd:
+            msg_path = Path(cwd) / ".aider.instruction.tmp"
+        else:
+            msg_path = Path(".aider.instruction.tmp")
+        msg_path.write_text(instruction, encoding="utf-8")
+        msg_file = msg_path
+
+        cmd.extend(["--message-file", str(msg_path.resolve())])
+        cmd.extend(target_files)
+
         result = subprocess.run(
             cmd,
             cwd=cwd,
@@ -161,5 +170,11 @@ def run_aider(
         raise
     except Exception as e:
         raise AiderRunError(f"Failed to run Aider CLI: {e}") from e
+    finally:
+        if msg_file and msg_file.exists():
+            try:
+                msg_file.unlink()
+            except Exception:
+                pass
 
 
