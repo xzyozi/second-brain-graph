@@ -553,21 +553,15 @@ def lint_node(state: GraphState) -> GraphState:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
             
-            lint_feedback = f"Ruff lint failed:\n{res.stdout}"
-            if "F821" in res.stdout or "Undefined name" in res.stdout:
-                lint_feedback += (
-                    "\n\n【CRITICAL INSTRUCTION - UNDEFINED SYMBOL】\n"
-                    "An undefined name or function was detected in the code.\n"
-                    "You MUST either:\n"
-                    "1. Add a valid import statement for the missing symbol at the top of the file, OR\n"
-                    "2. Remove/replace the line calling the undefined symbol if it is unnecessary."
-                )
-            if any(code in res.stdout for code in ["F841", "F401", "unused", "Unused"]):
-                lint_feedback += (
-                    "\n\n【CRITICAL INSTRUCTION - UNUSED CODE】\n"
-                    "Unused variables or imports were detected.\n"
-                    "You MUST remove the unused assignment or unused import from the file."
-                )
+            lint_feedback = (
+                f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
+                "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
+                "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
+                "Follow these general rules:\n"
+                "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
+                "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
+                "3. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
+            )
 
             state["aider_message"] = lint_feedback
             if state["lint_round"] >= state.get("max_round", 3):
