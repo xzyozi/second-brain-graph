@@ -567,6 +567,7 @@ def lint_node(state: GraphState) -> GraphState:
         else:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
+            logger.warning(f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}")
             
             lint_feedback = (
                 f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
