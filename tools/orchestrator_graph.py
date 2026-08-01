@@ -397,11 +397,11 @@ def resolve_project_context(
                 if not any(excluded in rel_p for excluded in [".venv", "venv", "__pycache__", "build", "dist"]):
                     raw_target_files.append(rel_p)
 
-        # ターゲットファイルの実在性を検証
+        # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容)
         valid_target_files = []
         for tf in raw_target_files:
             abs_tf = cwd_path / tf
-            if abs_tf.exists() and abs_tf.is_file():
+            if abs_tf.exists() or (not tf.startswith("..") and not os.path.isabs(tf)):
                 valid_target_files.append(tf)
 
         if not valid_target_files:
@@ -546,7 +546,16 @@ def lint_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
     target_files = state.get("target_files", [])
     try:
-        cmd = ["ruff", "check"] + (target_files if target_files else ["."])
+        existing_targets = [
+            tf for tf in target_files
+            if cwd and (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file()
+        ]
+        targets_to_check = existing_targets if existing_targets else target_files
+        if not targets_to_check:
+            state["status"] = "lint_passed"
+            return state
+
+        cmd = ["ruff", "check"] + targets_to_check
         res = run_cmd(cmd, cwd=cwd, timeout=300)
         state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
