@@ -552,7 +552,24 @@ def lint_node(state: GraphState) -> GraphState:
         else:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
-            state["aider_message"] = f"Ruff lint failed:\n{res.stdout}"
+            
+            lint_feedback = f"Ruff lint failed:\n{res.stdout}"
+            if "F821" in res.stdout or "Undefined name" in res.stdout:
+                lint_feedback += (
+                    "\n\n【CRITICAL INSTRUCTION - UNDEFINED SYMBOL】\n"
+                    "An undefined name or function was detected in the code.\n"
+                    "You MUST either:\n"
+                    "1. Add a valid import statement for the missing symbol at the top of the file, OR\n"
+                    "2. Remove/replace the line calling the undefined symbol if it is unnecessary."
+                )
+            if any(code in res.stdout for code in ["F841", "F401", "unused", "Unused"]):
+                lint_feedback += (
+                    "\n\n【CRITICAL INSTRUCTION - UNUSED CODE】\n"
+                    "Unused variables or imports were detected.\n"
+                    "You MUST remove the unused assignment or unused import from the file."
+                )
+
+            state["aider_message"] = lint_feedback
             if state["lint_round"] >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
