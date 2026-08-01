@@ -600,10 +600,24 @@ def run_pytest_node(state: GraphState) -> GraphState:
     """
     logger.info("Executing test_node (Pytest)")
     cwd = state.get("cwd")
+    target_files = state.get("target_files", [])
     report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
+
+    # 対象タスクに関連するテストファイルを特定
+    test_files = [
+        tf for tf in target_files
+        if "test" in Path(tf).name.lower() and cwd and (Path(cwd) / tf).exists()
+    ]
+    if not test_files and cwd:
+        for tf in target_files:
+            stem = Path(tf).stem
+            candidate = f"tests/test_{stem}.py"
+            if (Path(cwd) / candidate).exists() and candidate not in test_files:
+                test_files.append(candidate)
+
     try:
-        # pytest-json-report オプションを付加して実行
-        cmd = [sys.executable, "-m", "pytest", "--json-report", f"--json-report-file={report_file}"]
+        # pytest-json-report オプションを付加して対照テストファイルを実行
+        cmd = [sys.executable, "-m", "pytest"] + (test_files if test_files else []) + ["--json-report", f"--json-report-file={report_file}"]
         res = run_cmd(cmd, cwd=cwd, timeout=300)
 
         # JSON レポートのパース
