@@ -1000,7 +1000,11 @@ def execute_issue(
             if is_in_git_workspace(cwd):
                 try:
                     init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
-                    if init_status.returncode != 0 or init_status.stdout.strip():
+                    dirty_lines = [
+                        line for line in init_status.stdout.splitlines()
+                        if line.strip() and not any(ignored in line for ignored in [".aider", ".pytest_cache", "__pycache__"])
+                    ]
+                    if init_status.returncode != 0 or dirty_lines:
                         logger.error(f"Dirty working tree detected before execution in {cwd}. Aborting.")
                         update_task_state(
                             project_key, issue_id, status="FAILED_SYSTEM",
