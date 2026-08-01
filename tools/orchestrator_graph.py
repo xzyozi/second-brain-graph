@@ -556,6 +556,8 @@ def lint_node(state: GraphState) -> GraphState:
             return state
 
         cmd = ["ruff", "check"] + targets_to_check
+        # 1次パス: 自動修復可能な軽微なエラー (未使用インポート, ソート, 空白等) を自動修正
+        run_cmd(["ruff", "check", "--fix"] + targets_to_check, cwd=cwd, timeout=300)
         res = run_cmd(cmd, cwd=cwd, timeout=300)
         state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
