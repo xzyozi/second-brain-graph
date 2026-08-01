@@ -556,9 +556,9 @@ def lint_node(state: GraphState) -> GraphState:
             state["status"] = "lint_passed"
             return state
 
-        cmd = ["ruff", "check"] + targets_to_check
+        cmd = [sys.executable, "-m", "ruff", "check"] + targets_to_check
         # 1次パス: 自動修復可能な軽微なエラー (未使用インポート, ソート, 空白等) を自動修正
-        run_cmd(["ruff", "check", "--fix"] + targets_to_check, cwd=cwd, timeout=300)
+        run_cmd([sys.executable, "-m", "ruff", "check", "--fix"] + targets_to_check, cwd=cwd, timeout=300)
         res = run_cmd(cmd, cwd=cwd, timeout=300)
         state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
@@ -601,7 +601,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
     report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
     try:
         # pytest-json-report オプションを付加して実行
-        cmd = ["pytest", "--json-report", f"--json-report-file={report_file}"]
+        cmd = [sys.executable, "-m", "pytest", "--json-report", f"--json-report-file={report_file}"]
         res = run_cmd(cmd, cwd=cwd, timeout=300)
 
         # JSON レポートのパース
