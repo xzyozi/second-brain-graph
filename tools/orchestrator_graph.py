@@ -452,7 +452,8 @@ def spec_draft_node(state: GraphState) -> GraphState:
             "Your plan MUST explicitly state:\n"
             "1. Allowed Files: Which specific files are permitted to be modified.\n"
             "2. Forbidden Actions: Existing signatures, interfaces, or unrelated configuration files (like settings.json) that MUST NOT be altered.\n"
-            "3. Step-by-step implementation logic."
+            "3. Minimal Scope (YAGNI): Keep the plan strictly focused on the requested issue. DO NOT invent unrequested features, extra parameters, or complex unneeded validation logic.\n"
+            "4. Step-by-step implementation logic."
         )
         target_files_str = ", ".join(state.get("target_files", []))
         user_prompt = (
