@@ -957,6 +957,8 @@ def execute_issue(
     history_file: Optional[Path] = None,
     project_root: Optional[Path] = None,
     allow_offline_git: bool = False,
+    resume: Optional[bool] = None,
+    fresh: bool = False,
 ) -> None:
     execution_id = uuid.uuid4().hex
     try:
@@ -1055,24 +1057,58 @@ def execute_issue(
                         return
 
                     head_branch = f"{work_branch_prefix}{issue_id}"
-                    # 既存の同名ローカル作業ブランチがあれば強制削除し、常に base_branch からフレッシュに新規分岐する
-                    run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
-                    sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
-                    if sw_c.returncode != 0:
-                        logger.error(f"git switch -c {head_branch} {base_branch} failed: {sw_c.stderr}")
-                        update_task_state(
-                            project_key, issue_id, status="FAILED_SYSTEM",
-                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                        )
-                        safe_record_execution_history(
-                            {
-                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                "error_category": "SYSTEM_ERROR",
-                                "error": f"git switch -c failed: {sw_c.stderr}",
-                            },
-                            final_status="FAILED_SYSTEM", history_file=history_file
-                        )
-                        return
+
+                    # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かをスマート判定
+                    current_task_status = ""
+                    if metadata_dir:
+                        state_json_path = metadata_dir / "projects" / project_key / "state.json"
+                        if state_json_path.exists():
+                            try:
+                                with open(state_json_path, "r", encoding="utf-8") as sf:
+                                    sdata = json.load(sf)
+                                    current_task_status = sdata.get(issue_id, {}).get("status", "")
+                            except Exception:
+                                pass
+
+                    is_resume_mode = resume if resume is not None else (
+                        fresh is False and current_task_status in ["CHANGES_REQUESTED", "PR_FAILED", "FAILED_B7", "IN_REVIEW"]
+                    )
+
+                    if is_resume_mode:
+                        logger.info(f"Resume Mode activated for {issue_id} (status: '{current_task_status}'). Preserving existing work branch '{head_branch}'.")
+                        sw_head = run_cmd(["git", "switch", head_branch], cwd=cwd, timeout=60)
+                        if sw_head.returncode != 0:
+                            # ローカルに無い場合はリモート追跡ブランチをチェックアウト
+                            sw_head = run_cmd(["git", "checkout", "-b", head_branch, f"origin/{head_branch}"], cwd=cwd, timeout=60)
+                        
+                        if sw_head.returncode == 0:
+                            # 既存ブランチのベース追従 (git rebase base_branch)
+                            rebase_res = run_cmd(["git", "rebase", base_branch], cwd=cwd, timeout=120)
+                            if rebase_res.returncode != 0:
+                                run_cmd(["git", "rebase", "--abort"], cwd=cwd, timeout=60)
+                                logger.warning(f"git rebase {base_branch} failed during resume mode. Continuing on current head_branch commits.")
+                        else:
+                            # リモートにも無かった場合は新規作成
+                            run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
+                    else:
+                        logger.info(f"Fresh Mode activated for {issue_id}. Creating clean work branch '{head_branch}' from {base_branch}.")
+                        run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
+                        sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
+                        if sw_c.returncode != 0:
+                            logger.error(f"git switch -c {head_branch} {base_branch} failed: {sw_c.stderr}")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"git switch -c failed: {sw_c.stderr}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
                 except Exception as ge:
                     logger.error(f"Failed git branch setup in {cwd}: {ge}")
                     update_task_state(
@@ -1344,6 +1380,8 @@ def main() -> None:
     exec_parser = subparsers.add_parser("execute", help="Execute task for issue")
     exec_parser.add_argument("--issue-id", required=True, help="Target Issue ID (e.g. TFG-0004)")
     exec_parser.add_argument("--project-key", help="Target Project Key (Resolved from Issue ID if omitted)")
+    exec_parser.add_argument("--resume", action="store_true", default=None, help="Resume existing work branch and continue work on top of previous commits")
+    exec_parser.add_argument("--fresh", action="store_true", default=False, help="Delete existing work branch and create clean branch from base_branch")
 
     orch_parser = subparsers.add_parser("orchestrate", help="Orchestrate uncompleted issues")
     orch_parser.add_argument("--project-key", help="Target Project Key (All if omitted)")
@@ -1360,7 +1398,7 @@ def main() -> None:
             sys.exit(1)
 
         validate_project_consistency(issue_id, project_key)
-        execute_issue(issue_id, project_key)
+        execute_issue(issue_id, project_key, resume=args.resume, fresh=args.fresh)
     elif args.subcommand == "orchestrate":
         cmd_orchestrate(args.project_key)
     else:
