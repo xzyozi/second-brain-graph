@@ -953,17 +953,17 @@ def done_node(state: GraphState) -> GraphState:
                     state["error"] = f"git commit failed: {commit_res.stderr}"
                     return state
 
-            # 3. リモートへ Fetch & Push (fetch 後に -f で手動・自動リトライ時の競合を解消)
+            # 3. リモートへ Fetch & Safe Push (--force-with-lease を使用し、人間が追加したリモートコミットの上書き破壊を予防)
             run_cmd(["git", "fetch", "origin"], cwd=cwd, timeout=60)
             push_res = run_cmd(
-                ["git", "push", "-f", "-u", "origin", head_branch],
+                ["git", "push", "--force-with-lease", "-u", "origin", head_branch],
                 cwd=cwd, timeout=180
             )
             if push_res.returncode != 0:
-                logger.warning(f"Git push failed: {push_res.stderr}")
+                logger.warning(f"Git push failed (lease mismatch or remote error): {push_res.stderr}")
                 state["status"] = "PR_FAILED"
                 state["error_category"] = "PR_ERROR"
-                state["error"] = f"Git push failed: {push_res.stderr}"
+                state["error"] = f"Git push failed (lease mismatch or remote error): {push_res.stderr}"
                 return state
 
             # 4. PR の作成 (事前確認: gh pr list --json number で構造化確認)
