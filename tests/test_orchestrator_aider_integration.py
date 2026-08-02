@@ -193,7 +193,7 @@ def test_done_node_handles_git_failures() -> None:
             assert res["error_category"] == "PR_ERROR"
             assert "Git push failed" in str(res["error"])
 
-        # 7. gh pr create returns non-zero code (real error)
+        # 7. gh pr create returns non-zero code (real error, no existing PR found via gh pr list)
         with patch("tools.orchestrator_graph.run_cmd", side_effect=[
             MagicMock(returncode=0, stdout=""), # diff --cached (first)
             MagicMock(returncode=0, stdout=""), # git add
@@ -201,13 +201,14 @@ def test_done_node_handles_git_failures() -> None:
             MagicMock(returncode=0, stdout=""), # git status (clean) - skips commit
             MagicMock(returncode=0, stdout=""), # git fetch
             MagicMock(returncode=0, stdout=""), # git push
+            MagicMock(returncode=0, stdout="[]"), # gh pr list (no PR exists)
             MagicMock(returncode=1, stderr="pr create error"), # gh pr create
         ]):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
 
-        # 8. gh pr create returns non-zero code with 'already exists' (allowed)
+        # 8. gh pr list detects existing PR (structured pre-check)
         with patch("tools.orchestrator_graph.run_cmd", side_effect=[
             MagicMock(returncode=0, stdout=""), # diff --cached (first)
             MagicMock(returncode=0, stdout=""), # git add
@@ -215,7 +216,7 @@ def test_done_node_handles_git_failures() -> None:
             MagicMock(returncode=0, stdout=""), # git status (clean) - skips commit
             MagicMock(returncode=0, stdout=""), # git fetch
             MagicMock(returncode=0, stdout=""), # git push
-            MagicMock(returncode=1, stderr="a pull request for branch sbos/TFG-0001 already exists"), # gh pr create
+            MagicMock(returncode=0, stdout='[{"number": 12}]'), # gh pr list (PR #12 exists!)
         ]):
             res = done_node(state.copy())
             assert res["status"] == "COMPLETED"

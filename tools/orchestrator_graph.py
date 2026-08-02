@@ -845,6 +845,8 @@ def review_node(state: GraphState) -> GraphState:
                     c.get("file") for c in structured_comments
                     if c.get("file") and c.get("file") not in active_targets and c.get("file") != "N/A"
                 ]
+            else:
+                logger.debug("target_files is empty; skipping unauthorized_files validation.")
 
             feedback_msg = f"Review comments:\n{json.dumps(structured_comments, ensure_ascii=False)}"
 
@@ -964,7 +966,7 @@ def done_node(state: GraphState) -> GraphState:
                 state["error"] = f"Git push failed: {push_res.stderr}"
                 return state
 
-            # 4. PR の作成 (gh CLI が未インストールまたはエラーの場合は Web PR 案内を出力して COMPLETED 扱いにする)
+            # 4. PR の作成 (事前確認: gh pr list --json number で構造化確認)
             gh_bin = shutil.which("gh") or "gh"
             if not shutil.which(gh_bin):
                 for candidate in [
@@ -977,6 +979,19 @@ def done_node(state: GraphState) -> GraphState:
                         break
 
             try:
+                # 既存 PR の構造化データのプレ確認 (言語・ロケール依存の完全排除)
+                pr_list_res = run_cmd([gh_bin, "pr", "list", "--head", head_branch, "--json", "number"], cwd=cwd, timeout=30)
+                if pr_list_res.returncode == 0:
+                    try:
+                        prs = json.loads(pr_list_res.stdout)
+                        if isinstance(prs, list) and len(prs) > 0:
+                            pr_num = prs[0].get("number")
+                            logger.info(f"Existing PR #{pr_num} detected for branch '{head_branch}'. Setting status to COMPLETED.")
+                            state["status"] = "COMPLETED"
+                            return state
+                    except Exception as pe:
+                        logger.warning(f"Failed to parse gh pr list JSON output: {pe}")
+
                 pr_res = run_cmd(
                     [gh_bin, "pr", "create", "--base", base_branch, "--head", head_branch,
                      "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
@@ -985,16 +1000,11 @@ def done_node(state: GraphState) -> GraphState:
                 if pr_res.returncode == 0:
                     state["status"] = "COMPLETED"
                 else:
-                    err_msg = pr_res.stderr.lower()
-                    if "already exists" in err_msg or "a pull request for branch" in err_msg:
-                        logger.info(f"PR already exists for {head_branch}. Setting status to COMPLETED.")
-                        state["status"] = "COMPLETED"
-                    else:
-                        logger.error(f"gh pr create failed: {pr_res.stderr}")
-                        state["status"] = "PR_FAILED"
-                        state["error_category"] = "PR_ERROR"
-                        state["error"] = f"gh pr create failed: {pr_res.stderr}"
-                        return state
+                    logger.error(f"gh pr create failed: {pr_res.stderr}")
+                    state["status"] = "PR_FAILED"
+                    state["error_category"] = "PR_ERROR"
+                    state["error"] = f"gh pr create failed: {pr_res.stderr}"
+                    return state
             except Exception as e:
                 logger.error(f"gh CLI execution error in done_node: {e}")
                 state["status"] = "PR_FAILED"
