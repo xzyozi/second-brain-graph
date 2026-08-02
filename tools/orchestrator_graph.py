@@ -736,6 +736,7 @@ def review_node(state: GraphState) -> GraphState:
             system_prompt=(
                 "You are a reviewer. You must respond with JSON containing a 'verdict' "
                 "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity). "
+                "severity MUST be one of: 'INFO', 'WARNING', 'ERROR', 'MAJOR', 'STRUCTURAL'. "
                 "Ensure that the changes align with the Implementation Plan and report any deviations as structural comments."
             ),
             user_prompt=user_prompt,
@@ -754,7 +755,8 @@ def review_node(state: GraphState) -> GraphState:
 
         # コメント構造化 ({file, line, message, severity}) の保証
         structured_comments: List[Dict[str, Any]] = []
-        target_file = state.get("target_files", [""])[0]
+        target_files_list = state.get("target_files") or [""]
+        target_file = target_files_list[0] if target_files_list else ""
         if isinstance(raw_comments, list):
             for item in raw_comments:
                 if isinstance(item, dict):
@@ -833,12 +835,16 @@ def review_node(state: GraphState) -> GraphState:
         else:
             state["error_category"] = "REVIEW_REJECTED"
             is_structural_violation = any(
-                str(c.get("severity", "")).lower() in ["major", "structural"] for c in structured_comments
+                str(c.get("severity", "")).lower() in ["major", "structural", "high", "error", "critical", "blocker"] for c in structured_comments
             )
-            unauthorized_files = [
-                c.get("file") for c in structured_comments
-                if c.get("file") and c.get("file") not in state.get("target_files", []) and c.get("file") != "N/A"
-            ]
+            # target_files が定義されている場合のみ無許可ファイル判定を実施（空リスト時の誤爆防止）
+            active_targets = state.get("target_files", [])
+            unauthorized_files = []
+            if active_targets:
+                unauthorized_files = [
+                    c.get("file") for c in structured_comments
+                    if c.get("file") and c.get("file") not in active_targets and c.get("file") != "N/A"
+                ]
 
             feedback_msg = f"Review comments:\n{json.dumps(structured_comments, ensure_ascii=False)}"
 
@@ -979,11 +985,22 @@ def done_node(state: GraphState) -> GraphState:
                 if pr_res.returncode == 0:
                     state["status"] = "COMPLETED"
                 else:
-                    logger.info(f"gh pr create returned non-zero ({pr_res.stderr}). Remote branch successfully pushed to origin/{head_branch}.")
-                    state["status"] = "COMPLETED"
+                    err_msg = pr_res.stderr.lower()
+                    if "already exists" in err_msg or "a pull request for branch" in err_msg:
+                        logger.info(f"PR already exists for {head_branch}. Setting status to COMPLETED.")
+                        state["status"] = "COMPLETED"
+                    else:
+                        logger.error(f"gh pr create failed: {pr_res.stderr}")
+                        state["status"] = "PR_FAILED"
+                        state["error_category"] = "PR_ERROR"
+                        state["error"] = f"gh pr create failed: {pr_res.stderr}"
+                        return state
             except Exception as e:
-                logger.info(f"gh CLI not found or failed ({e}). Remote branch successfully pushed to origin/{head_branch}.")
-                state["status"] = "COMPLETED"
+                logger.error(f"gh CLI execution error in done_node: {e}")
+                state["status"] = "PR_FAILED"
+                state["error_category"] = "PR_ERROR"
+                state["error"] = f"gh CLI execution error: {e}"
+                return state
         else:
             logger.error(f"Directory '{cwd}' is not in a valid git workspace for PR creation.")
             state["status"] = "PR_FAILED"
