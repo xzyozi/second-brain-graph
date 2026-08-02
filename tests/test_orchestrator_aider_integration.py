@@ -506,6 +506,50 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
         assert res_lgtm["review_rounds"][0]["verdict"] == "LGTM"
 
 
+def test_review_node_continues_on_reviewdog_failure() -> None:
+    """Reviewdog 実行が失敗 (returncode=1) した場合でも FAILED_SYSTEM にならず、LLM の判定 (LGTM/retry_code) に遷移することを検証する。"""
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_exec_rd_fail",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/grep/office_parser.py"],
+        instruction="Fix bug",
+        cwd=".",
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict=None,
+        review_comments=None,
+        review_rounds=[],
+        reviewdog_result=None,
+        history_summary=None,
+        rdjson=None,
+    )
+
+    mock_lgtm = {"verdict": "LGTM", "comments": []}
+    mock_rd_fail = MagicMock(returncode=1, stdout="", stderr="reviewdog error")
+
+    with patch("tools.llm_client.call_llm", return_value=mock_lgtm), \
+         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"), \
+         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True), \
+         patch("tools.orchestrator_graph.run_cmd", return_value=mock_rd_fail):
+        res = review_node(state)
+        assert res["status"] == "review_lgtm"
+        assert res["reviewdog_result"]["returncode"] == 1
+        assert res["reviewdog_result"]["stderr"] == "reviewdog error"
+
+
 @patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out"))
 @patch("tools.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []})
 def test_execute_issue_aider_timeout_flow_fully_isolated(
