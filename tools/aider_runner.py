@@ -1,75 +1,181 @@
-"""Aider Runner module for Second Brain OS.
-
-Executes Aider CLI using configured models (e.g. Gemini 4 / Code Py).
-"""
-
+import logging
 import os
 import subprocess
+import uuid
+from pathlib import Path
 from typing import List, Optional
 
-from tools.config_loader import load_model_config, ProfileConfig
-from tools.backend_coordinator import get_coordinator
+logger = logging.getLogger("aider_runner")
+
+
+class AiderRunError(Exception):
+    """Aider 実行時のタイムアウトおよびシステムエラー例外"""
+    pass
+
+
+class GitDiffError(Exception):
+    """Git diff 取得失敗時の例外 (fail-closed 契約)"""
+    pass
+
+
+def get_default_aider_model() -> str:
+    """config/models.json から Aider 編集用のモデル名を取得する (DD-003 仕様準拠).
+    取得失敗時は警告ログを出力しフォールバックモデル名を返す。
+    """
+    try:
+        from tools.config_loader import get_backend_execution_config
+        config = get_backend_execution_config()
+        profile_name = config.routes.get("aider_edit") or config.routes.get("code_edit")
+        if profile_name and profile_name in config.profiles:
+            profile = config.profiles[profile_name]
+            model_name = profile.model
+            if profile.backend == "ollama" and not model_name.startswith("ollama/"):
+                return f"ollama/{model_name}"
+            return model_name
+    except Exception as e:
+        logger.error(f"Failed to load model config for Aider, using fallback: {e}")
+    return "ollama/qwen2.5-coder:7b-instruct"
+
+
+def get_git_diff(cwd: Optional[str] = None) -> str:
+    """現在の Git 作業ツリーの差分を取得する。失敗時は GitDiffError を送出する (fail-closed).
+    初期コミット前のリポジトリ等で HEAD が存在しない場合はフォールバックして差分を取得する。
+    """
+    try:
+        # 新規作成された未追跡ファイル (untracked files) も git diff 対象に含めるため intent-to-add を設定
+        subprocess.run(["git", "add", "-N", "."], cwd=cwd, capture_output=True, text=True, check=False, timeout=30)
+
+        res = subprocess.run(
+            ["git", "diff", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        if res.returncode != 0:
+            err_msg = res.stderr.lower()
+            if "bad revision" in err_msg or "ambiguous argument 'head'" in err_msg or "unknown revision" in err_msg:
+                # Fallback for initial commit (no HEAD)
+                # Capture both staged and unstaged changes since 'git diff HEAD' is unavailable.
+                diffs = []
+                cached_res = subprocess.run(
+                    ["git", "diff", "--cached"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                if cached_res.returncode == 0 and cached_res.stdout:
+                    diffs.append(cached_res.stdout)
+                
+                unstaged_res = subprocess.run(
+                    ["git", "diff"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                if unstaged_res.returncode == 0 and unstaged_res.stdout:
+                    diffs.append(unstaged_res.stdout)
+                
+                if cached_res.returncode == 0 and unstaged_res.returncode == 0:
+                    return "\n".join(diffs)
+            raise GitDiffError(f"git diff command failed with returncode {res.returncode}: {res.stderr}")
+        return res.stdout
+    except Exception as e:
+        if isinstance(e, GitDiffError):
+            raise
+        raise GitDiffError(f"Failed to execute git diff: {e}") from e
 
 
 def run_aider(
     instruction: str,
     target_files: List[str],
     cwd: Optional[str] = None,
+    model: Optional[str] = None,
+    timeout: int = 600,
+    edit_format: Optional[str] = None,
 ) -> bool:
-    """Run Aider CLI to apply non-destructive code edits based on instruction."""
-    coordinator = get_coordinator()
-    intent = "aider_edit"
+    """Aider CLI を subprocess 経由で非対話形式で実行する。
+    - Ollama API ベースが指定されている場合、末尾の /v1 サフィックスを自動除去する。
+    - config/models.json から edit_format を動的に設定可能。
+    - タイムアウトおよび非ゼロ終了時は AiderRunError を発生させる。
+    - 対象ファイルが存在しない場合は警告ログを出力し、新規ファイル作成を許可する。
+    """
+    if model is None:
+        model = get_default_aider_model()
 
-    def _do_run_aider(profile: ProfileConfig) -> bool:
-        config = load_model_config()
-        aider_cfg = config.aider
-        
-        target_model = profile.model
-        if not target_model:
-            raise ValueError("Profile provided by Coordinator is missing 'model'.")
+    if edit_format is None:
+        try:
+            from tools.config_loader import get_aider_config
+            aider_cfg = get_aider_config()
+            edit_format = aider_cfg.edit_format
+        except Exception as e:
+            logger.warning(f"Failed to load Aider edit_format config: {e}")
 
-        no_auto_commits = aider_cfg.no_auto_commits
+    cwd_path = Path(cwd) if cwd else Path.cwd()
+    for tf in target_files:
+        abs_path = cwd_path / tf
+        if not abs_path.exists():
+            logger.warning(f"Target file does not exist (will be created by Aider): {abs_path}")
 
-        cmd = ["aider", "--model", target_model, "--yes-always"]
+    env = os.environ.copy()
 
-        if no_auto_commits:
-            cmd.append("--no-auto-commits")
+    # Ollama API ベースサフィックスの自動サニタイズ
+    if "OLLAMA_API_BASE" in env:
+        api_base = env["OLLAMA_API_BASE"]
+        if api_base.endswith("/v1"):
+            env["OLLAMA_API_BASE"] = api_base[:-3]
+        elif api_base.endswith("/v1/"):
+            env["OLLAMA_API_BASE"] = api_base[:-4]
 
-        cmd.extend(["--message", instruction])
+    msg_file = None
+    try:
+        cmd = [
+            "aider",
+            "--model", model,
+            "--no-auto-commits",
+            "--yes-always",
+        ]
+
+        if edit_format:
+            cmd.extend(["--edit-format", edit_format])
+
+        # Windows コマンドライン長制限 (WinError 206) 回避および並行実行競合防止のため UUID 一時ファイルを使用
+        msg_filename = f".aider.instruction_{uuid.uuid4().hex[:8]}.tmp"
+        msg_path = cwd_path / msg_filename
+        msg_path.write_text(instruction, encoding="utf-8")
+        msg_file = msg_path
+
+        cmd.extend(["--message-file", str(msg_path.resolve())])
         cmd.extend(target_files)
 
-        env = os.environ.copy()
-        # Coordinator のアダプタが patch_env で設定した OLLAMA_API_BASE 等を継承する
-
-        try:
-            print(f"[AiderRunner] Running Aider with model '{target_model}' on {target_files}...")
-            res = subprocess.run(cmd, cwd=cwd, env=env, check=True)
-            return res.returncode == 0
-        except FileNotFoundError:
-            print("[AiderRunner] Error: Aider CLI is not installed in the current environment.")
-            return False
-        except subprocess.CalledProcessError as e:
-            print(f"[AiderRunner] Aider execution failed with exit code {e.returncode}")
-            return False
-        except Exception as e:
-            print(f"[AiderRunner] Unexpected error executing Aider: {e}")
-            return False
-
-    return coordinator.execute(intent, {"action": _do_run_aider})
-
-
-def get_git_diff(cwd: Optional[str] = None) -> str:
-    """Get the current uncommitted git diff for the target project repository."""
-    try:
-        res = subprocess.run(
-            ["git", "diff", "HEAD"],
+        result = subprocess.run(
+            cmd,
             cwd=cwd,
+            env=env,
             capture_output=True,
             text=True,
-            check=True,
+            timeout=timeout,
         )
-        return res.stdout
+        if result.returncode != 0:
+            logger.error(f"Aider failed with exit code {result.returncode}: {result.stderr}")
+            raise AiderRunError(f"Aider process failed with returncode {result.returncode}: {result.stderr}")
+        return True
+    except subprocess.TimeoutExpired as e:
+        raise AiderRunError(f"Aider execution timed out after {timeout} seconds") from e
+    except AiderRunError:
+        raise
     except Exception as e:
-        print(f"[AiderRunner] Failed to fetch git diff: {e}")
-        return ""
+        raise AiderRunError(f"Failed to run Aider CLI: {e}") from e
+    finally:
+        if msg_file and msg_file.exists():
+            try:
+                msg_file.unlink()
+            except Exception:
+                pass
+
 

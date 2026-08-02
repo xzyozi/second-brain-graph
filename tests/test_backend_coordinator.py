@@ -1,15 +1,15 @@
 """Unit tests for tools.backend_coordinator."""
 
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from tools.backend_coordinator import (
     BackendExecutionCoordinator,
-    GpuLeaseAdapter,
-    OllamaBackendAdapter,
     LlamaServerBackendAdapter,
 )
 from tools.config_loader import BackendExecutionConfig, ProfileConfig
+
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
 @patch("tools.backend_coordinator.GpuLeaseAdapter")
@@ -31,25 +31,25 @@ def test_coordinator_routing_ollama(mock_gpu_lease_class, mock_get_config):
     mock_gpu_lease_class.return_value = mock_gpu_lease
 
     coordinator = BackendExecutionCoordinator()
-    
+
     action_mock = MagicMock(return_value="success")
     request = {"action": action_mock}
-    
+
     with patch("tools.backend_coordinator.OllamaBackendAdapter") as mock_adapter_class:
         mock_adapter_instance = MagicMock()
         mock_adapter_instance.execute.return_value = "success"
         mock_adapter_class.return_value = mock_adapter_instance
-        
+
         result = coordinator.execute("aider_edit", request)
-        
+
         # Verify GPU lease acquired and released via context manager
         mock_gpu_lease.__enter__.assert_called_once()
         mock_gpu_lease.__exit__.assert_called_once()
-        
+
         # Verify adapter called
         mock_adapter_class.assert_called_once_with(mock_get_config.return_value.profiles["coding_ollama"])
         mock_adapter_instance.execute.assert_called_once_with(request)
-        
+
         assert result == "success"
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
@@ -62,7 +62,7 @@ def test_coordinator_routing_llama_server(mock_gpu_lease_class, mock_get_config)
         routes={"spec_draft": "reasoning_economy"},
         profiles={
             "reasoning_economy": ProfileConfig(
-                backend="llama_server", 
+                backend="llama_server",
                 model="test-model-reasoning",
                 openai_endpoint="http://localhost:8080/v1",
                 port=8080,
@@ -76,28 +76,28 @@ def test_coordinator_routing_llama_server(mock_gpu_lease_class, mock_get_config)
     mock_gpu_lease_class.return_value = mock_gpu_lease
 
     coordinator = BackendExecutionCoordinator()
-    
+
     action_mock = MagicMock(return_value="success")
     request = {"action": action_mock}
-    
+
     with patch("tools.backend_coordinator.LlamaServerBackendAdapter") as mock_adapter_class:
         mock_adapter_instance = MagicMock()
         mock_adapter_instance.execute.return_value = "success"
         mock_adapter_class.return_value = mock_adapter_instance
-        
+
         result = coordinator.execute("spec_draft", request)
-        
+
         # Verify GPU lease acquired and released via context manager
         mock_gpu_lease.__enter__.assert_called_once()
         mock_gpu_lease.__exit__.assert_called_once()
-        
+
         # Verify adapter called
         mock_adapter_class.assert_called_once_with(
             mock_get_config.return_value.profiles["reasoning_economy"],
             mock_get_config.return_value
         )
         mock_adapter_instance.execute.assert_called_once_with(request)
-        
+
         assert result == "success"
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
@@ -171,7 +171,7 @@ def test_llama_server_adapter_skips_ollama_unload_when_no_ollama_profile(mock_pa
     profile = config.profiles["reasoning_economy"]
     adapter = LlamaServerBackendAdapter(profile, config)
     result = adapter.execute({"action": lambda p: "ok"})
-    
+
     assert result == "ok"
     mock_unload.assert_not_called()
 
@@ -183,7 +183,7 @@ def test_llama_server_adapter_ollama_unreachable_fallback(mock_patch_env, mock_m
     # urlopen raising URLError (simulating Ollama unreachable)
     import urllib.error
     mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
-    
+
     mock_managed_llama.return_value.__enter__ = MagicMock()
     mock_managed_llama.return_value.__exit__ = MagicMock()
     mock_patch_env.return_value.__enter__ = MagicMock()
@@ -212,10 +212,10 @@ def test_llama_server_adapter_ollama_unreachable_fallback(mock_patch_env, mock_m
     )
     profile = config.profiles["reasoning_economy"]
     adapter = LlamaServerBackendAdapter(profile, config)
-    
+
     # Execute should continue normally even when unload_ollama_models logs warning on URLError
     result = adapter.execute({"action": lambda p: "ok"})
-    
+
     assert result == "ok"
     mock_urlopen.assert_called()  # verifying it tried to contact Ollama
     mock_managed_llama.assert_called_once()  # verifying it continued to llama-server startup
@@ -245,7 +245,7 @@ def test_coordinator_passes_gpu_lease_timeout_from_config(mock_gpu_lease_class, 
     mock_gpu_lease.__exit__ = MagicMock(return_value=None)
     mock_gpu_lease_class.return_value = mock_gpu_lease
 
-    coordinator = BackendExecutionCoordinator()
-    
+    _coordinator = BackendExecutionCoordinator()
+
     # Verify GpuLeaseAdapter initialized with timeout=45
     mock_gpu_lease_class.assert_called_once_with(timeout=45)

@@ -4,8 +4,8 @@
 | 項目     | 内容                                                           |
 | :------- | :--------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                      |
-| 版数     | Rev.4.10（PM-050 LLMバックエンド排他併用・BackendExecutionCoordinatorの導入） |
-| 改訂日   | 2026年7月30日                                                     |
+| 版数     | Rev.4.11（Aider/オーケストレーター防御的フェイルセーフ仕様追記） |
+| 改訂日   | 2026年8月2日                                                     |
 | 作成日   | 2026年7月28日                                                     |
 | 関連文書 | SBOS-BD-002（基本設計書）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 | 対象読者 | 実装担当エンジニア / アーキテクト / テストエンジニア             |
@@ -270,7 +270,10 @@ def lint_node(state: OrchestratorState) -> OrchestratorState:
     return state
 
 def test_node(state: OrchestratorState) -> OrchestratorState:
-    """pytestを実行し、JSON形式のレポートを取得する。失敗時はノード内でtest_roundをインクリメントし、Aider用フィードバックを蓄積する。"""
+    """pytestを実行し、JSON形式のレポートを取得する。失敗時はノード内でtest_roundをインクリメントし、Aider用フィードバックを蓄積する。
+    ※対象ファイルが存在しない場合は空回りによる全滅エラーを防ぐ。
+    ※フォールバック時はGUI/Tkinter等の環境依存テストを除外して安全に実行する。
+    """
     import subprocess, json
     report_path = Path(state["project_path"]) / ".pytest_report.json"
     subprocess.run(
@@ -292,7 +295,10 @@ def test_node(state: OrchestratorState) -> OrchestratorState:
     return state
 
 def review_node(state: OrchestratorState) -> OrchestratorState:
-    """レビューLLMを呼び出し、結果をrdjsonでReviewdogへパイプする。"""
+    """レビューLLMを呼び出し、結果をrdjsonでReviewdogへパイプする。
+    ※Reviewdogがエラー終了しても巻き添え停止させず処理を継続する(オプショナル化)。
+    ※target_filesが空の場合でも安全に無許可ファイルを判定する。
+    """
     from tools.llm_client import call_llm
     from tools.aider_runner import get_git_diff
     diff = get_git_diff(Path(state["project_path"]))
@@ -314,6 +320,8 @@ def done_node(state: OrchestratorState) -> OrchestratorState:
     PR作成成功時のみ state.json.status = "COMPLETED" とし、
     失敗時は作業ブランチと差分を保持して status = "PR_FAILED" とする。
     どちらもロックを解放し execution_history.json へ記録する。
+    ※リモート上書き破壊を防ぐため git push --force-with-lease を使用する。
+    ※既存PRの重複確認にはロケール依存を排除するため gh pr list --json number を用いる。
     """
     import subprocess
     base_branch = state.get("base_branch", "develop")
