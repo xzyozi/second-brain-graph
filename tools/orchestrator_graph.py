@@ -511,6 +511,10 @@ def code_node(state: GraphState) -> GraphState:
 
     try:
         run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
+        # Aider が自動追記した .gitignore の変更を元に戻し、規約違反・レビュー拒否を防止
+        if cwd and is_in_git_workspace(cwd):
+            run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
+
         state["status"] = "code_completed"
         # Aider が編集・新規作成したファイルを動的に target_files へ追加
         if cwd and is_in_git_workspace(cwd):
