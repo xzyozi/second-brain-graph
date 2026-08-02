@@ -91,6 +91,7 @@ def test_get_git_diff_bad_revision_fallback() -> None:
     """HEAD コミットがない新規リポジトリで git diff HEAD が失敗した際、git diff --cached と git diff へフォールバックすることを検証する。"""
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),
             MagicMock(returncode=128, stderr="fatal: bad revision 'HEAD'"),
             MagicMock(returncode=0, stdout="diff --git a/staged.py b/staged.py"),
             MagicMock(returncode=0, stdout="diff --git a/unstaged.py b/unstaged.py"),
@@ -98,7 +99,7 @@ def test_get_git_diff_bad_revision_fallback() -> None:
         diff = get_git_diff(cwd=".")
         assert "a/staged.py" in diff
         assert "a/unstaged.py" in diff
-        assert mock_run.call_count == 3
+        assert mock_run.call_count == 4
 
 
 @patch("subprocess.run")

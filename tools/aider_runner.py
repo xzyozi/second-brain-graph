@@ -41,6 +41,9 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
     初期コミット前のリポジトリ等で HEAD が存在しない場合はフォールバックして差分を取得する。
     """
     try:
+        # 新規作成された未追跡ファイル (untracked files) も git diff 対象に含めるため intent-to-add を設定
+        subprocess.run(["git", "add", "-N", "."], cwd=cwd, capture_output=True, text=True, check=False, timeout=30)
+
         res = subprocess.run(
             ["git", "diff", "HEAD"],
             cwd=cwd,
