@@ -803,7 +803,7 @@ def review_node(state: GraphState) -> GraphState:
         })
         state["review_rounds"] = rounds
 
-        # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存
+        # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存 (オプショナル連携のため失敗時はログ警告のみで LLM レビューを継続)
         if is_in_git_workspace(cwd):
             try:
                 rd_input = json.dumps(state["rdjson"])
@@ -816,16 +816,10 @@ def review_node(state: GraphState) -> GraphState:
                     "stdout": res_rd.stdout,
                     "stderr": res_rd.stderr,
                 }
-                logger.info(f"Reviewdog execution completed with code: {res_rd.returncode}")
-                
-                # Reviewdogがエラーで終了した場合は安全停止する
-                if res_rd.returncode != 0:
-                    logger.error(f"Reviewdog execution failed: {res_rd.stderr}")
-                    state["status"] = "FAILED_SYSTEM"
-                    state["error_category"] = "SYSTEM_ERROR"
-                    state["error"] = f"Reviewdog execution failed with code {res_rd.returncode}: {res_rd.stderr}"
-                    return state
-
+                if res_rd.returncode == 0:
+                    logger.info("Reviewdog execution completed successfully.")
+                else:
+                    logger.warning(f"Reviewdog execution returned non-zero ({res_rd.returncode}): {res_rd.stderr}. Continuing LLM review workflow.")
             except Exception as rde:
                 logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
                 state["reviewdog_result"] = {"returncode": -1, "stdout": "", "stderr": str(rde)}
