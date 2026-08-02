@@ -13,6 +13,7 @@ from tools.orchestrator_graph import (
     cmd_orchestrate,
     code_node,
     done_node,
+    escalate_node,
     execute_issue,
     lint_node,
     resolve_project_context,
@@ -804,4 +805,32 @@ def test_run_pytest_node_nonexistent_candidate_handling(tmp_path: Path) -> None:
     with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="", stderr="")):
         res = run_pytest_node(state)
         assert res["status"] == "test_passed"
+
+
+def test_escalate_node_defensive_classification_fallback() -> None:
+    """escalate_node に status 未確定 (running 等) で進入した場合、error_category に基づいて FAILED_B7 / FAILED_SYSTEM へ安全分類されることを検証する。"""
+    # 1. LINT_ERROR ➔ FAILED_B7
+    state1: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "LINT_ERROR"}
+    res1 = escalate_node(state1)
+    assert res1["status"] == "FAILED_B7"
+
+    # 2. TEST_ERROR ➔ FAILED_B7
+    state2: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "TEST_ERROR"}
+    res2 = escalate_node(state2)
+    assert res2["status"] == "FAILED_B7"
+
+    # 3. REVIEW_REJECTED ➔ FAILED_B7
+    state3: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "REVIEW_REJECTED"}
+    res3 = escalate_node(state3)
+    assert res3["status"] == "FAILED_B7"
+
+    # 4. SYSTEM_ERROR ➔ FAILED_SYSTEM
+    state4: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "SYSTEM_ERROR"}
+    res4 = escalate_node(state4)
+    assert res4["status"] == "FAILED_SYSTEM"
+
+    # 5. Already determined FAILED_B7 is preserved
+    state5: GraphState = {"issue_id": "TFG-0020", "status": "FAILED_B7", "error_category": "LINT_ERROR"}
+    res5 = escalate_node(state5)
+    assert res5["status"] == "FAILED_B7"
 

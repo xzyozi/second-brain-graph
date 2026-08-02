@@ -1019,7 +1019,11 @@ def done_node(state: GraphState) -> GraphState:
 
 
 def escalate_node(state: GraphState) -> GraphState:
-    """上限到達時・例外発生時のエスカレーション停止ノード (DD-003 §4.1)。"""
+    """上限到達時・例外発生時のエスカレーション停止ノード (DD-003 §4.1)。
+    ※現行のグラフ定義では各ノードおよびルーティング関数が事前に 'FAILED_B7' または 'FAILED_SYSTEM' を
+    確定させて本ノードへ遷移しますが、将来のルーティング拡張やステータス未確定時の安全網 (Failsafe)
+    として、error_category に基づくエスカレーション自動分類ロジックを保持しています。
+    """
     logger.info(f"Executing escalate_node for {state['issue_id']}")
     if state.get("status") not in ["FAILED_B7", "FAILED_SYSTEM"]:
         state["status"] = "FAILED_B7" if state.get("error_category") in [
