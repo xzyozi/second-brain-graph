@@ -1,6 +1,7 @@
 import logging
 import os
 import subprocess
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -19,7 +20,7 @@ class GitDiffError(Exception):
 
 def get_default_aider_model() -> str:
     """config/models.json から Aider 編集用のモデル名を取得する (DD-003 仕様準拠).
-    取得失敗時はフォールバックモデル名を返す。
+    取得失敗時は警告ログを出力しフォールバックモデル名を返す。
     """
     try:
         from tools.config_loader import get_backend_execution_config
@@ -32,7 +33,7 @@ def get_default_aider_model() -> str:
                 return f"ollama/{model_name}"
             return model_name
     except Exception as e:
-        logger.warning(f"Failed to load model config for Aider, using fallback: {e}")
+        logger.error(f"Failed to load model config for Aider, using fallback: {e}")
     return "ollama/qwen2.5-coder:7b-instruct"
 
 
@@ -115,12 +116,11 @@ def run_aider(
         except Exception as e:
             logger.warning(f"Failed to load Aider edit_format config: {e}")
 
-    if cwd:
-        cwd_path = Path(cwd)
-        for tf in target_files:
-            abs_path = cwd_path / tf
-            if not abs_path.exists():
-                logger.warning(f"Target file does not exist (will be created by Aider): {abs_path}")
+    cwd_path = Path(cwd) if cwd else Path.cwd()
+    for tf in target_files:
+        abs_path = cwd_path / tf
+        if not abs_path.exists():
+            logger.warning(f"Target file does not exist (will be created by Aider): {abs_path}")
 
     env = os.environ.copy()
 
@@ -144,11 +144,9 @@ def run_aider(
         if edit_format:
             cmd.extend(["--edit-format", edit_format])
 
-        # Windows コマンドライン長制限 (WinError 206) 回避のため --message-file を使用
-        if cwd:
-            msg_path = Path(cwd) / ".aider.instruction.tmp"
-        else:
-            msg_path = Path(".aider.instruction.tmp")
+        # Windows コマンドライン長制限 (WinError 206) 回避および並行実行競合防止のため UUID 一時ファイルを使用
+        msg_filename = f".aider.instruction_{uuid.uuid4().hex[:8]}.tmp"
+        msg_path = cwd_path / msg_filename
         msg_path.write_text(instruction, encoding="utf-8")
         msg_file = msg_path
 

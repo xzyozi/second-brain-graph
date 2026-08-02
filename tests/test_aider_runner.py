@@ -121,3 +121,15 @@ def test_run_aider_includes_edit_format(mock_run: MagicMock) -> None:
     assert "diff" in cmd
 
 
+@patch("subprocess.run")
+def test_run_aider_tmp_file_cleaned_up_on_error(mock_run: MagicMock, tmp_path: Path) -> None:
+    """Aider 実行が失敗（例外発生）した場合でも、指示文の一時ファイルがクリーンアップされることを検証する。"""
+    mock_run.side_effect = RuntimeError("Subprocess crash")
+    with pytest.raises(AiderRunError, match="Failed to run Aider CLI"):
+        run_aider("Fix bug", ["test.py"], cwd=str(tmp_path))
+
+    # 一時ファイル (.aider.instruction_*.tmp) が削除されていることを確認
+    tmp_files = list(tmp_path.glob(".aider.instruction_*.tmp"))
+    assert len(tmp_files) == 0
+
+
