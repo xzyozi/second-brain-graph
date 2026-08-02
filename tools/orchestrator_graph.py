@@ -607,16 +607,16 @@ def run_pytest_node(state: GraphState) -> GraphState:
     target_files = state.get("target_files", [])
     report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
 
-    # 対象タスクに関連するテストファイルを特定
+    # 対象タスクに関連するテストファイルを特定 (作成前であっても対象テストファイルを明示指定して無関係なGUIテスト実行を防止)
     test_files = [
         tf for tf in target_files
-        if "test" in Path(tf).name.lower() and cwd and (Path(cwd) / tf).exists()
+        if "test" in Path(tf).name.lower()
     ]
     if not test_files and cwd:
         for tf in target_files:
             stem = Path(tf).stem
             candidate = f"tests/test_{stem}.py"
-            if (Path(cwd) / candidate).exists() and candidate not in test_files:
+            if candidate not in test_files:
                 test_files.append(candidate)
 
     try:
@@ -654,6 +654,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
         else:
             state["test_round"] = state.get("test_round", 0) + 1
             state["error_category"] = "TEST_ERROR"
+            logger.warning(f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}")
             if failed_details:
                 formatted_failures = "\n\n".join(failed_details[:5]) # 上位5件の失敗詳細
                 state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}"
