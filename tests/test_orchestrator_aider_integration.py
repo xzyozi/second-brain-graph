@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -833,4 +834,59 @@ def test_escalate_node_defensive_classification_fallback() -> None:
     state5: GraphState = {"issue_id": "TFG-0020", "status": "FAILED_B7", "error_category": "LINT_ERROR"}
     res5 = escalate_node(state5)
     assert res5["status"] == "FAILED_B7"
+
+
+def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
+    """execute_issue が metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md を優先ロードすることを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    issues_dir = meta_tfg / "issues"
+    issues_dir.mkdir(parents=True, exist_ok=True)
+
+    sat_dir = project_root / "projects" / "tfg_sat"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
+
+    (meta_tfg / "project.json").write_text(json.dumps({"key": "TFG", "base_branch": "main"}), encoding="utf-8")
+    (meta_tfg / "state.json").write_text(json.dumps({}), encoding="utf-8")
+
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.write_text(
+        json.dumps({
+            "projects": {
+                "TFG": {
+                    "name": "tfg_sat",
+                    "dir": "projects/tfg_sat",
+                    "meta": "metadata/projects/TFG",
+                }
+            }
+        }),
+        encoding="utf-8"
+    )
+
+    issue_md = issues_dir / "TFG-0005.md"
+    issue_md.write_text("# TFG-0005 Special Specification\nDetail specification content", encoding="utf-8")
+
+    captured_initial_state = {}
+
+    def mock_invoke(state: Dict[str, Any]) -> Dict[str, Any]:
+        nonlocal captured_initial_state
+        captured_initial_state = state
+        state["status"] = "COMPLETED"
+        return state
+
+    mock_app = MagicMock()
+    mock_app.invoke.side_effect = mock_invoke
+
+    mock_workflow = MagicMock()
+    mock_workflow.compile.return_value = mock_app
+
+    with patch("tools.orchestrator_graph.StateGraph", return_value=mock_workflow), \
+         patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+        execute_issue("TFG-0005", "TFG", metadata_dir=metadata_dir, project_root=project_root)
+
+    assert captured_initial_state.get("instruction") == "# TFG-0005 Special Specification\nDetail specification content"
+
 

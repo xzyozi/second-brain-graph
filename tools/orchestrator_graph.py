@@ -580,7 +580,7 @@ def lint_node(state: GraphState) -> GraphState:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
             logger.warning(f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}")
-            
+
             lint_feedback = (
                 f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
                 "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
@@ -1162,7 +1162,7 @@ def execute_issue(
                         if sw_head.returncode != 0:
                             # ローカルに無い場合はリモート追跡ブランチをチェックアウト
                             sw_head = run_cmd(["git", "checkout", "-b", head_branch, f"origin/{head_branch}"], cwd=cwd, timeout=60)
-                        
+
                         if sw_head.returncode == 0:
                             # 既存ブランチのベース追従 (git rebase base_branch)
                             rebase_res = run_cmd(["git", "rebase", base_branch], cwd=cwd, timeout=120)
@@ -1304,6 +1304,24 @@ def execute_issue(
 
             app = workflow.compile()
 
+            # Issue 詳細記述ファイル (metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md) の探索および読み込み
+            issue_detail_file = metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
+            if issue_detail_file.exists():
+                logger.info(f"Loaded issue detail specification from {issue_detail_file}")
+                instruction_text = issue_detail_file.read_text(encoding="utf-8")
+            else:
+                instruction_text = f"Implement issue {issue_id}"
+                tasks_md = metadata_dir / "projects" / project_key / "tasks.md"
+                if tasks_md.exists():
+                    try:
+                        tasks_content = tasks_md.read_text(encoding="utf-8")
+                        for line in tasks_content.splitlines():
+                            if issue_id in line:
+                                instruction_text = f"Implement issue {issue_id}: {line.strip()}"
+                                break
+                    except Exception as te:
+                        logger.warning(f"Failed to parse tasks.md for fallback instruction: {te}")
+
             initial_state = GraphState(
                 issue_id=issue_id,
                 project_key=project_key,
@@ -1318,7 +1336,7 @@ def execute_issue(
                 test_round=0,
                 max_round=3,
                 target_files=target_files,
-                instruction=f"Implement issue {issue_id}",
+                instruction=instruction_text,
                 cwd=cwd,
                 base_branch=base_branch,
                 aider_message="",
