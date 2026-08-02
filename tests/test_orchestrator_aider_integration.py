@@ -717,3 +717,32 @@ def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
     assert saved_data[issue_id]["status"] == "FAILED_SYSTEM"
     assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"
 
+
+@patch("tools.orchestrator_graph.run_aider", return_value=True)
+def test_code_node_target_files_keyerror_prevention(mock_run_aider: MagicMock) -> None:
+    """state に target_files キーが存在しない場合でも、KeyError を起こさず安全にセットされることを検証する。"""
+    state: GraphState = {"issue_id": "TFG-0010", "cwd": "."}
+    res = code_node(state)
+    assert "target_files" in res
+    assert isinstance(res["target_files"], list)
+    assert res["status"] == "code_completed"
+
+
+def test_run_pytest_node_nonexistent_candidate_handling(tmp_path: Path) -> None:
+    """候補テストファイルがディスク上に存在しない場合、pytest に渡されず全滅エラーを回避することを検証する。"""
+    # Create fake tests dir with one safe test file
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    safe_test = tests_dir / "test_safe.py"
+    safe_test.write_text("def test_ok(): assert True\n", encoding="utf-8")
+
+    # Target files has a non-existent file whose candidate tests/test_nonexistent.py does not exist
+    state: GraphState = {
+        "issue_id": "TFG-0011",
+        "cwd": str(tmp_path),
+        "target_files": ["src/nonexistent.py"],
+    }
+    with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+        res = run_pytest_node(state)
+        assert res["status"] == "test_passed"
+

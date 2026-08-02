@@ -495,7 +495,7 @@ def code_node(state: GraphState) -> GraphState:
       - その他の異常終了: SYSTEM_ERROR として即座に FAILED_SYSTEM に正規化して安全停止する。
     """
     logger.info("Executing code_node with AiderRunner")
-    target_files = state.get("target_files", [])
+    target_files = state.setdefault("target_files", [])
     cwd = state.get("cwd")
 
     instruction = state.get("instruction", "Apply edits")
@@ -524,9 +524,12 @@ def code_node(state: GraphState) -> GraphState:
                     if line.strip():
                         parts = line.strip().split(maxsplit=1)
                         if len(parts) == 2:
-                            rel_path = parts[1].strip().replace("\\", "/")
-                            if rel_path.endswith(".py") and rel_path not in state["target_files"]:
-                                state["target_files"].append(rel_path)
+                            raw_path = parts[1].strip()
+                            if " -> " in raw_path:
+                                raw_path = raw_path.split(" -> ")[1].strip()
+                            rel_path = raw_path.replace("\\", "/")
+                            if rel_path.endswith(".py") and rel_path not in target_files:
+                                target_files.append(rel_path)
     except AiderRunError as e:
         logger.warning(f"AiderRunError caught in code_node: {e}")
         state["error"] = str(e)
@@ -540,6 +543,11 @@ def code_node(state: GraphState) -> GraphState:
         else:
             state["status"] = "FAILED_SYSTEM"
             state["error_category"] = "SYSTEM_ERROR"
+    except Exception as e:
+        logger.error(f"Unexpected error in code_node: {e}")
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(e)
     return state
 
 
@@ -607,7 +615,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
     target_files = state.get("target_files", [])
     report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
 
-    # 対象タスクに関連するテストファイルを特定 (作成前であっても対象テストファイルを明示指定して無関係なGUIテスト実行を防止)
+    # 対象タスクに関連するテストファイルを特定
     test_files = [
         tf for tf in target_files
         if "test" in Path(tf).name.lower()
@@ -619,9 +627,25 @@ def run_pytest_node(state: GraphState) -> GraphState:
             if candidate not in test_files:
                 test_files.append(candidate)
 
+    # ディスク上に実際に存在するテストファイルのみに絞り込み
+    existing_test_files = [
+        tf for tf in test_files
+        if cwd and (Path(cwd) / tf).exists()
+    ]
+
+    # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
+    if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
+        for p in (Path(cwd) / "tests").glob("test_*.py"):
+            if "ui" not in p.name.lower() and "gui" not in p.name.lower():
+                rel_test = str(p.relative_to(cwd)).replace("\\", "/")
+                if rel_test not in existing_test_files:
+                    existing_test_files.append(rel_test)
+
+    cmd_test_files = existing_test_files if existing_test_files else test_files
+
     try:
-        # pytest-json-report オプションを付加して対照テストファイルを実行
-        cmd = [sys.executable, "-m", "pytest"] + (test_files if test_files else []) + ["--json-report", f"--json-report-file={report_file}"]
+        # pytest-json-report オプションを付加して対象テストファイルを実行
+        cmd = [sys.executable, "-m", "pytest"] + (cmd_test_files if cmd_test_files else []) + ["--json-report", f"--json-report-file={report_file}"]
         res = run_cmd(cmd, cwd=cwd, timeout=300)
 
         # JSON レポートのパース
