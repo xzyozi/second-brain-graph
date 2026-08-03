@@ -962,5 +962,47 @@ def test_extract_target_files_from_issue_text() -> None:
     assert "tests/test_interface.py" not in targets
 
 
+def test_review_node_empty_comments_guard() -> None:
+    """review_node が changes_requested かつ comments が空の応答を受け取った際に verdict を LGTM に補正することを検証する。"""
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["src/grep/engine.py"],
+        "instruction": "",
+        "cwd": "/dummy",
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": "Plan text",
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    mock_llm_res = {"verdict": "changes_requested", "comments": []}
+
+    with patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"), \
+         patch("tools.llm_client.call_llm", return_value=mock_llm_res):
+        res_state = review_node(state)
+
+    assert res_state["status"] == "review_lgtm"
+    assert res_state["review_verdict"] == "LGTM"
+
+
+
 
 

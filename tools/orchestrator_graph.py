@@ -810,6 +810,11 @@ def review_node(state: GraphState) -> GraphState:
                         "severity": "WARNING",
                     })
 
+        # ガードロジック: Reviewer LLM が changes_requested を返したものの具体的な修正指示 (comments) が空の場合は、実質的に問題なしとみなして LGTM に安全補正する。
+        if verdict == "changes_requested" and not structured_comments:
+            logger.info("Reviewer LLM returned 'changes_requested' with empty comments. Safely correcting verdict to 'LGTM'.")
+            verdict = "LGTM"
+
         rev_round = state.get("review_round", 0) + 1
         state["review_round"] = rev_round
         state["review_verdict"] = verdict
