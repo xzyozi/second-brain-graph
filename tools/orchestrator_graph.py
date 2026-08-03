@@ -680,11 +680,13 @@ def run_pytest_node(state: GraphState) -> GraphState:
             state["test_round"] = state.get("test_round", 0) + 1
             state["error_category"] = "TEST_ERROR"
             logger.warning(f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}")
+            # 汎用的なテスト失敗回復指示を付与
+            generic_instruction = "\n\n【IMPORTANT】 Review the failure traceback above and fix the underlying code. Ensure correct usage of standard library APIs and handle edge cases."
             if failed_details:
-                formatted_failures = "\n\n".join(failed_details[:5]) # 上位5件の失敗詳細
-                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}"
+                formatted_failures = "\n\n".join(failed_details[:5])  # 上位5件の失敗詳細
+                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}{generic_instruction}"
             else:
-                state["aider_message"] = f"Pytest failed:\n{res.stdout}"
+                state["aider_message"] = f"Pytest failed:\n{res.stdout}{generic_instruction}"
 
             if state["test_round"] >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
