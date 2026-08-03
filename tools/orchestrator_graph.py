@@ -680,11 +680,19 @@ def run_pytest_node(state: GraphState) -> GraphState:
             state["test_round"] = state.get("test_round", 0) + 1
             state["error_category"] = "TEST_ERROR"
             logger.warning(f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}")
+            test_recovery_instruction = (
+                "\n\n【CRITICAL INSTRUCTION - TEST FAILURE RECOVERY】\n"
+                "Review the exact Pytest failure traceback above and fix the implementation or test:\n"
+                "1. Standard Library API Signatures: If a `TypeError` is raised for standard library calls (e.g. `ZipFile.__init__() got an unexpected keyword argument`), "
+                "correct the API usage (e.g., `zipfile.ZipFile` constructor does not take `password=` or `pwd=`; use `z.setpassword(password.encode())` or `z.open(name, pwd=password.encode())` instead).\n"
+                "2. Exception Consistency: Ensure expected custom exceptions (e.g., `EncryptedFileError`) are properly raised when conditions (like missing/invalid password) are met.\n"
+                "3. Minimal Fix: Make concise, precise edits to satisfy all failing test assertions."
+            )
             if failed_details:
                 formatted_failures = "\n\n".join(failed_details[:5]) # 上位5件の失敗詳細
-                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}"
+                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}{test_recovery_instruction}"
             else:
-                state["aider_message"] = f"Pytest failed:\n{res.stdout}"
+                state["aider_message"] = f"Pytest failed:\n{res.stdout}{test_recovery_instruction}"
 
             if state["test_round"] >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
