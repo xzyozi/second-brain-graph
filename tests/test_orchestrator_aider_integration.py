@@ -890,3 +890,69 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
     assert captured_initial_state.get("instruction") == "# TFG-0005 Special Specification\nDetail specification content"
 
 
+def test_extract_excluded_files_from_issue_text() -> None:
+    """Issue Markdown のテキストから除外・生成禁止対象のファイルが動的にパースされることを検証する。"""
+    from tools.orchestrator_graph import extract_excluded_files_from_issue_text
+
+    text = """
+# [TFG-0006] 暗号化 Office ドキュメント対応
+
+## 4. 除外条件・禁止事項
+- スコープ外のテストファイル（例: tests/test_interface.py）を自動生成しないこと。
+- src/grep/interface.py 等内部ユーティリティファイルをテスト生成対象に含めないこと。
+
+### 6. テストファイル生成方針
+- 生成禁止テスト: tests/test_interface.py
+"""
+    excluded = extract_excluded_files_from_issue_text(text)
+    assert "tests/test_interface.py" in excluded
+    assert "src/grep/interface.py" in excluded
+
+
+def test_lint_node_passes_ignore_e501_flag() -> None:
+    """lint_node が ruff check 呼び出し時に --ignore E501 オプションを付与することを検証する。"""
+    executed_cmds = []
+
+    def mock_run_cmd(cmd, cwd=None, timeout=300):
+        executed_cmds.append(" ".join(cmd))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["src/dummy.py"],
+        "instruction": "",
+        "cwd": "/dummy",
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": None,
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    with patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd), \
+         patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.is_file", return_value=True):
+        res = lint_node(state)
+
+    assert res["status"] == "lint_passed"
+    assert any("--ignore E501" in cmd for cmd in executed_cmds)
+
+
+

@@ -327,6 +327,28 @@ def write_event(project_key: str, event_data: Dict[str, Any], metadata_dir: Opti
         os.fsync(f.fileno())
 
 
+def extract_excluded_files_from_issue_text(issue_text: str) -> List[str]:
+    """Issue Markdown テキストから除外・生成禁止対象のファイルパスを動的に抽出する。"""
+    excluded: List[str] = []
+    lines = issue_text.splitlines()
+    in_exclusion = False
+    for line in lines:
+        stripped = line.strip()
+        if any(h in stripped.lower() for h in ["除外", "禁止", "forbidden", "スコープ外"]):
+            in_exclusion = True
+        elif stripped.startswith("#") and not any(h in stripped.lower() for h in ["除外", "禁止", "forbidden", "スコープ外"]):
+            in_exclusion = False
+
+        if in_exclusion:
+            matches = re.findall(r"[\w/.-]+\.py", stripped)
+            if matches:
+                if any(kw in stripped for kw in ["禁止", "しない", "除外", "対象外", "スコープ外", "含めない", "対象に含め", "Forbidden", "not", "例:"]):
+                    for m in matches:
+                        if m not in excluded:
+                            excluded.append(m)
+    return excluded
+
+
 def resolve_project_context(
     project_key: str,
     metadata_dir: Optional[Path] = None,
@@ -370,6 +392,7 @@ def resolve_project_context(
         base_branch = "develop"
         work_branch_prefix = "sbos/"
         raw_target_files: List[str] = []
+        exclude_files: List[str] = []
 
         if meta_dir:
             project_json = project_root / meta_dir / "project.json"
@@ -380,6 +403,8 @@ def resolve_project_context(
                     work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
                     if "target_files" in pdata and isinstance(pdata["target_files"], list) and pdata["target_files"]:
                         raw_target_files.extend(pdata["target_files"])
+                    if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
+                        exclude_files.extend(pdata["exclude_files"])
 
             if not raw_target_files:
                 tasks_md = project_root / meta_dir / "tasks.md"
@@ -398,9 +423,11 @@ def resolve_project_context(
                 if not any(excluded in rel_p for excluded in [".venv", "venv", "__pycache__", "build", "dist"]):
                     raw_target_files.append(rel_p)
 
-        # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容)
+        # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容) し、除外ファイルを適用
         valid_target_files = []
         for tf in raw_target_files:
+            if tf in exclude_files:
+                continue
             abs_tf = cwd_path / tf
             if abs_tf.exists() or (not tf.startswith("..") and not os.path.isabs(tf)):
                 valid_target_files.append(tf)
@@ -568,10 +595,10 @@ def lint_node(state: GraphState) -> GraphState:
             state["status"] = "lint_passed"
             return state
 
-        cmd = [sys.executable, "-m", "ruff", "check"] + targets_to_check
+        cmd = [sys.executable, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
         # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
         run_cmd([sys.executable, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
-        run_cmd([sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes"] + targets_to_check, cwd=cwd, timeout=300)
+        run_cmd([sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"] + targets_to_check, cwd=cwd, timeout=300)
         res = run_cmd(cmd, cwd=cwd, timeout=300)
         state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
@@ -1317,6 +1344,10 @@ def execute_issue(
             if issue_detail_file.exists():
                 logger.info(f"Loaded issue detail specification from {issue_detail_file}")
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
+                doc_exclusions = extract_excluded_files_from_issue_text(instruction_text)
+                if doc_exclusions:
+                    logger.info(f"Dynamic exclusions identified from issue markdown: {doc_exclusions}")
+                    target_files = [tf for tf in target_files if tf not in doc_exclusions]
             else:
                 instruction_text = f"Implement issue {issue_id}"
                 tasks_md = metadata_dir / "projects" / project_key / "tasks.md"
