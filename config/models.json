@@ -19,7 +19,8 @@
   "aider": {
     "description": "Aider 自動コード編集用モデル",
     "no_auto_commits": true,
-    "edit_format": "whole"
+    "edit_format": "whole",
+    "timeout": 1200
   },
   "backend_execution": {
     "mode": "exclusive",

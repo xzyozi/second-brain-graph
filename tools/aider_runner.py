@@ -69,7 +69,7 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
                 )
                 if cached_res.returncode == 0 and cached_res.stdout:
                     diffs.append(cached_res.stdout)
-                
+
                 unstaged_res = subprocess.run(
                     ["git", "diff"],
                     cwd=cwd,
@@ -80,7 +80,7 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
                 )
                 if unstaged_res.returncode == 0 and unstaged_res.stdout:
                     diffs.append(unstaged_res.stdout)
-                
+
                 if cached_res.returncode == 0 and unstaged_res.returncode == 0:
                     return "\n".join(diffs)
             raise GitDiffError(f"git diff command failed with returncode {res.returncode}: {res.stderr}")
@@ -96,25 +96,31 @@ def run_aider(
     target_files: List[str],
     cwd: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: int = 600,
+    timeout: Optional[int] = None,
     edit_format: Optional[str] = None,
 ) -> bool:
     """Aider CLI を subprocess 経由で非対話形式で実行する。
     - Ollama API ベースが指定されている場合、末尾の /v1 サフィックスを自動除去する。
-    - config/models.json から edit_format を動的に設定可能。
+    - config/models.json から edit_format および timeout (デフォルト 1200秒/20分) を動的に設定可能。
     - タイムアウトおよび非ゼロ終了時は AiderRunError を発生させる。
     - 対象ファイルが存在しない場合は警告ログを出力し、新規ファイル作成を許可する。
     """
     if model is None:
         model = get_default_aider_model()
 
-    if edit_format is None:
+    if edit_format is None or timeout is None:
         try:
             from tools.config_loader import get_aider_config
             aider_cfg = get_aider_config()
-            edit_format = aider_cfg.edit_format
+            if edit_format is None:
+                edit_format = aider_cfg.edit_format
+            if timeout is None:
+                timeout = aider_cfg.timeout
         except Exception as e:
-            logger.warning(f"Failed to load Aider edit_format config: {e}")
+            logger.warning(f"Failed to load Aider config: {e}")
+
+    if timeout is None:
+        timeout = 1200
 
     cwd_path = Path(cwd) if cwd else Path.cwd()
     for tf in target_files:
