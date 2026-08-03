@@ -163,8 +163,9 @@ def main() -> None:
         logger.info(f"[DRY RUN] Would execute orchestrator command: {' '.join(orch_cmd)}")
         return
 
-    # 3. 衛星リポジトリのクリーンアップの実行
-    if args.clean:
+    # 3. 衛星リポジトリのクリーンアップの実行 (--resume 指定時は変更を維持するためスキップ)
+    should_clean = args.clean and not args.resume
+    if should_clean:
         try:
             clean_satellite_repository(satellite_cwd, base_branch=base_branch)
         except Exception as e:

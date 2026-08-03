@@ -23,6 +23,35 @@ def test_clean_satellite_repository_executes_git_commands() -> None:
     assert executed_cmds[2] == "git clean -fd"
 
 
+def test_run_task_resume_skips_cleanup(tmp_path: Path) -> None:
+    """main が --resume オプション時に衛星リポジトリのクリーンアップをスキップすることを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    (meta_tfg / "project.json").write_text('{"key": "TFG", "base_branch": "develop"}', encoding="utf-8")
+    (metadata_dir / ".project-registry.json").write_text(
+        '{"projects": {"TFG": {"name": "test_file_grep", "dir": "projects/test_file_grep", "meta": "metadata/projects/TFG"}}}',
+        encoding="utf-8"
+    )
+
+    with patch("tools.run_task.clean_satellite_repository") as mock_clean, \
+         patch("tools.run_task.PROJECT_ROOT", project_root), \
+         patch("sys.argv", ["run_task.py", "TFG-0006", "--resume"]), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        try:
+            main()
+        except SystemExit:
+            pass
+
+    assert not mock_clean.called
+
+
 def test_run_task_main_dry_run(tmp_path: Path) -> None:
     """main が --dry-run オプション時に一貫性検証とコンテキスト解決を行い、実際のサブプロセスを起動せずに正常終了することを検証する。"""
     project_root = tmp_path
