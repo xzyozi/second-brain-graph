@@ -532,6 +532,13 @@ def code_node(state: GraphState) -> GraphState:
         target_files_str = ", ".join(target_files)
         instruction += f"\n\n[SCOPE RESTRICTION]\nYou are ONLY permitted to modify the following files: {target_files_str}. DO NOT modify, touch, or create any other files."
 
+    instruction += (
+        "\n\n[EXECUTION STRATEGY - STEP-BY-STEP]\n"
+        "Follow a strict 2-phase approach:\n"
+        "1. Phase 1 (Core Logic): Focus first on implementing the core logic, classes, and exceptions under `src/`.\n"
+        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass."
+    )
+
     if state.get("aider_message"):
         instruction += f"\n\nFeedback:\n{state['aider_message']}"
 
