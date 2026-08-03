@@ -327,6 +327,27 @@ def write_event(project_key: str, event_data: Dict[str, Any], metadata_dir: Opti
         os.fsync(f.fileno())
 
 
+def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
+    """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
+    target_files: List[str] = []
+    lines = issue_text.splitlines()
+    in_target_section = False
+    for line in lines:
+        stripped = line.strip()
+        if any(h in stripped.lower() for h in ["編集対象ファイル", "target files", "target_files"]):
+            in_target_section = True
+            continue
+        elif in_target_section and (stripped.startswith("## ") or stripped.startswith("# ")):
+            in_target_section = False
+
+        if in_target_section:
+            matches = re.findall(r"[\w/.-]+\.py", stripped)
+            for m in matches:
+                if m not in target_files:
+                    target_files.append(m)
+    return target_files
+
+
 def resolve_project_context(
     project_key: str,
     metadata_dir: Optional[Path] = None,
@@ -1322,6 +1343,10 @@ def execute_issue(
             if issue_detail_file.exists():
                 logger.info(f"Loaded issue detail specification from {issue_detail_file}")
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
+                md_targets = extract_target_files_from_issue_text(instruction_text)
+                if md_targets:
+                    logger.info(f"Dynamically resolved target_files from issue markdown: {md_targets}")
+                    target_files = md_targets
             else:
                 instruction_text = f"Implement issue {issue_id}"
                 tasks_md = metadata_dir / "projects" / project_key / "tasks.md"

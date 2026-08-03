@@ -936,4 +936,31 @@ def test_lint_node_passes_ignore_e501_flag() -> None:
     assert any("--ignore E501" in cmd for cmd in executed_cmds)
 
 
+def test_extract_target_files_from_issue_text() -> None:
+    """Issue Markdown の『編集対象ファイル (Target Files)』セクションから target_files が抽出されることを検証する。"""
+    from tools.orchestrator_graph import extract_target_files_from_issue_text
+
+    text = """
+# [TFG-0006] 暗号化 Office ドキュメント対応
+
+## 3. 編集対象ファイル (Target Files)
+- `src/grep/office_parser.py`
+- `src/grep/engine.py`
+- `src/grep/interface.py`
+- `tests/test_office_parser.py`
+- `tests/test_engine.py`
+
+## 4. 除外条件・禁止事項
+- スコープ外のテストファイル（例: tests/test_interface.py）を自動生成しないこと。
+"""
+    targets = extract_target_files_from_issue_text(text)
+    assert "src/grep/office_parser.py" in targets
+    assert "src/grep/engine.py" in targets
+    assert "src/grep/interface.py" in targets
+    assert "tests/test_office_parser.py" in targets
+    assert "tests/test_engine.py" in targets
+    assert "tests/test_interface.py" not in targets
+
+
+
 
