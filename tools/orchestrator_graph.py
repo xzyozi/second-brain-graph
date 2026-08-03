@@ -1042,6 +1042,11 @@ def execute_issue(
     resume: Optional[bool] = None,
     fresh: bool = False,
 ) -> None:
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+    if metadata_dir is None:
+        metadata_dir = project_root / "metadata"
+
     execution_id = uuid.uuid4().hex
     try:
         # 規約準拠の Issue ID 範囲およびプロジェクトキー整合検証
