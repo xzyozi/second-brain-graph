@@ -589,7 +589,8 @@ def lint_node(state: GraphState) -> GraphState:
                 "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
                 "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
                 "3. Redefined/Duplicate symbols: If a function, class, or method is redefined or duplicated, delete the duplicate definition so that exactly one definition remains.\n"
-                "4. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
+                "4. Line too long (E501): Split long string literals, URLs, or expressions across multiple lines using parentheses `(...)` or multi-line string concatenation so that every line is strictly under 120 characters.\n"
+                "5. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
             )
 
             state["aider_message"] = lint_feedback
