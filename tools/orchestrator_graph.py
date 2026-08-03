@@ -327,28 +327,6 @@ def write_event(project_key: str, event_data: Dict[str, Any], metadata_dir: Opti
         os.fsync(f.fileno())
 
 
-def extract_excluded_files_from_issue_text(issue_text: str) -> List[str]:
-    """Issue Markdown テキストから除外・生成禁止対象のファイルパスを動的に抽出する。"""
-    excluded: List[str] = []
-    lines = issue_text.splitlines()
-    in_exclusion = False
-    for line in lines:
-        stripped = line.strip()
-        if any(h in stripped.lower() for h in ["除外", "禁止", "forbidden", "スコープ外"]):
-            in_exclusion = True
-        elif stripped.startswith("#") and not any(h in stripped.lower() for h in ["除外", "禁止", "forbidden", "スコープ外"]):
-            in_exclusion = False
-
-        if in_exclusion:
-            matches = re.findall(r"[\w/.-]+\.py", stripped)
-            if matches:
-                if any(kw in stripped for kw in ["禁止", "しない", "除外", "対象外", "スコープ外", "含めない", "対象に含め", "Forbidden", "not", "例:"]):
-                    for m in matches:
-                        if m not in excluded:
-                            excluded.append(m)
-    return excluded
-
-
 def resolve_project_context(
     project_key: str,
     metadata_dir: Optional[Path] = None,
@@ -1344,10 +1322,6 @@ def execute_issue(
             if issue_detail_file.exists():
                 logger.info(f"Loaded issue detail specification from {issue_detail_file}")
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
-                doc_exclusions = extract_excluded_files_from_issue_text(instruction_text)
-                if doc_exclusions:
-                    logger.info(f"Dynamic exclusions identified from issue markdown: {doc_exclusions}")
-                    target_files = [tf for tf in target_files if tf not in doc_exclusions]
             else:
                 instruction_text = f"Implement issue {issue_id}"
                 tasks_md = metadata_dir / "projects" / project_key / "tasks.md"
