@@ -129,6 +129,7 @@ def run_aider(
             logger.warning(f"Target file does not exist (will be created by Aider): {abs_path}")
 
     env = os.environ.copy()
+    env["AIDER_SHOW_MODEL_WARNINGS"] = "false"
 
     # Ollama API ベースサフィックスの自動サニタイズ
     if "OLLAMA_API_BASE" in env:
@@ -145,6 +146,7 @@ def run_aider(
             "--model", model,
             "--no-auto-commits",
             "--yes-always",
+            "--no-show-model-warnings",
         ]
 
         if edit_format:
