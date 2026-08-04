@@ -614,8 +614,37 @@ def lint_node(state: GraphState) -> GraphState:
             state["error_category"] = "LINT_ERROR"
             logger.warning(f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}")
 
+            # --- 動的エラー分析・復旧ルール (Lint Recovery Tips) ---
+            combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
+            lint_recovery_tips = []
+
+            # 1. F811 (二重定義・再定義エラー) の動的抽出
+            redef_match = re.search(r"F811 Redefinition of (?:unused )?`([^`]+)` from line (\d+)", combined_lint_output)
+            if redef_match:
+                sym_name, orig_line = redef_match.group(1), redef_match.group(2)
+                lint_recovery_tips.append(
+                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is redefined. It was already defined/imported at line {orig_line}. "
+                    f"Remove the duplicate class/function definition of `{sym_name}` OR remove `{sym_name}` from the import statement so that exactly one definition remains."
+                )
+
+            # 2. F821 (未定義変数エラー) の動的抽出
+            undef_match = re.search(r"F821 Undefined name `([^`]+)`", combined_lint_output)
+            if undef_match:
+                undef_name = undef_match.group(1)
+                lint_recovery_tips.append(
+                    f"・UNDEFINED NAME ERROR (F821): `{undef_name}` is used but not defined or imported. "
+                    f"Import or define `{undef_name}` before using it."
+                )
+
+            # フィードバックメッセージの構築
+            dynamic_instructions = ""
+            if lint_recovery_tips:
+                tips_str = "\n".join(lint_recovery_tips)
+                dynamic_instructions = f"【DYNAMIC RECOVERY INSTRUCTIONS】\n{tips_str}\n\n"
+
             lint_feedback = (
                 f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
+                f"{dynamic_instructions}"
                 "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
                 "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
                 "Follow these general rules:\n"

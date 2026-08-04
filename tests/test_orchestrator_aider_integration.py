@@ -1050,6 +1050,54 @@ def test_run_pytest_node_dynamic_recovery_tips(tmp_path: Path) -> None:
     assert "SYNTAX ERROR: `self.assertRaises` is a unittest method" in aider_msg
 
 
+def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
+    """lint_node が F811 (二重定義) や F821 (未定義) エラーから動的回復指示を構築することを検証する。"""
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["src/grep/engine.py"],
+        "instruction": "",
+        "cwd": str(tmp_path),
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": "Plan text",
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    mock_res = MagicMock(
+        returncode=1,
+        stdout="F811 Redefinition of unused `GrepResult` from line 8\nF821 Undefined name `foo_bar`",
+        stderr=""
+    )
+
+    with patch("tools.orchestrator_graph.run_cmd", return_value=mock_res), \
+         patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.is_file", return_value=True):
+        res_state = lint_node(state)
+
+    aider_msg = res_state.get("aider_message", "")
+    assert "REDEFINITION ERROR (F811): Symbol `GrepResult` is redefined." in aider_msg
+    assert "UNDEFINED NAME ERROR (F821): `foo_bar` is used but not defined" in aider_msg
+
+
+
 
 
 
