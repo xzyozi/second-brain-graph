@@ -1093,7 +1093,8 @@ def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
         res_state = lint_node(state)
 
     aider_msg = res_state.get("aider_message", "")
-    assert "REDEFINITION ERROR (F811): Symbol `GrepResult` is redefined." in aider_msg
+    assert "REDEFINITION ERROR (F811): Symbol `GrepResult` is defined both via import" in aider_msg
+    assert "Option A (Preferred if `GrepResult` belongs to this file): REMOVE `GrepResult`" in aider_msg
     assert "UNDEFINED NAME ERROR (F821): `foo_bar` is used but not defined" in aider_msg
 
 

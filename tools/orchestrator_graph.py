@@ -618,13 +618,20 @@ def lint_node(state: GraphState) -> GraphState:
             combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
             lint_recovery_tips = []
 
-            # 1. F811 (二重定義・再定義エラー) の動的抽出
-            redef_match = re.search(r"F811 Redefinition of (?:unused )?`([^`]+)` from line (\d+)", combined_lint_output)
+            # 1. F811 (二重定義・再定義エラー) の柔軟な動的抽出
+            redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output)
+            if not redef_match:
+                redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output)
+
             if redef_match:
-                sym_name, orig_line = redef_match.group(1), redef_match.group(2)
+                groups = redef_match.groups()
+                sym_name = groups[0]
+                orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
                 lint_recovery_tips.append(
-                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is redefined. It was already defined/imported at line {orig_line}. "
-                    f"Remove the duplicate class/function definition of `{sym_name}` OR remove `{sym_name}` from the import statement so that exactly one definition remains."
+                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition.\n"
+                    f"  ACTION REQUIRED:\n"
+                    f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
+                    f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
                 )
 
             # 2. F821 (未定義変数エラー) の動的抽出
