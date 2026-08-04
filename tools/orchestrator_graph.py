@@ -1202,7 +1202,23 @@ def execute_issue(
             return
 
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
-            # 作業ツリーの事前チェック (dirty working tree 拒否)
+            # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かを判定
+            current_task_status = ""
+            if metadata_dir:
+                state_json_path = metadata_dir / "projects" / project_key / "state.json"
+                if state_json_path.exists():
+                    try:
+                        with open(state_json_path, "r", encoding="utf-8") as sf:
+                            sdata = json.load(sf)
+                            current_task_status = sdata.get(issue_id, {}).get("status", "")
+                    except Exception:
+                        pass
+
+            is_resume_mode = resume if resume is not None else (
+                fresh is False and current_task_status in ["CHANGES_REQUESTED", "PR_FAILED", "FAILED_B7", "IN_REVIEW"]
+            )
+
+            # 作業ツリーの事前チェック (Resumeモード時は自動コミット保存して継続、それ以外は拒否)
             if is_in_git_workspace(cwd):
                 try:
                     init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
@@ -1211,72 +1227,27 @@ def execute_issue(
                         if line.strip() and not any(ignored in line for ignored in [".aider", ".pytest_cache", "__pycache__"])
                     ]
                     if init_status.returncode != 0 or dirty_lines:
-                        logger.error(f"Dirty working tree detected before execution in {cwd}. Aborting.")
-                        update_task_state(
-                            project_key, issue_id, status="FAILED_SYSTEM",
-                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                        )
-                        safe_record_execution_history(
-                            {
-                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                "error_category": "SYSTEM_ERROR",
-                                "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
-                            },
-                            final_status="FAILED_SYSTEM", history_file=history_file
-                        )
-                        return
-
-                    sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
-                    if sw_base.returncode != 0:
-                        logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
-                        update_task_state(
-                            project_key, issue_id, status="FAILED_SYSTEM",
-                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                        )
-                        safe_record_execution_history(
-                            {
-                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                "error_category": "SYSTEM_ERROR",
-                                "error": f"git switch {base_branch} failed: {sw_base.stderr}",
-                            },
-                            final_status="FAILED_SYSTEM", history_file=history_file
-                        )
-                        return
-
-                    pull_res = run_cmd(["git", "pull", "--ff-only", "origin", base_branch], cwd=cwd, timeout=120)
-                    if pull_res.returncode != 0 and not allow_offline_git:
-                        logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
-                        update_task_state(
-                            project_key, issue_id, status="FAILED_SYSTEM",
-                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                        )
-                        safe_record_execution_history(
-                            {
-                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                "error_category": "SYSTEM_ERROR",
-                                "error": f"git pull --ff-only failed: {pull_res.stderr}",
-                            },
-                            final_status="FAILED_SYSTEM", history_file=history_file
-                        )
-                        return
+                        if is_resume_mode:
+                            logger.info(f"Resume Mode: Auto-committing uncommitted changes before resuming in {cwd}...")
+                            run_cmd(["git", "add", "-A"], cwd=cwd, timeout=60)
+                            run_cmd(["git", "commit", "-m", f"wip: preserve uncommitted changes for {issue_id} before resume"], cwd=cwd, timeout=60)
+                        else:
+                            logger.error(f"Dirty working tree detected before execution in {cwd}. Aborting.")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
 
                     head_branch = f"{work_branch_prefix}{issue_id}"
-
-                    # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かをスマート判定
-                    current_task_status = ""
-                    if metadata_dir:
-                        state_json_path = metadata_dir / "projects" / project_key / "state.json"
-                        if state_json_path.exists():
-                            try:
-                                with open(state_json_path, "r", encoding="utf-8") as sf:
-                                    sdata = json.load(sf)
-                                    current_task_status = sdata.get(issue_id, {}).get("status", "")
-                            except Exception:
-                                pass
-
-                    is_resume_mode = resume if resume is not None else (
-                        fresh is False and current_task_status in ["CHANGES_REQUESTED", "PR_FAILED", "FAILED_B7", "IN_REVIEW"]
-                    )
 
                     if is_resume_mode:
                         logger.info(f"Resume Mode activated for {issue_id} (status: '{current_task_status}'). Preserving existing work branch '{head_branch}'.")
@@ -1296,6 +1267,40 @@ def execute_issue(
                             run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
                     else:
                         logger.info(f"Fresh Mode activated for {issue_id}. Creating clean work branch '{head_branch}' from {base_branch}.")
+                        sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
+                        if sw_base.returncode != 0:
+                            logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"git switch {base_branch} failed: {sw_base.stderr}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
+
+                        pull_res = run_cmd(["git", "pull", "--ff-only", "origin", base_branch], cwd=cwd, timeout=120)
+                        if pull_res.returncode != 0 and not allow_offline_git:
+                            logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"git pull --ff-only failed: {pull_res.stderr}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
+
                         run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
                         sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
                         if sw_c.returncode != 0:
