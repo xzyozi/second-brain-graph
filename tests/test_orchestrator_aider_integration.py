@@ -1003,6 +1003,54 @@ def test_review_node_empty_comments_guard() -> None:
     assert res_state["review_verdict"] == "LGTM"
 
 
+def test_run_pytest_node_dynamic_recovery_tips(tmp_path: Path) -> None:
+    """run_pytest_node が pytest エラーログから不足フィクスチャや例外名を動的抽出して回復指示を構築することを検証する。"""
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["tests/test_engine.py"],
+        "instruction": "",
+        "cwd": str(tmp_path),
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": "Plan text",
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    mock_res = MagicMock(
+        returncode=1,
+        stdout="fixture 'temp_test_files' not found\nDID NOT RAISE EncryptedFileError\nhas no attribute 'assertRaises'",
+        stderr=""
+    )
+
+    with patch("tools.orchestrator_graph.run_cmd", return_value=mock_res), \
+         patch("pathlib.Path.exists", return_value=False):
+        res_state = run_pytest_node(state)
+
+    aider_msg = res_state.get("aider_message", "")
+    assert "FIXTURE ERROR: The fixture 'temp_test_files' does not exist." in aider_msg
+    assert "EXCEPTION ERROR: Expected exception `EncryptedFileError` was not raised." in aider_msg
+    assert "SYNTAX ERROR: `self.assertRaises` is a unittest method" in aider_msg
+
+
+
 
 
 

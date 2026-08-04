@@ -713,10 +713,50 @@ def run_pytest_node(state: GraphState) -> GraphState:
             state["test_round"] = state.get("test_round", 0) + 1
             state["error_category"] = "TEST_ERROR"
             logger.warning(f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}")
-            # 汎用的なテスト失敗回復指示を付与
-            generic_instruction = "\n\n【IMPORTANT】 Review the failure traceback above and fix the underlying code. Ensure correct usage of standard library APIs and handle edge cases."
+
+            # --- 動的エラー分析・復旧ルール (Recovery Tips) ---
+            combined_error_text = f"{res.stdout or ''}\n{res.stderr or ''}\n" + "\n".join(failed_details)
+            recovery_tips = []
+
+            # 1. 存在しない Pytest フィクスチャ要求の検知・修正指示 (正規表現で動的抽出)
+            fixture_match = re.search(r"fixture '([^']+)' not found", combined_error_text)
+            if fixture_match:
+                missing_fixture = fixture_match.group(1)
+                recovery_tips.append(
+                    f"・FIXTURE ERROR: The fixture '{missing_fixture}' does not exist. "
+                    "Use the standard pytest fixture `tmp_path` for temporary directories, or ensure your custom fixture is properly defined in conftest.py."
+                )
+
+            # 2. 例外の送出漏れ (DID NOT RAISE) の検知・修正指示 (正規表現で動的抽出)
+            did_not_raise_match = re.search(r"DID NOT RAISE ([^\n]+)", combined_error_text)
+            if did_not_raise_match:
+                expected_exc = did_not_raise_match.group(1).strip()
+                recovery_tips.append(
+                    f"・EXCEPTION ERROR: Expected exception `{expected_exc}` was not raised. "
+                    f"Ensure the target code explicitly executes `raise {expected_exc}(...)` "
+                    "when error conditions are met, instead of swallowing exceptions or returning fallback values (like empty lists)."
+                )
+
+            # 3. unittest 記法誤用 (assertRaises) の検知・修正指示 (汎用化)
+            if "has no attribute 'assertRaises'" in combined_error_text:
+                recovery_tips.append(
+                    "・SYNTAX ERROR: `self.assertRaises` is a unittest method, not compatible with pure pytest classes. "
+                    "Use `with pytest.raises(ExpectedException):` in pytest functions instead."
+                )
+
+            # フィードバックメッセージの構築
+            if recovery_tips:
+                tips_str = "\n".join(recovery_tips)
+                generic_instruction = (
+                    "\n\n【CRITICAL RECOVERY INSTRUCTIONS】\n"
+                    f"{tips_str}\n\n"
+                    "Review the failure traceback above, apply the critical instructions, and fix the code/tests."
+                )
+            else:
+                generic_instruction = "\n\n【IMPORTANT】 Review the failure traceback above and fix the underlying code. Ensure correct usage of standard library APIs and handle edge cases."
+
             if failed_details:
-                formatted_failures = "\n\n".join(failed_details[:5])  # 上位5件の失敗詳細
+                formatted_failures = "\n\n".join(failed_details[:5])
                 state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}{generic_instruction}"
             else:
                 state["aider_message"] = f"Pytest failed:\n{res.stdout}{generic_instruction}"
