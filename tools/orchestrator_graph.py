@@ -1188,16 +1188,63 @@ def done_node(state: GraphState) -> GraphState:
 
 
 def escalate_node(state: GraphState) -> GraphState:
-    """上限到達時・例外発生時のエスカレーション停止ノード (DD-003 §4.1)。
-    ※現行のグラフ定義では各ノードおよびルーティング関数が事前に 'FAILED_B7' または 'FAILED_SYSTEM' を
-    確定させて本ノードへ遷移しますが、将来のルーティング拡張やステータス未確定時の安全網 (Failsafe)
-    として、error_category に基づくエスカレーション自動分類ロジックを保持しています。
-    """
+    """上限到達時・例外発生時のエスカレーション停止と敗因分析レポートの自動生成ノード"""
     logger.info(f"Executing escalate_node for {state['issue_id']}")
+
+    # 最終的なエラーステータスの決定
     if state.get("status") not in ["FAILED_B7", "FAILED_SYSTEM"]:
         state["status"] = "FAILED_B7" if state.get("error_category") in [
             "LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED"
         ] else "FAILED_SYSTEM"
+
+    # --- 敗因分析レポートの自動生成 (LLMによる自己分析) ---
+    cwd = state.get("cwd")
+    if cwd and state.get("error_category") in ["LINT_ERROR", "TEST_ERROR"]:
+        try:
+            from tools.llm_client import call_llm
+            logger.info("Generating Failure Analysis Report...")
+
+            # 失敗した直近のエラーログを取得
+            test_res = state.get("test_result", {}).get("stdout", "")
+            lint_res = state.get("lint_result", {}).get("stdout", "")
+            latest_error = test_res if state.get("error_category") == "TEST_ERROR" else lint_res
+
+            system_prompt = (
+                "You are an Expert Technical Architect reviewing a failed auto-coding session. "
+                "The AI agent failed to pass the tests/linting after maximum retries. "
+                "Analyze the final error log and identify the ROOT CAUSE of the failure (e.g., missing domain knowledge, incorrect library usage, hallucinated magic strings, logic bugs). "
+                "Output a concise Markdown report specifying WHY it failed and WHAT needs to be changed in the issue requirements or core logic."
+            )
+            user_prompt = f"Target Files: {state.get('target_files')}\n\nFinal Error Log:\n{latest_error[:2000]}"
+
+            res = call_llm(
+                role="reviewer",
+                intent="failure_analysis",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt
+            )
+
+            analysis_text = (
+                res.get("raw", res.get("content", str(res)))
+                if isinstance(res, dict)
+                else str(res)
+            )
+
+            # ワークスペース内にレポートを出力
+            report_path = Path(cwd) / f"FAILURE_REPORT_{state['issue_id']}.md"
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(f"# Failure Analysis Report for {state['issue_id']}\n\n")
+                f.write(analysis_text)
+
+            logger.info(f"Failure report generated at {report_path}")
+
+            # state.json 側のステータスも「エスカレーション済」として明確化
+            state["status"] = "ESCALATED_NEEDS_REVISION"
+            state["error"] = "Agent reached max retries. Failure report generated."
+
+        except Exception as e:
+            logger.warning(f"Failed to generate analysis report: {e}")
+
     return state
 
 

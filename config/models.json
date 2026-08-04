@@ -32,7 +32,8 @@
       "task_prioritization": "reasoning_ollama",
       "code_edit": "coding_ollama",
       "aider_edit": "coding_ollama",
-      "code_review": "reasoning_ollama"
+      "code_review": "reasoning_ollama",
+      "failure_analysis": "reasoning_ollama"
     },
     "profiles": {
       "reasoning_economy": {
