@@ -809,6 +809,14 @@ def run_pytest_node(state: GraphState) -> GraphState:
             combined_error_text = f"{res.stdout or ''}\n{res.stderr or ''}\n" + "\n".join(failed_details)
             recovery_tips = []
 
+            # 同じテストでループしている場合の思考リセット指示 (Hallucination Escape Prompt)
+            if state.get("test_round", 1) >= 2:
+                recovery_tips.append(
+                    "・STUCK LOOP WARNING: You are repeatedly failing the same tests. Your current mental model or hardcoded values are wrong. "
+                    "DO NOT try to guess magic bytes (like 'PK...'). DO NOT guess internal data structures. "
+                    "Rely on robust standard libraries or specific format parsers, and print variables to inspect the actual structures."
+                )
+
             # 1. Pytest 固有のフィクスチャ誤用
             fixture_match = re.search(r"fixture '([^']+)' not found", combined_error_text)
             if fixture_match:
