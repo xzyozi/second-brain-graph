@@ -731,8 +731,26 @@ def run_pytest_node(state: GraphState) -> GraphState:
                     if t.get("outcome") == "failed":
                         nodeid = t.get("nodeid", "unknown_test")
                         call_info = t.get("call", {})
-                        longrepr = call_info.get("longrepr", "") or t.get("setup", {}).get("longrepr", "")
-                        failed_details.append(f"FAILED {nodeid}:\n{longrepr}")
+                        setup_info = t.get("setup", {})
+                        teardown_info = t.get("teardown", {})
+                        longrepr = call_info.get("longrepr", "") or setup_info.get("longrepr", "")
+
+                        log_parts = [f"FAILED {nodeid}:\n{longrepr}"]
+                        for sec_name, sec in [("setup", setup_info), ("call", call_info), ("teardown", teardown_info)]:
+                            if isinstance(sec, dict):
+                                if sec.get("stdout"):
+                                    log_parts.append(f"--- Captured stdout ({sec_name}) ---\n{sec['stdout']}")
+                                if sec.get("stderr"):
+                                    log_parts.append(f"--- Captured stderr ({sec_name}) ---\n{sec['stderr']}")
+
+                                logs = sec.get("log", [])
+                                if isinstance(logs, list):
+                                    for log_entry in logs:
+                                        if isinstance(log_entry, dict) and "message" in log_entry:
+                                            lvl = log_entry.get("levelname", "INFO")
+                                            log_parts.append(f"--- Captured log ({lvl}) ---\n{log_entry['message']}")
+
+                        failed_details.append("\n".join(log_parts))
             except Exception as pe:
                 logger.warning(f"Failed to parse pytest json report: {pe}")
 
@@ -750,46 +768,35 @@ def run_pytest_node(state: GraphState) -> GraphState:
             state["error_category"] = "TEST_ERROR"
             logger.warning(f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}")
 
-            # --- 動的エラー分析・復旧ルール (Recovery Tips) ---
+            # --- 汎用的なエラー分析・復旧ルール (フレームワークレベルのエラーのみ対象) ---
             combined_error_text = f"{res.stdout or ''}\n{res.stderr or ''}\n" + "\n".join(failed_details)
             recovery_tips = []
 
-            # 1. 存在しない Pytest フィクスチャ要求の検知・修正指示 (正規表現で動的抽出)
+            # 1. Pytest 固有のフィクスチャ誤用
             fixture_match = re.search(r"fixture '([^']+)' not found", combined_error_text)
             if fixture_match:
                 missing_fixture = fixture_match.group(1)
                 recovery_tips.append(
                     f"・FIXTURE ERROR: The fixture '{missing_fixture}' does not exist. "
-                    "Use the standard pytest fixture `tmp_path` for temporary directories, or ensure your custom fixture is properly defined in conftest.py."
+                    "Use standard pytest fixture `tmp_path` for temporary directories."
                 )
 
-            # 2. 例外の送出漏れ (DID NOT RAISE) の検知・修正指示 (正規表現で動的抽出)
-            did_not_raise_match = re.search(r"DID NOT RAISE ([^\n]+)", combined_error_text)
-            if did_not_raise_match:
-                expected_exc = did_not_raise_match.group(1).strip()
-                recovery_tips.append(
-                    f"・EXCEPTION ERROR: Expected exception `{expected_exc}` was not raised. "
-                    f"Ensure the target code explicitly executes `raise {expected_exc}(...)` "
-                    "when error conditions are met, instead of swallowing exceptions or returning fallback values (like empty lists)."
-                )
-
-            # 3. unittest 記法誤用 (assertRaises) の検知・修正指示 (汎用化)
+            # 2. Pytest 固有のテスト文法誤用
             if "has no attribute 'assertRaises'" in combined_error_text:
                 recovery_tips.append(
-                    "・SYNTAX ERROR: `self.assertRaises` is a unittest method, not compatible with pure pytest classes. "
-                    "Use `with pytest.raises(ExpectedException):` in pytest functions instead."
+                    "・SYNTAX ERROR: `self.assertRaises` is a unittest method. "
+                    "Use `with pytest.raises(ExpectedException):` in pytest functions."
                 )
 
-            # フィードバックメッセージの構築
+            # フィードバックメッセージの構築 (Captured log を注意深く確認する汎用指示)
+            generic_instruction = (
+                "\n\n【IMPORTANT】 Review the failure traceback AND 'Captured log/stdout' above.\n"
+                "The root cause of the error is often buried in the captured logs (e.g. swallowed exceptions, underlying library errors).\n"
+                "Fix the underlying code to handle these edge cases gracefully."
+            )
+
             if recovery_tips:
-                tips_str = "\n".join(recovery_tips)
-                generic_instruction = (
-                    "\n\n【CRITICAL RECOVERY INSTRUCTIONS】\n"
-                    f"{tips_str}\n\n"
-                    "Review the failure traceback above, apply the critical instructions, and fix the code/tests."
-                )
-            else:
-                generic_instruction = "\n\n【IMPORTANT】 Review the failure traceback above and fix the underlying code. Ensure correct usage of standard library APIs and handle edge cases."
+                generic_instruction = "\n\n【CRITICAL RECOVERY INSTRUCTIONS】\n" + "\n".join(recovery_tips) + generic_instruction
 
             if failed_details:
                 formatted_failures = "\n\n".join(failed_details[:5])

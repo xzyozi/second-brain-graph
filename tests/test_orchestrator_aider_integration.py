@@ -1046,8 +1046,8 @@ def test_run_pytest_node_dynamic_recovery_tips(tmp_path: Path) -> None:
 
     aider_msg = res_state.get("aider_message", "")
     assert "FIXTURE ERROR: The fixture 'temp_test_files' does not exist." in aider_msg
-    assert "EXCEPTION ERROR: Expected exception `EncryptedFileError` was not raised." in aider_msg
     assert "SYNTAX ERROR: `self.assertRaises` is a unittest method" in aider_msg
+    assert "Review the failure traceback AND 'Captured log/stdout' above." in aider_msg
 
 
 def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
