@@ -1098,6 +1098,24 @@ def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
     assert "UNDEFINED NAME ERROR (F821): `foo_bar` is used but not defined" in aider_msg
 
 
+def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
+    """resolve_target_files_against_cwd が実在ファイルへ補正マッピングすることを検証する。"""
+    from tools.orchestrator_graph import resolve_target_files_against_cwd
+
+    (tmp_path / "src" / "grep").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+
+    (tmp_path / "src" / "grep" / "office_parser.py").touch()
+    (tmp_path / "tests" / "test_grep_engine.py").touch()
+
+    raw_targets = ["src/grep/office_parser.py", "tests/test_engine.py"]
+    resolved = resolve_target_files_against_cwd(raw_targets, cwd=tmp_path)
+
+    assert "src/grep/office_parser.py" in resolved
+    assert "tests/test_grep_engine.py" in resolved
+    assert "tests/test_engine.py" not in resolved
+
+
 
 
 

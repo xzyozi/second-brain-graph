@@ -348,6 +348,43 @@ def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
     return target_files
 
 
+def resolve_target_files_against_cwd(target_files: List[str], cwd: Optional[Path] = None) -> List[str]:
+    """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。"""
+    if not cwd or not Path(cwd).exists():
+        return target_files
+
+    resolved: List[str] = []
+    cwd_path = Path(cwd)
+    all_repo_files = [
+        str(p.relative_to(cwd_path)).replace("\\", "/")
+        for p in cwd_path.rglob("*.py")
+        if not any(ignored in p.parts for ignored in [".venv", ".git", ".pytest_cache", "__pycache__", ".aider"])
+    ]
+
+    for tf in target_files:
+        full_p = cwd_path / tf
+        if full_p.exists():
+            if tf not in resolved:
+                resolved.append(tf)
+        else:
+            tf_stem = Path(tf).stem
+            clean_tf_stem = tf_stem.replace("test_", "").strip("_")
+            matched = False
+            for repo_f in all_repo_files:
+                repo_stem = Path(repo_f).stem
+                clean_repo_stem = repo_stem.replace("test_", "").strip("_")
+                if clean_tf_stem and (clean_tf_stem in clean_repo_stem or clean_repo_stem in clean_tf_stem):
+                    if repo_f not in resolved:
+                        logger.info(f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{repo_f}'")
+                        resolved.append(repo_f)
+                        matched = True
+                        break
+            if not matched and tf not in resolved:
+                resolved.append(tf)
+
+    return resolved
+
+
 def resolve_project_context(
     project_key: str,
     metadata_dir: Optional[Path] = None,
@@ -1445,8 +1482,9 @@ def execute_issue(
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
                 md_targets = extract_target_files_from_issue_text(instruction_text)
                 if md_targets:
-                    logger.info(f"Dynamically resolved target_files from issue markdown: {md_targets}")
-                    target_files = md_targets
+                    resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
+                    logger.info(f"Dynamically resolved target_files from issue markdown: {resolved_targets}")
+                    target_files = resolved_targets
             else:
                 instruction_text = f"Implement issue {issue_id}"
                 tasks_md = metadata_dir / "projects" / project_key / "tasks.md"
