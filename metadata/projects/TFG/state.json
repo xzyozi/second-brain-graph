@@ -14,10 +14,10 @@
     "updated_at": "2026-07-31T17:05:14.061936+00:00"
   },
   "TFG-0006": {
-    "status": "FAILED_B7",
+    "status": "ESCALATED_NEEDS_REVISION",
     "review_round": 0,
     "max_round": 3,
     "error_category": "LINT_ERROR",
-    "updated_at": "2026-08-03T09:52:32.173150+00:00"
+    "updated_at": "2026-08-04T10:30:12.518004+00:00"
   }
 }
