@@ -1116,6 +1116,57 @@ def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
     assert "tests/test_engine.py" not in resolved
 
 
+def test_test_feedback_node_generates_categorized_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """test_feedback_node が Reasoning LLM を呼び出してエラー分析メッセージを生成することを検証する。"""
+    from tools.orchestrator_graph import GraphState, test_feedback_node
+
+    called_intent = None
+
+    def mock_call_llm(role: str, intent: str, system_prompt: str, user_prompt: str, expect_json: bool = False) -> dict:
+        nonlocal called_intent
+        called_intent = intent
+        return {"content": "ASSERTION_MISMATCH: Update assertion expected count from 3 to 2 in test_parallel_mode."}
+
+    monkeypatch.setattr("tools.llm_client.call_llm", mock_call_llm)
+
+    state: GraphState = {
+        "issue_id": "TFG-0007",
+        "project_key": "TFG",
+        "execution_id": "test_exec",
+        "generation": 0,
+        "status": "retry_code",
+        "error": None,
+        "error_category": "TEST_ERROR",
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 1,
+        "max_round": 3,
+        "target_files": ["src/grep/parallel_runner.py"],
+        "instruction": "test",
+        "cwd": None,
+        "base_branch": "develop",
+        "aider_message": "",
+        "test_feedback_instruction": None,
+        "impl_plan": "test plan",
+        "lint_result": None,
+        "test_result": {"stdout": "FAILED test_parallel_mode\nAssertionError: 2 != 3", "stderr": ""},
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    result = test_feedback_node(state)
+    assert called_intent == "test_feedback"
+    assert result["test_feedback_instruction"] is not None
+    assert "ASSERTION_MISMATCH" in result["test_feedback_instruction"]
+    assert "ARCHITECT ADVICE FOR PYTEST FAILURE" in result["aider_message"]
+
+
+
 
 
 

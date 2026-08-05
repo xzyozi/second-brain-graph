@@ -496,6 +496,7 @@ class GraphState(TypedDict):
     cwd: Optional[str]
     base_branch: str
     aider_message: str
+    test_feedback_instruction: Optional[str]
     impl_plan: Optional[str]
     lint_result: Optional[Dict[str, Any]]
     test_result: Optional[Dict[str, Any]]
@@ -665,7 +666,7 @@ def lint_node(state: GraphState) -> GraphState:
                 sym_name = groups[0]
                 orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
                 lint_recovery_tips.append(
-                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition.\n"
+                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition (originally at line {orig_line}).\n"
                     f"  ACTION REQUIRED:\n"
                     f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
                     f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
@@ -864,6 +865,71 @@ def run_pytest_node(state: GraphState) -> GraphState:
                 report_file.unlink()
             except Exception:
                 pass
+    return state
+
+
+def test_feedback_node(state: GraphState) -> GraphState:
+    """Pytest 失敗ログとコードを Reasoning LLM (アドバイザー) に分析させ、
+    エラーカテゴリに応じた具体的な修正命令文を生成して state['aider_message'] にセットするノード。
+    """
+    logger.info(f"Executing test_feedback_node for {state['issue_id']} (Round {state.get('test_round', 1)})")
+
+    if state.get("status") in ["FAILED_B7", "FAILED_SYSTEM"]:
+        return state
+
+    try:
+        from tools.llm_client import call_llm
+
+        test_res = state.get("test_result", {})
+        stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
+
+        system_prompt = (
+            "You are a Senior Software Architect advising an automated coding agent (Coder).\n"
+            "The Coder failed a Pytest execution. Your task is to analyze the failure traceback and captured logs, "
+            "categorize the root cause, and generate CLEAR, STEP-BY-STEP INSTRUCTIONS for the Coder to fix the issue.\n\n"
+            "Categorize the error into one of the following and tailor your instructions accordingly:\n"
+            "1. ASSERTION_MISMATCH: If test assertions failed (e.g. len(results) == 3 vs 2), analyze whether the test expectation or core implementation logic is wrong. Explicitly tell Coder which one to adjust.\n"
+            "2. DEPENDENCY_OR_IMPORT: If ModuleNotFoundError or ImportError occurred, instruct Coder to fix import paths or remove forbidden external dependencies.\n"
+            "3. TEST_SYNTAX_OR_FIXTURE: If pytest fixtures or syntax failed, instruct Coder to use standard pytest functions.\n"
+            "4. UNHANDLED_EXCEPTION: If I/O or decode exceptions occurred, instruct Coder to add proper try-except error handling.\n"
+            "5. REPEATED_STUCK: If this is a repeated failure, instruct Coder to drop invalid assumptions and rewrite with clean logic.\n\n"
+            "Rules:\n"
+            "- Do NOT write full file rewrites. Provide concise, direct action items.\n"
+            "- Provide clear actionable guidance in Japanese."
+        )
+
+        user_prompt = (
+            f"Issue ID: {state['issue_id']}\n"
+            f"Target Files: {state.get('target_files', [])}\n"
+            f"Test Round: {state.get('test_round', 1)}\n\n"
+            f"--- Implementation Plan ---\n{state.get('impl_plan', '')[:1000]}\n\n"
+            f"--- Pytest Output Log ---\n{stdout_stderr[:3000]}"
+        )
+
+        res = call_llm(
+            role="planner",
+            intent="test_feedback",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
+        )
+
+        feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
+
+        enhanced_message = (
+            f"【ARCHITECT ADVICE FOR PYTEST FAILURE (Round {state.get('test_round', 1)})】\n"
+            f"{feedback_advice}\n\n"
+            f"【RAW PYTEST OUTPUT】\n"
+            f"{stdout_stderr[:1500]}"
+        )
+
+        state["test_feedback_instruction"] = feedback_advice
+        state["aider_message"] = enhanced_message
+        state["status"] = "retry_code"
+
+    except Exception as e:
+        logger.warning(f"Failed in test_feedback_node: {e}. Preserving raw error message.")
+        state["status"] = "retry_code"
+
     return state
 
 
@@ -1445,6 +1511,7 @@ def execute_issue(
             workflow.add_node("code_node", code_node)
             workflow.add_node("lint_node", lint_node)
             workflow.add_node("test_node", run_pytest_node)
+            workflow.add_node("test_feedback_node", test_feedback_node)
             workflow.add_node("review_node", review_node)
             workflow.add_node("done_node", done_node)
             workflow.add_node("escalate_node", escalate_node)
@@ -1499,12 +1566,22 @@ def execute_issue(
                     return "review_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                return "test_feedback_node"
 
             workflow.add_conditional_edges("test_node", route_after_test, {
                 "review_node": "review_node",
                 "escalate_node": "escalate_node",
+                "test_feedback_node": "test_feedback_node",
+            })
+
+            def route_after_test_feedback(s: GraphState) -> str:
+                if s.get("status") == "FAILED_SYSTEM":
+                    return "escalate_node"
+                return "code_node"
+
+            workflow.add_conditional_edges("test_feedback_node", route_after_test_feedback, {
                 "code_node": "code_node",
+                "escalate_node": "escalate_node",
             })
 
             def route_after_review(s: GraphState) -> str:
