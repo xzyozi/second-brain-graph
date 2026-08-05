@@ -1271,8 +1271,8 @@ def escalate_node(state: GraphState) -> GraphState:
             logger.info("Generating Failure Analysis Report...")
 
             # 失敗した直近のエラーログを取得
-            test_res = state.get("test_result", {}).get("stdout", "")
-            lint_res = state.get("lint_result", {}).get("stdout", "")
+            test_res = (state.get("test_result") or {}).get("stdout", "")
+            lint_res = (state.get("lint_result") or {}).get("stdout", "")
             latest_error = test_res if state.get("error_category") == "TEST_ERROR" else lint_res
 
             system_prompt = (
