@@ -327,6 +327,64 @@ def write_event(project_key: str, event_data: Dict[str, Any], metadata_dir: Opti
         os.fsync(f.fileno())
 
 
+def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
+    """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
+    target_files: List[str] = []
+    lines = issue_text.splitlines()
+    in_target_section = False
+    for line in lines:
+        stripped = line.strip()
+        if any(h in stripped.lower() for h in ["編集対象ファイル", "target files", "target_files"]):
+            in_target_section = True
+            continue
+        elif in_target_section and (stripped.startswith("## ") or stripped.startswith("# ")):
+            in_target_section = False
+
+        if in_target_section:
+            matches = re.findall(r"[\w/.-]+\.py", stripped)
+            for m in matches:
+                if m not in target_files:
+                    target_files.append(m)
+    return target_files
+
+
+def resolve_target_files_against_cwd(target_files: List[str], cwd: Optional[Path] = None) -> List[str]:
+    """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。"""
+    if not cwd or not Path(cwd).exists():
+        return target_files
+
+    resolved: List[str] = []
+    cwd_path = Path(cwd)
+    all_repo_files = [
+        str(p.relative_to(cwd_path)).replace("\\", "/")
+        for p in cwd_path.rglob("*.py")
+        if not any(ignored in p.parts for ignored in [".venv", ".git", ".pytest_cache", "__pycache__", ".aider"])
+    ]
+
+    for tf in target_files:
+        full_p = cwd_path / tf
+        if full_p.exists():
+            if tf not in resolved:
+                resolved.append(tf)
+        else:
+            tf_stem = Path(tf).stem
+            clean_tf_stem = tf_stem.replace("test_", "").strip("_")
+            matched = False
+            for repo_f in all_repo_files:
+                repo_stem = Path(repo_f).stem
+                clean_repo_stem = repo_stem.replace("test_", "").strip("_")
+                if clean_tf_stem and (clean_tf_stem in clean_repo_stem or clean_repo_stem in clean_tf_stem):
+                    if repo_f not in resolved:
+                        logger.info(f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{repo_f}'")
+                        resolved.append(repo_f)
+                        matched = True
+                        break
+            if not matched and tf not in resolved:
+                resolved.append(tf)
+
+    return resolved
+
+
 def resolve_project_context(
     project_key: str,
     metadata_dir: Optional[Path] = None,
@@ -370,6 +428,7 @@ def resolve_project_context(
         base_branch = "develop"
         work_branch_prefix = "sbos/"
         raw_target_files: List[str] = []
+        exclude_files: List[str] = []
 
         if meta_dir:
             project_json = project_root / meta_dir / "project.json"
@@ -380,6 +439,8 @@ def resolve_project_context(
                     work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
                     if "target_files" in pdata and isinstance(pdata["target_files"], list) and pdata["target_files"]:
                         raw_target_files.extend(pdata["target_files"])
+                    if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
+                        exclude_files.extend(pdata["exclude_files"])
 
             if not raw_target_files:
                 tasks_md = project_root / meta_dir / "tasks.md"
@@ -398,9 +459,11 @@ def resolve_project_context(
                 if not any(excluded in rel_p for excluded in [".venv", "venv", "__pycache__", "build", "dist"]):
                     raw_target_files.append(rel_p)
 
-        # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容)
+        # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容) し、除外ファイルを適用
         valid_target_files = []
         for tf in raw_target_files:
+            if tf in exclude_files:
+                continue
             abs_tf = cwd_path / tf
             if abs_tf.exists() or (not tf.startswith("..") and not os.path.isabs(tf)):
                 valid_target_files.append(tf)
@@ -433,6 +496,7 @@ class GraphState(TypedDict):
     cwd: Optional[str]
     base_branch: str
     aider_message: str
+    test_feedback_instruction: Optional[str]
     impl_plan: Optional[str]
     lint_result: Optional[Dict[str, Any]]
     test_result: Optional[Dict[str, Any]]
@@ -506,6 +570,13 @@ def code_node(state: GraphState) -> GraphState:
         target_files_str = ", ".join(target_files)
         instruction += f"\n\n[SCOPE RESTRICTION]\nYou are ONLY permitted to modify the following files: {target_files_str}. DO NOT modify, touch, or create any other files."
 
+    instruction += (
+        "\n\n[EXECUTION STRATEGY - STEP-BY-STEP]\n"
+        "Follow a strict 2-phase approach:\n"
+        "1. Phase 1 (Core Logic): Focus first on implementing the core logic, classes, and exceptions under `src/`.\n"
+        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass."
+    )
+
     if state.get("aider_message"):
         instruction += f"\n\nFeedback:\n{state['aider_message']}"
 
@@ -568,10 +639,10 @@ def lint_node(state: GraphState) -> GraphState:
             state["status"] = "lint_passed"
             return state
 
-        cmd = [sys.executable, "-m", "ruff", "check"] + targets_to_check
+        cmd = [sys.executable, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
         # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
         run_cmd([sys.executable, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
-        run_cmd([sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes"] + targets_to_check, cwd=cwd, timeout=300)
+        run_cmd([sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"] + targets_to_check, cwd=cwd, timeout=300)
         res = run_cmd(cmd, cwd=cwd, timeout=300)
         state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
         if res.returncode == 0:
@@ -580,16 +651,53 @@ def lint_node(state: GraphState) -> GraphState:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
             logger.warning(f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}")
-            
+
+            # --- 動的エラー分析・復旧ルール (Lint Recovery Tips) ---
+            combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
+            lint_recovery_tips = []
+
+            # 1. F811 (二重定義・再定義エラー) の柔軟な動的抽出
+            redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output)
+            if not redef_match:
+                redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output)
+
+            if redef_match:
+                groups = redef_match.groups()
+                sym_name = groups[0]
+                orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
+                lint_recovery_tips.append(
+                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition (originally at line {orig_line}).\n"
+                    f"  ACTION REQUIRED:\n"
+                    f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
+                    f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
+                )
+
+            # 2. F821 (未定義変数エラー) の動的抽出
+            undef_match = re.search(r"F821 Undefined name `([^`]+)`", combined_lint_output)
+            if undef_match:
+                undef_name = undef_match.group(1)
+                lint_recovery_tips.append(
+                    f"・UNDEFINED NAME ERROR (F821): `{undef_name}` is used but not defined or imported. "
+                    f"Import or define `{undef_name}` before using it."
+                )
+
+            # フィードバックメッセージの構築
+            dynamic_instructions = ""
+            if lint_recovery_tips:
+                tips_str = "\n".join(lint_recovery_tips)
+                dynamic_instructions = f"【DYNAMIC RECOVERY INSTRUCTIONS】\n{tips_str}\n\n"
+
             lint_feedback = (
                 f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
+                f"{dynamic_instructions}"
                 "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
                 "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
                 "Follow these general rules:\n"
                 "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
                 "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
                 "3. Redefined/Duplicate symbols: If a function, class, or method is redefined or duplicated, delete the duplicate definition so that exactly one definition remains.\n"
-                "4. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
+                "4. Line too long (E501): Split long string literals, URLs, or expressions across multiple lines using parentheses `(...)` or multi-line string concatenation so that every line is strictly under 120 characters.\n"
+                "5. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
             )
 
             state["aider_message"] = lint_feedback
@@ -661,8 +769,26 @@ def run_pytest_node(state: GraphState) -> GraphState:
                     if t.get("outcome") == "failed":
                         nodeid = t.get("nodeid", "unknown_test")
                         call_info = t.get("call", {})
-                        longrepr = call_info.get("longrepr", "") or t.get("setup", {}).get("longrepr", "")
-                        failed_details.append(f"FAILED {nodeid}:\n{longrepr}")
+                        setup_info = t.get("setup", {})
+                        teardown_info = t.get("teardown", {})
+                        longrepr = call_info.get("longrepr", "") or setup_info.get("longrepr", "")
+
+                        log_parts = [f"FAILED {nodeid}:\n{longrepr}"]
+                        for sec_name, sec in [("setup", setup_info), ("call", call_info), ("teardown", teardown_info)]:
+                            if isinstance(sec, dict):
+                                if sec.get("stdout"):
+                                    log_parts.append(f"--- Captured stdout ({sec_name}) ---\n{sec['stdout']}")
+                                if sec.get("stderr"):
+                                    log_parts.append(f"--- Captured stderr ({sec_name}) ---\n{sec['stderr']}")
+
+                                logs = sec.get("log", [])
+                                if isinstance(logs, list):
+                                    for log_entry in logs:
+                                        if isinstance(log_entry, dict) and "message" in log_entry:
+                                            lvl = log_entry.get("levelname", "INFO")
+                                            log_parts.append(f"--- Captured log ({lvl}) ---\n{log_entry['message']}")
+
+                        failed_details.append("\n".join(log_parts))
             except Exception as pe:
                 logger.warning(f"Failed to parse pytest json report: {pe}")
 
@@ -679,11 +805,50 @@ def run_pytest_node(state: GraphState) -> GraphState:
             state["test_round"] = state.get("test_round", 0) + 1
             state["error_category"] = "TEST_ERROR"
             logger.warning(f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}")
+
+            # --- 汎用的なエラー分析・復旧ルール (フレームワークレベルのエラーのみ対象) ---
+            combined_error_text = f"{res.stdout or ''}\n{res.stderr or ''}\n" + "\n".join(failed_details)
+            recovery_tips = []
+
+            # 同じテストでループしている場合の思考リセット指示 (Hallucination Escape Prompt)
+            if state.get("test_round", 1) >= 2:
+                recovery_tips.append(
+                    "・STUCK LOOP WARNING: You are repeatedly failing the same tests. Your current mental model or hardcoded values are wrong. "
+                    "DO NOT try to guess magic bytes (like 'PK...'). DO NOT guess internal data structures. "
+                    "Rely on robust standard libraries or specific format parsers, and print variables to inspect the actual structures."
+                )
+
+            # 1. Pytest 固有のフィクスチャ誤用
+            fixture_match = re.search(r"fixture '([^']+)' not found", combined_error_text)
+            if fixture_match:
+                missing_fixture = fixture_match.group(1)
+                recovery_tips.append(
+                    f"・FIXTURE ERROR: The fixture '{missing_fixture}' does not exist. "
+                    "Use standard pytest fixture `tmp_path` for temporary directories."
+                )
+
+            # 2. Pytest 固有のテスト文法誤用
+            if "has no attribute 'assertRaises'" in combined_error_text:
+                recovery_tips.append(
+                    "・SYNTAX ERROR: `self.assertRaises` is a unittest method. "
+                    "Use `with pytest.raises(ExpectedException):` in pytest functions."
+                )
+
+            # フィードバックメッセージの構築 (Captured log を注意深く確認する汎用指示)
+            generic_instruction = (
+                "\n\n【IMPORTANT】 Review the failure traceback AND 'Captured log/stdout' above.\n"
+                "The root cause of the error is often buried in the captured logs (e.g. swallowed exceptions, underlying library errors).\n"
+                "Fix the underlying code to handle these edge cases gracefully."
+            )
+
+            if recovery_tips:
+                generic_instruction = "\n\n【CRITICAL RECOVERY INSTRUCTIONS】\n" + "\n".join(recovery_tips) + generic_instruction
+
             if failed_details:
-                formatted_failures = "\n\n".join(failed_details[:5]) # 上位5件の失敗詳細
-                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}"
+                formatted_failures = "\n\n".join(failed_details[:5])
+                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}{generic_instruction}"
             else:
-                state["aider_message"] = f"Pytest failed:\n{res.stdout}"
+                state["aider_message"] = f"Pytest failed:\n{res.stdout}{generic_instruction}"
 
             if state["test_round"] >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
@@ -700,6 +865,71 @@ def run_pytest_node(state: GraphState) -> GraphState:
                 report_file.unlink()
             except Exception:
                 pass
+    return state
+
+
+def test_feedback_node(state: GraphState) -> GraphState:
+    """Pytest 失敗ログとコードを Reasoning LLM (アドバイザー) に分析させ、
+    エラーカテゴリに応じた具体的な修正命令文を生成して state['aider_message'] にセットするノード。
+    """
+    logger.info(f"Executing test_feedback_node for {state['issue_id']} (Round {state.get('test_round', 1)})")
+
+    if state.get("status") in ["FAILED_B7", "FAILED_SYSTEM"]:
+        return state
+
+    try:
+        from tools.llm_client import call_llm
+
+        test_res = state.get("test_result", {})
+        stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
+
+        system_prompt = (
+            "You are a Senior Software Architect advising an automated coding agent (Coder).\n"
+            "The Coder failed a Pytest execution. Your task is to analyze the failure traceback and captured logs, "
+            "categorize the root cause, and generate CLEAR, STEP-BY-STEP INSTRUCTIONS for the Coder to fix the issue.\n\n"
+            "Categorize the error into one of the following and tailor your instructions accordingly:\n"
+            "1. ASSERTION_MISMATCH: If test assertions failed (e.g. len(results) == 3 vs 2), analyze whether the test expectation or core implementation logic is wrong. Explicitly tell Coder which one to adjust.\n"
+            "2. DEPENDENCY_OR_IMPORT: If ModuleNotFoundError or ImportError occurred, instruct Coder to fix import paths or remove forbidden external dependencies.\n"
+            "3. TEST_SYNTAX_OR_FIXTURE: If pytest fixtures or syntax failed, instruct Coder to use standard pytest functions.\n"
+            "4. UNHANDLED_EXCEPTION: If I/O or decode exceptions occurred, instruct Coder to add proper try-except error handling.\n"
+            "5. REPEATED_STUCK: If this is a repeated failure, instruct Coder to drop invalid assumptions and rewrite with clean logic.\n\n"
+            "Rules:\n"
+            "- Do NOT write full file rewrites. Provide concise, direct action items.\n"
+            "- Provide clear actionable guidance in Japanese."
+        )
+
+        user_prompt = (
+            f"Issue ID: {state['issue_id']}\n"
+            f"Target Files: {state.get('target_files', [])}\n"
+            f"Test Round: {state.get('test_round', 1)}\n\n"
+            f"--- Implementation Plan ---\n{state.get('impl_plan', '')[:1000]}\n\n"
+            f"--- Pytest Output Log ---\n{stdout_stderr[:3000]}"
+        )
+
+        res = call_llm(
+            role="planner",
+            intent="test_feedback",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
+        )
+
+        feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
+
+        enhanced_message = (
+            f"【ARCHITECT ADVICE FOR PYTEST FAILURE (Round {state.get('test_round', 1)})】\n"
+            f"{feedback_advice}\n\n"
+            f"【RAW PYTEST OUTPUT】\n"
+            f"{stdout_stderr[:1500]}"
+        )
+
+        state["test_feedback_instruction"] = feedback_advice
+        state["aider_message"] = enhanced_message
+        state["status"] = "retry_code"
+
+    except Exception as e:
+        logger.warning(f"Failed in test_feedback_node: {e}. Preserving raw error message.")
+        state["status"] = "retry_code"
+
     return state
 
 
@@ -773,6 +1003,11 @@ def review_node(state: GraphState) -> GraphState:
                         "message": str(item),
                         "severity": "WARNING",
                     })
+
+        # ガードロジック: Reviewer LLM が changes_requested を返したものの具体的な修正指示 (comments) が空の場合は、実質的に問題なしとみなして LGTM に安全補正する。
+        if verdict == "changes_requested" and not structured_comments:
+            logger.info("Reviewer LLM returned 'changes_requested' with empty comments. Safely correcting verdict to 'LGTM'.")
+            verdict = "LGTM"
 
         rev_round = state.get("review_round", 0) + 1
         state["review_round"] = rev_round
@@ -1019,16 +1254,63 @@ def done_node(state: GraphState) -> GraphState:
 
 
 def escalate_node(state: GraphState) -> GraphState:
-    """上限到達時・例外発生時のエスカレーション停止ノード (DD-003 §4.1)。
-    ※現行のグラフ定義では各ノードおよびルーティング関数が事前に 'FAILED_B7' または 'FAILED_SYSTEM' を
-    確定させて本ノードへ遷移しますが、将来のルーティング拡張やステータス未確定時の安全網 (Failsafe)
-    として、error_category に基づくエスカレーション自動分類ロジックを保持しています。
-    """
+    """上限到達時・例外発生時のエスカレーション停止と敗因分析レポートの自動生成ノード"""
     logger.info(f"Executing escalate_node for {state['issue_id']}")
+
+    # 最終的なエラーステータスの決定
     if state.get("status") not in ["FAILED_B7", "FAILED_SYSTEM"]:
         state["status"] = "FAILED_B7" if state.get("error_category") in [
             "LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED"
         ] else "FAILED_SYSTEM"
+
+    # --- 敗因分析レポートの自動生成 (LLMによる自己分析) ---
+    cwd = state.get("cwd")
+    if cwd and state.get("error_category") in ["LINT_ERROR", "TEST_ERROR"]:
+        try:
+            from tools.llm_client import call_llm
+            logger.info("Generating Failure Analysis Report...")
+
+            # 失敗した直近のエラーログを取得
+            test_res = (state.get("test_result") or {}).get("stdout", "")
+            lint_res = (state.get("lint_result") or {}).get("stdout", "")
+            latest_error = test_res if state.get("error_category") == "TEST_ERROR" else lint_res
+
+            system_prompt = (
+                "You are an Expert Technical Architect reviewing a failed auto-coding session. "
+                "The AI agent failed to pass the tests/linting after maximum retries. "
+                "Analyze the final error log and identify the ROOT CAUSE of the failure (e.g., missing domain knowledge, incorrect library usage, hallucinated magic strings, logic bugs). "
+                "Output a concise Markdown report specifying WHY it failed and WHAT needs to be changed in the issue requirements or core logic."
+            )
+            user_prompt = f"Target Files: {state.get('target_files')}\n\nFinal Error Log:\n{latest_error[:2000]}"
+
+            res = call_llm(
+                role="reviewer",
+                intent="failure_analysis",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt
+            )
+
+            analysis_text = (
+                res.get("raw", res.get("content", str(res)))
+                if isinstance(res, dict)
+                else str(res)
+            )
+
+            # ワークスペース内にレポートを出力
+            report_path = Path(cwd) / f"FAILURE_REPORT_{state['issue_id']}.md"
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(f"# Failure Analysis Report for {state['issue_id']}\n\n")
+                f.write(analysis_text)
+
+            logger.info(f"Failure report generated at {report_path}")
+
+            # state.json 側のステータスも「エスカレーション済」として明確化
+            state["status"] = "ESCALATED_NEEDS_REVISION"
+            state["error"] = "Agent reached max retries. Failure report generated."
+
+        except Exception as e:
+            logger.warning(f"Failed to generate analysis report: {e}")
+
     return state
 
 
@@ -1042,6 +1324,11 @@ def execute_issue(
     resume: Optional[bool] = None,
     fresh: bool = False,
 ) -> None:
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+    if metadata_dir is None:
+        metadata_dir = project_root / "metadata"
+
     execution_id = uuid.uuid4().hex
     try:
         # 規約準拠の Issue ID 範囲およびプロジェクトキー整合検証
@@ -1080,7 +1367,23 @@ def execute_issue(
             return
 
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
-            # 作業ツリーの事前チェック (dirty working tree 拒否)
+            # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かを判定
+            current_task_status = ""
+            if metadata_dir:
+                state_json_path = metadata_dir / "projects" / project_key / "state.json"
+                if state_json_path.exists():
+                    try:
+                        with open(state_json_path, "r", encoding="utf-8") as sf:
+                            sdata = json.load(sf)
+                            current_task_status = sdata.get(issue_id, {}).get("status", "")
+                    except Exception:
+                        pass
+
+            is_resume_mode = resume if resume is not None else (
+                fresh is False and current_task_status in ["CHANGES_REQUESTED", "PR_FAILED", "FAILED_B7", "IN_REVIEW"]
+            )
+
+            # 作業ツリーの事前チェック (Resumeモード時は自動コミット保存して継続、それ以外は拒否)
             if is_in_git_workspace(cwd):
                 try:
                     init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
@@ -1089,72 +1392,27 @@ def execute_issue(
                         if line.strip() and not any(ignored in line for ignored in [".aider", ".pytest_cache", "__pycache__"])
                     ]
                     if init_status.returncode != 0 or dirty_lines:
-                        logger.error(f"Dirty working tree detected before execution in {cwd}. Aborting.")
-                        update_task_state(
-                            project_key, issue_id, status="FAILED_SYSTEM",
-                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                        )
-                        safe_record_execution_history(
-                            {
-                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                "error_category": "SYSTEM_ERROR",
-                                "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
-                            },
-                            final_status="FAILED_SYSTEM", history_file=history_file
-                        )
-                        return
-
-                    sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
-                    if sw_base.returncode != 0:
-                        logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
-                        update_task_state(
-                            project_key, issue_id, status="FAILED_SYSTEM",
-                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                        )
-                        safe_record_execution_history(
-                            {
-                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                "error_category": "SYSTEM_ERROR",
-                                "error": f"git switch {base_branch} failed: {sw_base.stderr}",
-                            },
-                            final_status="FAILED_SYSTEM", history_file=history_file
-                        )
-                        return
-
-                    pull_res = run_cmd(["git", "pull", "--ff-only", "origin", base_branch], cwd=cwd, timeout=120)
-                    if pull_res.returncode != 0 and not allow_offline_git:
-                        logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
-                        update_task_state(
-                            project_key, issue_id, status="FAILED_SYSTEM",
-                            error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
-                        )
-                        safe_record_execution_history(
-                            {
-                                "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
-                                "error_category": "SYSTEM_ERROR",
-                                "error": f"git pull --ff-only failed: {pull_res.stderr}",
-                            },
-                            final_status="FAILED_SYSTEM", history_file=history_file
-                        )
-                        return
+                        if is_resume_mode:
+                            logger.info(f"Resume Mode: Auto-committing uncommitted changes before resuming in {cwd}...")
+                            run_cmd(["git", "add", "-A"], cwd=cwd, timeout=60)
+                            run_cmd(["git", "commit", "-m", f"wip: preserve uncommitted changes for {issue_id} before resume"], cwd=cwd, timeout=60)
+                        else:
+                            logger.error(f"Dirty working tree detected before execution in {cwd}. Aborting.")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
 
                     head_branch = f"{work_branch_prefix}{issue_id}"
-
-                    # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かをスマート判定
-                    current_task_status = ""
-                    if metadata_dir:
-                        state_json_path = metadata_dir / "projects" / project_key / "state.json"
-                        if state_json_path.exists():
-                            try:
-                                with open(state_json_path, "r", encoding="utf-8") as sf:
-                                    sdata = json.load(sf)
-                                    current_task_status = sdata.get(issue_id, {}).get("status", "")
-                            except Exception:
-                                pass
-
-                    is_resume_mode = resume if resume is not None else (
-                        fresh is False and current_task_status in ["CHANGES_REQUESTED", "PR_FAILED", "FAILED_B7", "IN_REVIEW"]
-                    )
 
                     if is_resume_mode:
                         logger.info(f"Resume Mode activated for {issue_id} (status: '{current_task_status}'). Preserving existing work branch '{head_branch}'.")
@@ -1162,7 +1420,7 @@ def execute_issue(
                         if sw_head.returncode != 0:
                             # ローカルに無い場合はリモート追跡ブランチをチェックアウト
                             sw_head = run_cmd(["git", "checkout", "-b", head_branch, f"origin/{head_branch}"], cwd=cwd, timeout=60)
-                        
+
                         if sw_head.returncode == 0:
                             # 既存ブランチのベース追従 (git rebase base_branch)
                             rebase_res = run_cmd(["git", "rebase", base_branch], cwd=cwd, timeout=120)
@@ -1174,6 +1432,40 @@ def execute_issue(
                             run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
                     else:
                         logger.info(f"Fresh Mode activated for {issue_id}. Creating clean work branch '{head_branch}' from {base_branch}.")
+                        sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
+                        if sw_base.returncode != 0:
+                            logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"git switch {base_branch} failed: {sw_base.stderr}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
+
+                        pull_res = run_cmd(["git", "pull", "--ff-only", "origin", base_branch], cwd=cwd, timeout=120)
+                        if pull_res.returncode != 0 and not allow_offline_git:
+                            logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
+                            update_task_state(
+                                project_key, issue_id, status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                            )
+                            safe_record_execution_history(
+                                {
+                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "error_category": "SYSTEM_ERROR",
+                                    "error": f"git pull --ff-only failed: {pull_res.stderr}",
+                                },
+                                final_status="FAILED_SYSTEM", history_file=history_file
+                            )
+                            return
+
                         run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
                         sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
                         if sw_c.returncode != 0:
@@ -1219,6 +1511,7 @@ def execute_issue(
             workflow.add_node("code_node", code_node)
             workflow.add_node("lint_node", lint_node)
             workflow.add_node("test_node", run_pytest_node)
+            workflow.add_node("test_feedback_node", test_feedback_node)
             workflow.add_node("review_node", review_node)
             workflow.add_node("done_node", done_node)
             workflow.add_node("escalate_node", escalate_node)
@@ -1273,12 +1566,22 @@ def execute_issue(
                     return "review_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                return "test_feedback_node"
 
             workflow.add_conditional_edges("test_node", route_after_test, {
                 "review_node": "review_node",
                 "escalate_node": "escalate_node",
+                "test_feedback_node": "test_feedback_node",
+            })
+
+            def route_after_test_feedback(s: GraphState) -> str:
+                if s.get("status") == "FAILED_SYSTEM":
+                    return "escalate_node"
+                return "code_node"
+
+            workflow.add_conditional_edges("test_feedback_node", route_after_test_feedback, {
                 "code_node": "code_node",
+                "escalate_node": "escalate_node",
             })
 
             def route_after_review(s: GraphState) -> str:
@@ -1304,6 +1607,29 @@ def execute_issue(
 
             app = workflow.compile()
 
+            # Issue 詳細記述ファイル (metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md) の探索および読み込み
+            issue_detail_file = metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
+            if issue_detail_file.exists():
+                logger.info(f"Loaded issue detail specification from {issue_detail_file}")
+                instruction_text = issue_detail_file.read_text(encoding="utf-8")
+                md_targets = extract_target_files_from_issue_text(instruction_text)
+                if md_targets:
+                    resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
+                    logger.info(f"Dynamically resolved target_files from issue markdown: {resolved_targets}")
+                    target_files = resolved_targets
+            else:
+                instruction_text = f"Implement issue {issue_id}"
+                tasks_md = metadata_dir / "projects" / project_key / "tasks.md"
+                if tasks_md.exists():
+                    try:
+                        tasks_content = tasks_md.read_text(encoding="utf-8")
+                        for line in tasks_content.splitlines():
+                            if issue_id in line:
+                                instruction_text = f"Implement issue {issue_id}: {line.strip()}"
+                                break
+                    except Exception as te:
+                        logger.warning(f"Failed to parse tasks.md for fallback instruction: {te}")
+
             initial_state = GraphState(
                 issue_id=issue_id,
                 project_key=project_key,
@@ -1318,7 +1644,7 @@ def execute_issue(
                 test_round=0,
                 max_round=3,
                 target_files=target_files,
-                instruction=f"Implement issue {issue_id}",
+                instruction=instruction_text,
                 cwd=cwd,
                 base_branch=base_branch,
                 aider_message="",

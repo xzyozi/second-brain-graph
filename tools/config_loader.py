@@ -14,6 +14,7 @@ class AiderConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     no_auto_commits: bool = True
     edit_format: Optional[str] = None
+    timeout: int = 1200
     description: Optional[str] = None
 
 class RoleConfig(BaseModel):

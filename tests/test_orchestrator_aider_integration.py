@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -833,4 +834,341 @@ def test_escalate_node_defensive_classification_fallback() -> None:
     state5: GraphState = {"issue_id": "TFG-0020", "status": "FAILED_B7", "error_category": "LINT_ERROR"}
     res5 = escalate_node(state5)
     assert res5["status"] == "FAILED_B7"
+
+
+def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
+    """execute_issue が metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md を優先ロードすることを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    issues_dir = meta_tfg / "issues"
+    issues_dir.mkdir(parents=True, exist_ok=True)
+
+    sat_dir = project_root / "projects" / "tfg_sat"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
+
+    (meta_tfg / "project.json").write_text(json.dumps({"key": "TFG", "base_branch": "main"}), encoding="utf-8")
+    (meta_tfg / "state.json").write_text(json.dumps({}), encoding="utf-8")
+
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.write_text(
+        json.dumps({
+            "projects": {
+                "TFG": {
+                    "name": "tfg_sat",
+                    "dir": "projects/tfg_sat",
+                    "meta": "metadata/projects/TFG",
+                }
+            }
+        }),
+        encoding="utf-8"
+    )
+
+    issue_md = issues_dir / "TFG-0005.md"
+    issue_md.write_text("# TFG-0005 Special Specification\nDetail specification content", encoding="utf-8")
+
+    captured_initial_state = {}
+
+    def mock_invoke(state: Dict[str, Any]) -> Dict[str, Any]:
+        nonlocal captured_initial_state
+        captured_initial_state = state
+        state["status"] = "COMPLETED"
+        return state
+
+    mock_app = MagicMock()
+    mock_app.invoke.side_effect = mock_invoke
+
+    mock_workflow = MagicMock()
+    mock_workflow.compile.return_value = mock_app
+
+    with patch("tools.orchestrator_graph.StateGraph", return_value=mock_workflow), \
+         patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+        execute_issue("TFG-0005", "TFG", metadata_dir=metadata_dir, project_root=project_root)
+
+    assert captured_initial_state.get("instruction") == "# TFG-0005 Special Specification\nDetail specification content"
+
+
+def test_lint_node_passes_ignore_e501_flag() -> None:
+    """lint_node が ruff check 呼び出し時に --ignore E501 オプションを付与することを検証する。"""
+    executed_cmds = []
+
+    def mock_run_cmd(cmd, cwd=None, timeout=300):
+        executed_cmds.append(" ".join(cmd))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["src/dummy.py"],
+        "instruction": "",
+        "cwd": "/dummy",
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": None,
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    with patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd), \
+         patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.is_file", return_value=True):
+        res = lint_node(state)
+
+    assert res["status"] == "lint_passed"
+    assert any("--ignore E501" in cmd for cmd in executed_cmds)
+
+
+def test_extract_target_files_from_issue_text() -> None:
+    """Issue Markdown の『編集対象ファイル (Target Files)』セクションから target_files が抽出されることを検証する。"""
+    from tools.orchestrator_graph import extract_target_files_from_issue_text
+
+    text = """
+# [TFG-0006] 暗号化 Office ドキュメント対応
+
+## 3. 編集対象ファイル (Target Files)
+- `src/grep/office_parser.py`
+- `src/grep/engine.py`
+- `src/grep/interface.py`
+- `tests/test_office_parser.py`
+- `tests/test_engine.py`
+
+## 4. 除外条件・禁止事項
+- スコープ外のテストファイル（例: tests/test_interface.py）を自動生成しないこと。
+"""
+    targets = extract_target_files_from_issue_text(text)
+    assert "src/grep/office_parser.py" in targets
+    assert "src/grep/engine.py" in targets
+    assert "src/grep/interface.py" in targets
+    assert "tests/test_office_parser.py" in targets
+    assert "tests/test_engine.py" in targets
+    assert "tests/test_interface.py" not in targets
+
+
+def test_review_node_empty_comments_guard() -> None:
+    """review_node が changes_requested かつ comments が空の応答を受け取った際に verdict を LGTM に補正することを検証する。"""
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["src/grep/engine.py"],
+        "instruction": "",
+        "cwd": "/dummy",
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": "Plan text",
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    mock_llm_res = {"verdict": "changes_requested", "comments": []}
+
+    with patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"), \
+         patch("tools.llm_client.call_llm", return_value=mock_llm_res):
+        res_state = review_node(state)
+
+    assert res_state["status"] == "review_lgtm"
+    assert res_state["review_verdict"] == "LGTM"
+
+
+def test_run_pytest_node_dynamic_recovery_tips(tmp_path: Path) -> None:
+    """run_pytest_node が pytest エラーログから不足フィクスチャや例外名を動的抽出して回復指示を構築することを検証する。"""
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["tests/test_engine.py"],
+        "instruction": "",
+        "cwd": str(tmp_path),
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": "Plan text",
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    mock_res = MagicMock(
+        returncode=1,
+        stdout="fixture 'temp_test_files' not found\nDID NOT RAISE EncryptedFileError\nhas no attribute 'assertRaises'",
+        stderr=""
+    )
+
+    with patch("tools.orchestrator_graph.run_cmd", return_value=mock_res), \
+         patch("pathlib.Path.exists", return_value=False):
+        res_state = run_pytest_node(state)
+
+    aider_msg = res_state.get("aider_message", "")
+    assert "FIXTURE ERROR: The fixture 'temp_test_files' does not exist." in aider_msg
+    assert "SYNTAX ERROR: `self.assertRaises` is a unittest method" in aider_msg
+    assert "Review the failure traceback AND 'Captured log/stdout' above." in aider_msg
+
+
+def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
+    """lint_node が F811 (二重定義) や F821 (未定義) エラーから動的回復指示を構築することを検証する。"""
+    state: GraphState = {
+        "issue_id": "TFG-0006",
+        "project_key": "TFG",
+        "execution_id": "123",
+        "generation": 0,
+        "status": "running",
+        "error": None,
+        "error_category": None,
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 0,
+        "max_round": 3,
+        "target_files": ["src/grep/engine.py"],
+        "instruction": "",
+        "cwd": str(tmp_path),
+        "base_branch": "develop",
+        "aider_message": "",
+        "impl_plan": "Plan text",
+        "lint_result": None,
+        "test_result": None,
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    mock_res = MagicMock(
+        returncode=1,
+        stdout="F811 Redefinition of unused `GrepResult` from line 8\nF821 Undefined name `foo_bar`",
+        stderr=""
+    )
+
+    with patch("tools.orchestrator_graph.run_cmd", return_value=mock_res), \
+         patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.is_file", return_value=True):
+        res_state = lint_node(state)
+
+    aider_msg = res_state.get("aider_message", "")
+    assert "REDEFINITION ERROR (F811): Symbol `GrepResult` is defined both via import" in aider_msg
+    assert "Option A (Preferred if `GrepResult` belongs to this file): REMOVE `GrepResult`" in aider_msg
+    assert "UNDEFINED NAME ERROR (F821): `foo_bar` is used but not defined" in aider_msg
+
+
+def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
+    """resolve_target_files_against_cwd が実在ファイルへ補正マッピングすることを検証する。"""
+    from tools.orchestrator_graph import resolve_target_files_against_cwd
+
+    (tmp_path / "src" / "grep").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+
+    (tmp_path / "src" / "grep" / "office_parser.py").touch()
+    (tmp_path / "tests" / "test_grep_engine.py").touch()
+
+    raw_targets = ["src/grep/office_parser.py", "tests/test_engine.py"]
+    resolved = resolve_target_files_against_cwd(raw_targets, cwd=tmp_path)
+
+    assert "src/grep/office_parser.py" in resolved
+    assert "tests/test_grep_engine.py" in resolved
+    assert "tests/test_engine.py" not in resolved
+
+
+def test_test_feedback_node_generates_categorized_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """test_feedback_node が Reasoning LLM を呼び出してエラー分析メッセージを生成することを検証する。"""
+    from tools.orchestrator_graph import GraphState, test_feedback_node
+
+    called_intent = None
+
+    def mock_call_llm(role: str, intent: str, system_prompt: str, user_prompt: str, expect_json: bool = False) -> dict:
+        nonlocal called_intent
+        called_intent = intent
+        return {"content": "ASSERTION_MISMATCH: Update assertion expected count from 3 to 2 in test_parallel_mode."}
+
+    monkeypatch.setattr("tools.llm_client.call_llm", mock_call_llm)
+
+    state: GraphState = {
+        "issue_id": "TFG-0007",
+        "project_key": "TFG",
+        "execution_id": "test_exec",
+        "generation": 0,
+        "status": "retry_code",
+        "error": None,
+        "error_category": "TEST_ERROR",
+        "llm_timeout_count": 0,
+        "review_round": 0,
+        "lint_round": 0,
+        "test_round": 1,
+        "max_round": 3,
+        "target_files": ["src/grep/parallel_runner.py"],
+        "instruction": "test",
+        "cwd": None,
+        "base_branch": "develop",
+        "aider_message": "",
+        "test_feedback_instruction": None,
+        "impl_plan": "test plan",
+        "lint_result": None,
+        "test_result": {"stdout": "FAILED test_parallel_mode\nAssertionError: 2 != 3", "stderr": ""},
+        "review_verdict": None,
+        "review_comments": None,
+        "review_rounds": [],
+        "reviewdog_result": None,
+        "history_summary": None,
+        "rdjson": None,
+    }
+
+    result = test_feedback_node(state)
+    assert called_intent == "test_feedback"
+    assert result["test_feedback_instruction"] is not None
+    assert "ASSERTION_MISMATCH" in result["test_feedback_instruction"]
+    assert "ARCHITECT ADVICE FOR PYTEST FAILURE" in result["aider_message"]
+
+
+
+
+
+
+
 

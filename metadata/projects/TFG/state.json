@@ -12,5 +12,19 @@
     "max_round": 3,
     "error_category": "REVIEW_REJECTED",
     "updated_at": "2026-07-31T17:05:14.061936+00:00"
+  },
+  "TFG-0006": {
+    "status": "ESCALATED_NEEDS_REVISION",
+    "review_round": 0,
+    "max_round": 3,
+    "error_category": "LINT_ERROR",
+    "updated_at": "2026-08-04T10:30:12.518004+00:00"
+  },
+  "TFG-0007": {
+    "status": "COMPLETED",
+    "review_round": 1,
+    "max_round": 3,
+    "error_category": "LINT_ERROR",
+    "updated_at": "2026-08-05T05:00:09.335904+00:00"
   }
 }

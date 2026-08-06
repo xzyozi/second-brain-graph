@@ -1,7 +1,7 @@
 # 環境構築手順ガイド (Environment Setup Guide)
 
 文書番号: SBOS-ENV-GUIDE-001  
-最終更新: 2026年7月29日  
+最終更新: 2026年8月3日  
 
 ---
 
@@ -33,6 +33,20 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ```bash
 # 仮想環境作成と依存関係同期 (Python 3.12 固定)
 uv sync
+```
+
+### 3.3 Aider CLI および LLM 連携設定
+
+Aider CLI 連携において、Ollama やカスタムローカル LLM モデル使用時にブラウザでモデル警告ページ（`https://aider.chat/docs/llms/warnings.html`）が自動起動するのを抑止するため、以下の設定が本プロジェクトの実行ラッパー (`tools/aider_runner.py`) に標準で組み込まれています。
+
+- **CLI フラグ**: `--no-show-model-warnings`
+- **環境変数**: `AIDER_SHOW_MODEL_WARNINGS=false`
+
+手動で Aider を起動する際にも、上記オプションを付与して警告ページの起動を防止してください。
+
+```bash
+# 例: 警告表示を抑止した Aider 手動起動
+uv run aider --model ollama/gemma4-12b-it-Q4_K_M:latest --no-show-model-warnings
 ```
 
 ---

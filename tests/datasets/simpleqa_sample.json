@@ -1,0 +1,142 @@
+[
+  {
+    "id": "q1",
+    "problem": "日本の首都は？",
+    "target": "東京",
+    "aliases": ["東京都"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q2",
+    "problem": "未知の技術Xの仕様は？",
+    "target": "分かりません",
+    "aliases": ["不明", "情報がありません"],
+    "allow_abstain": true
+  },
+  {
+    "id": "q3",
+    "problem": "世界で最も高い山は？",
+    "target": "エベレスト",
+    "aliases": ["チョモランマ", "サガルマータ"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q4",
+    "problem": "2099年の夏季オリンピックの開催地は？",
+    "target": "分かりません",
+    "aliases": ["未定"],
+    "allow_abstain": true
+  },
+  {
+    "id": "q5",
+    "problem": "プログラミング言語「Python」の作者（開発者）の名前は？",
+    "target": "グイド",
+    "aliases": ["Guido", "グイド・ヴァンロッサム", "グイド・ヴァン・ロッサム"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q6",
+    "problem": "元素記号「Au」が表す元素名は？",
+    "target": "金",
+    "aliases": ["Gold", "ゴールド"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q7",
+    "problem": "架空のプログラミング言語「Zylon-9」の主な用途は？",
+    "target": "分かりません",
+    "aliases": ["存在しない"],
+    "allow_abstain": true
+  },
+  {
+    "id": "q8",
+    "problem": "小説『吾輩は猫である』の著者は誰？",
+    "target": "夏目漱石",
+    "aliases": ["夏目 漱石", "なつめそうせき"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q9",
+    "problem": "日本の国会議事堂がある所在地（都道府県）は？",
+    "target": "東京都",
+    "aliases": ["東京"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q10",
+    "problem": "円周率の小数第1位から第2位までの数値は？（3.〇〇）",
+    "target": "3.14",
+    "aliases": ["14"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q11",
+    "problem": "2024年にリリースされたとされる架空のOS「SkyOS 2024」のカーネルバージョンは？",
+    "target": "分かりません",
+    "aliases": ["架空"],
+    "allow_abstain": true
+  },
+  {
+    "id": "q12",
+    "problem": "人体で最も面積・体積が大きい器官（臓器）は？",
+    "target": "皮膚",
+    "aliases": ["ひふ", "Skin"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q13",
+    "problem": "日本で最も面積が広い都道府県は？",
+    "target": "北海道",
+    "aliases": ["ほっかいどう"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q14",
+    "problem": "一般の個人である「山田太郎さん（1985年東京生まれ）」の現在の勤務先は？",
+    "target": "分かりません",
+    "aliases": ["非公開", "個人情報"],
+    "allow_abstain": true
+  },
+  {
+    "id": "q15",
+    "problem": "標準気圧下で純水が沸騰する温度（摂氏）は？",
+    "target": "100",
+    "aliases": ["100℃", "100度", "100度（100℃）"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q16",
+    "problem": "コンピュータ用語における「CPU」は何の略称？",
+    "target": "Central Processing Unit",
+    "aliases": ["中央処理装置"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q17",
+    "problem": "太平洋に存在するとされる架空の島「アトランティス新島」の現在の人口は？",
+    "target": "分かりません",
+    "aliases": ["実在しない"],
+    "allow_abstain": true
+  },
+  {
+    "id": "q18",
+    "problem": "太陽系で最も体積・質量が大きい惑星は？",
+    "target": "木星",
+    "aliases": ["Jupiter", "もくせい"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q19",
+    "problem": "HTTPステータスコード「404」が表す意味は？",
+    "target": "Not Found",
+    "aliases": ["見つからない", "見つからなかった", "見つかりません", "ノットファウンド", "存在しない", "リソースが見つからない", "リソースが見つからなかった", "リクエストされたリソースが見つからない", "リクエストされたリソースが見つからなかった"],
+    "allow_abstain": false
+  },
+  {
+    "id": "q20",
+    "problem": "1光年はメートル法で約何兆キロメートル？（整数で指定）",
+    "target": "9",
+    "aliases": ["約9兆", "9.46", "9.5兆", "10兆", "約10兆"],
+    "allow_abstain": false
+  }
+]

@@ -4,10 +4,6 @@
   "base_branch": "develop",
   "created_at": "2026-07-30T21:58:00Z",
   "description": "Office/Text files grep search engine validation sub-project",
-  "target_files": [
-    "src/grep/interface.py",
-    "tests/test_interface.py"
-  ],
   "constraints": {
     "external_modules_forbidden": false,
     "allowed_imports": []

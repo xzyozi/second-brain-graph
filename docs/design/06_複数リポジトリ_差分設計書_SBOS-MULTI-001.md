@@ -65,8 +65,11 @@
 ```text
 metadata/projects/EC/
 ├── project.json      # プロジェクト固有の設定（base_branch等）
-├── tasks.md          # 人間向けのタスク説明（HTML状態埋め込みは廃止）
-└── state.json        # 【正本】各タスクの機械状態（status, round等）
+├── tasks.md          # 人間向けのタスク説明・インデックス一覧（HTML状態埋め込みは廃止）
+├── state.json        # 【正本】各タスクの機械状態（status, round等）
+└── issues/           # 【詳細要件】Issue ID 単位の詳細仕様マークダウン格納ディレクトリ
+    ├── EC-0001.md    # 各 Issue の背景、仕様、除外条件、DoD
+    └── _template.md  # 統一記述テンプレート
 ```
 
 `metadata/projects/<PROJECT_KEY>/project.json`:
