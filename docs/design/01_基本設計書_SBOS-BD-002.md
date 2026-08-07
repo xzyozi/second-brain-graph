@@ -1,104 +1,121 @@
 # 基本設計書（基本仕様・システム全体アーキテクチャ定義）
-**実在OSSスタック統合による Second Brain OS 再設計（LangGraph / LiteLLM / Aider / Ruff / Reviewdog）**
+**実在 OSS スタック統合による Second Brain OS 再設計（LangGraph / OpenAI 互換 API / Aider / Ruff / Reviewdog）**
 
-| 項目     | 内容                                                           |
-| :------- | :--------------------------------------------------------------- |
-| 文書番号 | SBOS-BD-002                                                      |
-| 版数     | Rev.4.8（PM-050 LLMバックエンド排他併用・BackendExecutionCoordinatorの導入） |
-| 改訂日   | 2026年7月30日                                                     |
-| 作成日   | 2026年7月28日                                                     |
+| 項目     | 内容                                                                                                                                            |
+| :------- | :---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文書番号 | SBOS-BD-002                                                                                                                                     |
+| 版数     | Rev.5.0（現行実装整合・既存構成維持版）                                                                                                         |
+| 改訂日   | 2026年8月7日                                                                                                                                    |
+| 作成日   | 2026年7月28日                                                                                                                                   |
 | 関連文書 | SBOS-DD-003（詳細設計書）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
-| 対象読者 | システムアーキテクト / リード開発エンジニア / ナレッジマネジメント運用者 / DevOpsエンジニア |
+| 対象読者 | システムアーキテクト／リード開発エンジニア／ナレッジマネジメント運用者／DevOps エンジニア                                                       |
 
 ---
 
 ## 1. 概要と基本方針
 
 ### 1.1 文書の目的と対象範囲
-本書は、クラウドLLM APIに依存せず、完全なローカル環境（Ollama + オープンウェイトLLM）および実績あるオープンソースソフトウェア（OSS）を統合して動作する「第二の脳（Second Brain OS）」自律開発・ナレッジ管理スタックの基本設計を定義する。
+本書は、クラウド LLM API に依存せず、ローカル環境の Ollama、llama-server、および実績ある OSS を統合して動作する「第二の脳（Second Brain OS）」の自律開発・ナレッジ管理スタックの基本設計を定義する。
 
-特に **Rev.4.x 改版**（Rev.4.1で導入され、Rev.4.3で全文書間の完全整合を確定）においては、従来の自前手書きループ（`orchestrator.py` や `agent_client.py` 等）を廃止し、**LangGraph（状態管理・条件分岐グラフ）、LiteLLM（統一LLMインターフェース）、Aider（コード自動編集・Gitワーキングツリー管理）、Ruff（一次高速静的解析）、Reviewdog（差分行アノテーション表示）** という実在OSSスタックへ全面的に置き換えたアーキテクチャを規定する。
+本書は採用理由、コンポーネントの責務境界、全体アーキテクチャ、母艦・衛星の隔離方針、環境上の前提を扱う。関数の Interface、状態遷移、外部コマンド、永続化形式、失敗時の詳細な振る舞いは SBOS-DD-003 Rev.5.0 を正本とする。
 
-### 1.2 構造的課題とOSS統合による解決
+従来の自前ループや自作編集ロジックを、**LangGraph（状態管理・条件分岐グラフ）、OpenAI SDK を利用する OpenAI 互換 API 呼出、Aider（コード編集）、Ruff（一次静的解析）、Reviewdog（差分行アノテーション表示）**を中心とする構成へ置き換える。
 
-| 従来自前実装の課題 | OSS統合（Rev.4.x）での解決策 | 担当コンポーネント |
-| :--- | :--- | :--- |
-| 手書き `while` ループと Enum 状態管理の不透明性 | 宣言的な StateGraph による状態遷移と視覚的デバッグ | **LangGraph** (`StateGraph`) |
-| CLI subprocess 起動による argv 長制限・パース失敗 | HTTP 経由の直接 Ollama `/v1` 接続 | **LiteLLM** (`completion()`) |
-| 自作 AST マージの破綻・コード一部消失 | 堅牢な Git ワーキングツリー差分編集と修復 (`--no-auto-commits`) | **Aider** (`aider-chat`) |
-| 構文エラー等での無駄な LLM トークン消費 | 高速な一次機械チェックによる即時リジェクト | **Ruff** (`--output-format=json`) |
-| レビュー結果の視覚的アノテーション欠落 | 差分行単位でのターミナル出力アノテーション表示 | **Reviewdog** (`-f=rdjson -reporter=local`) |
+### 1.2 構造的課題と OSS 統合による解決
 
----
+| 従来自前実装の課題                                    | OSS 統合での解決策                                            | 担当コンポーネント                                |
+| :---------------------------------------------------- | :------------------------------------------------------------ | :------------------------------------------------ |
+| 手書き `while` ループと状態管理の不透明性             | 宣言的な StateGraph による状態遷移と観測可能な実行履歴        | **LangGraph** (`StateGraph`)                      |
+| CLI subprocess 起動による引数長制限・接続管理の複雑さ | OpenAI 互換 HTTP API の直接呼出と intent ごとの endpoint 解決 | **OpenAI SDK** ＋ **BackendExecutionCoordinator** |
+| 自作 AST マージの破綻・コード一部消失                 | Git ワーキングツリーへの差分編集と自動コミット抑止            | **Aider** (`aider-chat`)                          |
+| 構文エラー等での無駄な LLM トークン消費               | 高速な一次機械チェックと修正ループ                            | **Ruff** ／ **pytest**                            |
+| レビュー結果の視覚的アノテーション欠落                | RDJSON を用いた差分行単位の表示                               | **Reviewdog**                                     |
+| コンテキスト・状態の分散                              | GraphState と母艦メタデータへの責務分離                       | **LangGraph** ／ `metadata/`                      |
 
 ## 2. コンポーネント置き換えマッピング
 
-| # | 旧自前実装 | 置き換え先OSS | ライセンス | 役割と統合方針 |
-| --- | --- | --- | --- | --- |
-| 1 | `orchestrator.py` (`State` Enum + `while`) | **LangGraph** (`StateGraph`) | MIT | 状態遷移・リトライ・条件分岐エッジを制御。コンテキスト共有を TypedDict State として一元管理。 |
-| 2 | agent_client.py (`subprocess` + OpenCode) | **LiteLLM** ＋ **BackendExecutionCoordinator** | MIT | `BackendExecutionCoordinator` が推論目的（intent）に応じて Ollama / llama-server へルーティング・排他制御し、LiteLLM経由で呼び出す。 |
-| 3 | Coder Agent + `_merge_python_code` | **Aider** (`aider-chat`) | Apache-2.0 | `--no-auto-commits` (複数形) で衛星ワーキングツリーに変更を反映。自動コミットは行わない。 |
-| 4 | (なし・LLM任せ) | **Ruff** | MIT | 一次静的解析。LLM呼び出し前に機械的エラーをフィルタリング。 |
-| 5 | 自作レビュープロンプト | LiteLLM + **Reviewdog** | MIT | レビュー指摘を rdjson 化し、`-reporter=local -diff="git diff HEAD"` で表示。 |
-| 6 | `context_manager.py` (未使用) | LangGraph の `State` | MIT | エージェント間全状態・指摘・ログの確実な共有。 |
-
----
+| #    | 旧自前実装                           | 置き換え先                                        | 役割と統合方針                                                                                |
+| :--- | :----------------------------------- | :------------------------------------------------ | :-------------------------------------------------------------------------------------------- |
+| 1    | `orchestrator.py` の手書き状態ループ | **LangGraph**                                     | `GraphState` と条件エッジで実行・再試行・終了を制御する。                                     |
+| 2    | `agent_client.py` の CLI 呼出        | **OpenAI SDK** ＋ **BackendExecutionCoordinator** | intent に応じて profile を解決し、Ollama または llama-server の OpenAI 互換 endpoint を使う。 |
+| 3    | Coder Agent と `_merge_python_code`  | **Aider**                                         | `--no-auto-commits` を常に付与し、衛星ワーキングツリーだけを編集する。                        |
+| 4    | LLM 任せの品質確認                   | **Ruff** ／ **pytest**                            | 自動修正を含む静的解析とテストを品質ゲートとして実行する。                                    |
+| 5    | 自作レビュープロンプト               | **OpenAI SDK** ＋ **Reviewdog**                   | LLM レビューを構造化し、Reviewdog は補助的に表示する。                                        |
+| 6    | 未使用の `context_manager.py`        | `GraphState` とメタデータ                         | Graph 内の実行状態と、継続実行に必要な永続状態を分離する。                                    |
 
 ## 3. システム全体アーキテクチャと安全回路
 
 ```text
-[ tools/orchestrator_graph.py ]  ← LangGraph StateGraph (母艦)
+[ tools/orchestrator_graph.py ]  ← LangGraph StateGraph（母艦）
 
-  gather_requirements (state.json / project.json 読み込み)
-    │ (※すべての副作用より前にロック取得)
+  メタデータ検証・文脈解決・プロジェクトロック取得
          │
          ▼
-  plan_node (Executor役: LiteLLM 経由で要件指示書生成)
+  spec_draft_node（Planner による実装計画生成）
          │
          ▼
-  code_node (Aider を衛星リポジトリに対して実行: --no-auto-commits)
+  code_node（Aider による衛星コード編集: --no-auto-commits）
          │
          ▼
-  lint_node (Ruff 高速静的解析) ─────[失敗 (lint_round < 3)]───┐
-         │ [PASSED]                                             │ (指摘を message に追加)
-         ▼                                                      │
-  test_node (pytest + json-report) ──[失敗 (test_round < 3)]───┤
-         │ [PASSED]                                             │
-         ▼                                                      │
-  review_node (LiteLLM レビュー ＋ Reviewdog 出力)             │
-         │                                                      │
-         ├─ [LGTM (レビュー完了)] ──► done_node (PR作成)
-         │                           ├── [PR成功] ───► (status = "COMPLETED" 記録 / 履歴記録 / ロック解放)
-         │                           └── [PR失敗] ───► (status = "PR_FAILED" 記録 / 履歴記録 / 差分・ブランチ保持 / ロック解放)
-         └─ [changes_requested] ────────────────┤
-                                                ▼
-                               (review_round / lint_round / test_round < max_round ?)
-                                                │
-                                 ├─── [Yes] ───► code_node
-                                 └─── [No: 上限到達] ───► escalate_node (state.json.status = "FAILED_B7" 記録 / ロック解放)
+  lint_node（Ruff format / fix / check） ── 失敗時は code_node へ
+         │
+         ▼
+  run_pytest_node（pytest + JSON report） ── 失敗時は test_feedback_node を経て code_node へ
+         │
+         ▼
+  review_node（Reviewer LLM ＋ Reviewdog）
+         ├─ LGTM ─► done_node（Git 操作・PR 作成）
+         └─ changes_requested ─► code_node または上限到達時に escalate_node
 ```
 
-> **リトライ安全回路（F3対応）:** `review_node` だけでなく、`lint_node`（Ruff）および `test_node`（pytest）の失敗修正ループについても、無制限の無限試行を防止するため `lint_round` / `test_round` (上限 各3回) の安全回路を配備する。上限超過時は直ちに `escalate_node` に遷移してタスクを安全停止させる。
+> **リトライ安全回路:** lint、test、review の各修正ループは `max_round`（現行既定値 3）で上限を持つ。LLM または Aider の timeout は実行全体で共有して数え、初回のみ再試行、2回目は `FAILED_SYSTEM` として停止する。状態名、条件、例外分類は DD-003 §5 を正本とする。
+
+### 3.1 LLM バックエンドの責務分離
+
+`tools/llm_client.py` は LiteLLM の `completion()` ではなく、`OpenAI(base_url=..., api_key="local")` により OpenAI 互換 API を呼び出す。`BackendExecutionCoordinator` は `config/models.json` の intent route から profile を解決し、GPU リースを取得した上で backend Adapter を実行する。
+
+現行設定ではすべての route が Ollama profile を選択する。llama-server profile は設定に定義されるが route から選択されず、`fallback` による別 profile への自動再試行も実装されていない。この制約を前提にモデル配置・障害対応を設計する。
 
 ---
 
 ## 4. 母艦×衛星 Git 隔離モデルとの整合
 
-1. **`.gitignore` による完全遮断 (SBOS-MULTI-001 / PM-027)**:
-   母艦の `.gitignore` (`/projects/*`, `/projects/.*`, `!.gitignore`) により、衛星内の差分および Git 履歴は母艦 Git から完全に隔離・遮断される。中央台帳は `metadata/.project-registry.json` に配置管理する。
-2. **Aider のコミット制御 (F1対応)**:
-   Aider 起動オプションに正しく `--no-auto-commits`（複数形）を指定。Aider はファイルの修正のみを行い、`git commit` は行わない。
-3. **自動ブランチ作成と PR (Pull Request) による人間承認 (PM-036)**:
-   運用者は手動での `git commit` を行わない（`main` 環境保護）。エージェントは常に `project.json` で定義された `base_branch` (例:`develop`) から作業ブランチを切って作業し、`done_node` 到達後に PR を自動作成する。運用者は PR を通して成果物を確認しマージを行う。
+1. **`.gitignore` による完全遮断:** 母艦の `.gitignore` にある `/projects/*`、`/projects/.*` により、衛星内の差分および Git 履歴は母艦 Git から隔離する。中央台帳は `metadata/.project-registry.json` に配置する。
+2. **メタデータの母艦管理:** `project.json`、`tasks.md`、Issue、`state.json`、ロックは `metadata/projects/<PROJECT_KEY>/` に置き、衛星ソースツリーを汚染しない。
+3. **Aider のコミット制御:** Aider には `--no-auto-commits` を指定し、編集だけを許可する。stage、commit、push、PR 作成は `done_node` が担当する。
+4. **人間承認を残す PR 運用:** 成功時に作業ブランチから PR を作成する。運用者は成果物を確認し、マージ可否を判断する。PR 失敗時には差分・ブランチを保持し、`PR_FAILED` として記録する。
 
 ---
 
-## 5. 動作前提および Windows Native 環境特有の制約 (F4対応)
+## 5. 動作前提および Windows Native 環境特有の制約
 
-- **対応OS**: Windows Native (PowerShell / `uv`), Linux (Ubuntu), macOS
-- **依存管理**: `uv pip install langgraph litellm aider-chat ruff pytest pytest-json-report`
-- **LLMサーバー**: `BackendExecutionCoordinator` による制御のもと、Ollama (`localhost:11434`) および llama-server (`localhost:8080`) を推論目的（intent）に応じて排他併用。GPUのリース管理 (`.gpu_lease.lock`) により VRAM の競合を防止する。また、Ollama 未起動時には warning を出力し llama-server の実行を続行する。タイムアウト値は `gpu_lease_timeout` として `models.json` から可変設定可能。
-- **Windows Native 環境特有の注意点**:
-  - **日次タイマージョブ**: Linux の `cron` に代わり、Windows Task Scheduler (`schtasks`) または PowerShell の `Register-ScheduledTask` を使用して日次評価バッチをスケジュールする。
-  - **改行コード管理**: Git 設定で `git config --global core.autocrlf input` を指定し、Aider による差分生成時に CRLF / LF の混在で diff が巨大化する問題を防御する。
-  - **PowerShell 文字コード**: 日本語パスやプロンプト文字化け防止のため、`$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()` を適用する。
+- **対応 OS:** Windows Native、Linux、macOS。
+- **依存管理:** `pyproject.toml` を正本とし、開発環境は `uv sync --extra dev` で構築する。
+- **LLM サーバー:** `BackendExecutionCoordinator` の制御下で Ollama と llama-server を排他的に利用できる。GPU リース待機時間は `config/models.json` の `gpu_lease_timeout` で設定する。
+- **品質ツール:** Ruff は `--unsafe-fixes` を含む自動修正を行う。pytest 実行には `pytest-json-report` が必要である。Reviewdog は補助的な出力であり、失敗しても LLM レビューの判定を無効化しない。
+- **改行コード:** Aider による差分の不要な拡大を避けるため、リポジトリ単位の改行コード方針を統一する。Windows で `core.autocrlf` を変更する場合は、既存リポジトリへの影響を確認してから実施する。
+- **PowerShell 文字コード:** 日本語パス・プロンプトを扱うセッションでは UTF-8 出力設定を使用する。`scripts/windows/setup_reviewdog.ps1` は `$PROFILE` を変更せず、必要な設定を案内する。
+
+### 5.1 運用入口と未実装の構想
+
+現行の CLI は次の二つである。
+
+```text
+uv run python tools/orchestrator_graph.py orchestrate [--project-key <PROJECT_KEY>]
+uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--project-key <PROJECT_KEY>] [--resume] [--fresh]
+```
+
+`orchestrate` は既存の priority cache を表示するだけで、優先度計算や Issue 実行はしない。日次バッチ、`score-issues.py`、`check-blockers.py`、`notify.py`、`verify_environment.py`、Task Scheduler／cron への登録は現行実装には含まれない。これらを導入する場合は、キャッシュ生成の責務、失敗時の扱い、通知先、認可を別途設計・実装する。
+
+### 5.2 破壊的な補助ラッパー
+
+`tools/run_task.py` は既定で `git checkout -f`、`git reset --hard`、`git clean -fd` を実行し、未コミット変更と未追跡ファイルを破棄する。通常の実行入口は `orchestrator_graph.py execute` とし、`run_task.py` を使用する場合は `--dry-run` で予定操作を確認し、必要に応じて `--no-clean` または `--resume` を指定する。
+
+---
+
+## 6. 基本設計における変更管理
+
+- 新たな LLM 用途は role・intent・route・profile を明示し、暗黙のモデル選択を導入しない。
+- 新しい状態、外部ツール、Git 操作を追加する場合は、DD-003 の状態遷移・副作用・永続化・テスト対応を同時に更新する。
+- `target_files` は初期の編集ガイドラインであり、実装は Aider 成功後に変更済み Python ファイルを追加し得る。この制約を変更する場合は、stage・PR の対象制限を含めた設計判断が必要である。
+- 本書はコード全文や詳細な疑似コードを重複掲載しない。ただし採用理由、コンポーネントの責務、システム境界、運用上の前提は継続して本書で管理する。
