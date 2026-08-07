@@ -31,7 +31,7 @@
 ```mermaid
 flowchart LR
     CLI[CLI / run_task] --> ORCH[Orchestrator Module]
-    ORCH --> META[Metadata Module]
+    ORCH --> META[Metadata Store]
     ORCH --> GRAPH[LangGraph Workflow]
     GRAPH --> LLM[LLM Module]
     LLM --> COORD[Backend Coordinator]
@@ -55,11 +55,11 @@ flowchart LR
 | `aider_runner.py`        | `run_aider()`、`get_git_diff()`                  | Aider CLI 実行と Git 差分取得。                                        |
 | `run_task.py`            | `clean_satellite_repository()`、`main()`         | 任意の破壊的クリーンアップ後にオーケストレーターを起動するラッパー。   |
 
-## 3. 設定・バックエンド設計
+## 3. 設定モデルとルーティング
 
 ### 3.1 設定スキーマ
 
-`config/models.json` は LLM 関連設定の SSOT である。`RootConfig` は `extra='forbid'` の Pydantic 検証を行うため、未知のキーを許可しない。
+`config/models.json` は LLM 関連設定の SSOT である。`RootConfig` は `extra='forbid'` の Pydantic 検証を行うため、未知のキーを許可しない。`load_model_config()` と `get_coordinator()` はプロセス内でキャッシュされるため、設定変更は新しい Python プロセスで実行して反映する。
 
 | 設定ブロック        | 主な項目                                                      | 契約                                                                                           |
 | :------------------ | :------------------------------------------------------------ | :--------------------------------------------------------------------------------------------- |
@@ -77,26 +77,6 @@ flowchart LR
 | `code_review`、`failure_analysis`、`test_feedback`        | `reasoning_ollama` | reviewer / planner |
 
 現行 route はすべて Ollama profile を参照する。`reasoning_economy`（llama-server）は profile として定義されるが、現行設定の route からは選択されない。`fallback` は設定整合性の検証対象であり、別 profile へ自動再試行する実装は存在しない。
-
-### 3.3 LLM Module
-
-`call_llm(role, system_prompt, user_prompt, expect_json=False, timeout=300, intent='', **kwargs)` は次の手順で動作する。
-
-1. intent が未指定の場合、`planner`、`coder`、`reviewer` をそれぞれ `spec_draft`、`code_edit`、`code_review` に補完する。補完不能な role は `ValueError` とする。
-2. `BackendExecutionCoordinator` から intent に対応する profile を取得する。
-3. profile の model、role 設定の temperature・max_tokens、呼び出し時の上書き値で OpenAI SDK のリクエストを構成する。
-4. Coordinator が一時設定した `OPENAI_API_BASE`、なければ `OLLAMA_API_BASE` を `OpenAI(base_url=..., api_key='local')` に渡す。
-5. 通常応答は `{"raw": <text>}` を返し、`expect_json=True` は JSON object を解析して返す。JSON object にできない応答は `changes_requested` の安全側フォールバックとして扱う。
-
-`litellm` は依存関係に残るが、この呼び出し経路では使用しない。
-
-### 3.4 Backend Coordinator と GPU リース
-
-`BackendExecutionCoordinator.execute(intent, {"action": callable})` は route を profile に解決し、`GpuLeaseAdapter` のコンテキスト内で該当 Adapter を実行する。未定義 intent、未定義 profile、`action` の欠落は例外とする。GPU リースは `metadata/.gpu_lease.lock` を利用し、待機時間は `gpu_lease_timeout` を使用する。
-
-- **Ollama Adapter**: action 実行中のみ OpenAI 互換 endpoint と Ollama 管理 endpoint を環境変数へ設定し、終了後に復元する。
-- **llama-server Adapter**: Ollama profile がある場合はロード済みモデルの解放を試み、`managed_llama_server()` 内で action を実行する。Ollama 管理 API が到達不能な場合は VRAM が空いているものとして起動を継続する。
-- **排他性**: `mode` は `exclusive` のみを許容し、複数 backend の同時 GPU 利用は行わない。
 
 ## 4. プロジェクト・メタデータ設計
 
@@ -160,6 +140,17 @@ metadata/
 | 監査結果       | `review_rounds`、`rdjson`、`reviewdog_result`、`history_summary`                                                             |
 
 初期状態は `status='running'`、各 round と `llm_timeout_count` は 0、`max_round` は 3 とする。`TypedDict` は実行時検証を行わないため、各 node は存在しない任意値を `get()` または `setdefault()` で扱う。
+
+#### Status taxonomy
+
+| 区分                   | status                                                                   |
+| :--------------------- | :----------------------------------------------------------------------- |
+| 実行中                 | `running`、`code_completed`、`lint_passed`、`test_passed`、`review_lgtm` |
+| 再試行                 | `retry_spec_draft`、`retry_code`、`retry_review`                         |
+| 完了・運用終了         | `COMPLETED`、`PR_FAILED`、`SKIPPED_LOCKED`                               |
+| 失敗・エスカレーション | `FAILED_SYSTEM`、`FAILED_B7`、`ESCALATED_NEEDS_REVISION`                 |
+
+この分類は文書上の整理であり、現行実装では `status` は任意文字列として保持される。新しい status を追加する際は、§5.5 の遷移表、`state.json`、実行履歴、統合テストを同時に更新する。
 
 ### 5.4 正常系シーケンス
 
@@ -251,7 +242,27 @@ flowchart TD
 
 ## 6. 外部ツール Adapter 契約
 
-### 6.1 Aider Adapter
+### 6.1 LLM Adapter
+
+`call_llm(role, system_prompt, user_prompt, expect_json=False, timeout=300, intent='', **kwargs)` は次の手順で動作する。
+
+1. intent が未指定の場合、`planner`、`coder`、`reviewer` をそれぞれ `spec_draft`、`code_edit`、`code_review` に補完する。補完不能な role は `ValueError` とする。
+2. `BackendExecutionCoordinator` から intent に対応する profile を取得する。
+3. profile の model、role 設定の temperature・max_tokens、呼び出し時の上書き値で OpenAI SDK のリクエストを構成する。
+4. Coordinator が一時設定した `OPENAI_API_BASE`、なければ `OLLAMA_API_BASE` を `OpenAI(base_url=..., api_key='local')` に渡す。
+5. 通常応答は `{"raw": <text>}` を返し、`expect_json=True` は JSON object を解析して返す。JSON object にできない応答は `changes_requested` の安全側フォールバックとして扱う。
+
+`litellm` は依存関係に残るが、この呼び出し経路では使用しない。
+
+### 6.2 Backend Coordinator と GPU リース
+
+`BackendExecutionCoordinator.execute(intent, {"action": callable})` は route を profile に解決し、`GpuLeaseAdapter` のコンテキスト内で該当 Adapter を実行する。未定義 intent、未定義 profile、`action` の欠落は例外とする。GPU リースは `metadata/.gpu_lease.lock` を利用し、待機時間は `gpu_lease_timeout` を使用する。
+
+- **Ollama Adapter**: action 実行中のみ OpenAI 互換 endpoint と Ollama 管理 endpoint を環境変数へ設定し、終了後に復元する。
+- **llama-server Adapter**: Ollama profile がある場合はロード済みモデルの解放を試み、`managed_llama_server()` 内で action を実行する。Ollama 管理 API が到達不能な場合は VRAM が空いているものとして起動を継続する。
+- **排他性**: `mode` は `exclusive` のみを許容し、複数 backend の同時 GPU 利用は行わない。
+
+### 6.3 Aider Adapter
 
 `run_aider(instruction, target_files, cwd=None, model=None, timeout=None, edit_format=None)` は次の Interface を提供する。
 
@@ -264,7 +275,7 @@ flowchart TD
 
 `get_git_diff(cwd)` は未追跡ファイルを差分へ含めるため `git add -N .` を先行させる。通常は `git diff HEAD` を使い、初回 commit 前は staged と unstaged の差分へ fallback する。取得不能時は `GitDiffError` とし、review node は fail-closed で停止する。
 
-### 6.2 品質 Adapter
+### 6.4 品質 Adapter
 
 | 処理       | 実行内容                                                                                        | 副作用・失敗契約                                                                                            |
 | :--------- | :---------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------- |
@@ -273,13 +284,13 @@ flowchart TD
 | テスト助言 | `test_feedback` intent で LLM に失敗ログを渡す                                                  | 助言が失敗してもテスト失敗自体は保持し、修正ループを継続する。                                              |
 | Reviewdog  | RDJSON を標準入力で渡し、`-f=rdjson -diff=git diff HEAD` を実行                                 | 非0終了・実行例外は記録するが、LLM レビュー結果を無効化しない。                                             |
 
-### 6.3 Review Adapter
+### 6.5 Review Adapter
 
 review node は implementation plan と Git diff を reviewer に渡し、`LGTM` または `changes_requested`、コメント配列を要求する。コメントは `file`、`line`、`message`、`severity` を補完して構造化する。`changes_requested` でコメントが空の場合は `LGTM` に補正する。
 
 各レビューは LGTM を含めて `review_rounds` に保存する。severity が structural、major、error 等の場合、または対象外ファイルへの指摘がある場合は、その情報を Aider feedback へ加える。
 
-### 6.4 Git・PR Adapter
+### 6.6 Git・PR Adapter
 
 `done_node` は次の順序を守る。
 
@@ -356,19 +367,46 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
 | Reviewdog        | 補助的な表示であり、失敗しても品質判定は継続する。                  |
 | 状態保存         | state と履歴は個別ロック・一時ファイル置換で保護する。              |
 
-## 10. 実装上の制約・既知の差異
+### 9.1 副作用一覧
 
-以下は仕様として期待してはならず、現行実装に合わせて運用する。
+| 実行箇所              | 副作用                                                                 | 影響範囲           |
+| :-------------------- | :--------------------------------------------------------------------- | :----------------- |
+| `get_git_diff()`      | `git add -N .` を実行して未追跡ファイルを差分対象へ登録する。          | 衛星 Git index     |
+| `code_node()` / Aider | 対象ファイルを編集し、`.gitignore` の変更を戻す。                      | 衛星ワークツリー   |
+| `lint_node()`         | Ruff format と `--unsafe-fixes` で対象 Python ファイルを修正する。     | 衛星ワークツリー   |
+| `run_pytest_node()`   | `.report.json` を一時作成し、終了時に削除する。                        | 衛星ワークツリー   |
+| `escalate_node()`     | lint/test の上限到達時に `FAILURE_REPORT_<ISSUE_ID>.md` を作成し得る。 | 衛星ワークツリー   |
+| `done_node()`         | stage、commit、`push --force-with-lease`、PR 作成を実行する。          | 衛星 Git／リモート |
+| `run_task.py`         | checkout、hard reset、clean で変更・未追跡ファイルを破棄する。         | 衛星ワークツリー   |
+
+副作用を伴う Module の変更時は、対象、失敗時の保持・復元方針、関連テストをこの表と §12 に反映する。
+
+## 10. 現行仕様の制約・既知の実装差異
+
+### 10.1 現行仕様の制約
+
+以下は現行実装の動作として受け入れる制約である。
 
 1. **自動 backend fallback はない。** `fallback` 設定は検証されるだけで、Coordinator は route に指定された profile だけを実行する。
 2. **`target_files` は固定集合ではない。** Issue の Target Files は Python パスのみ抽出対象であり、Aider 成功後に Git 状態で見つかった変更済み Python ファイルが追加される。
 3. **Ruff は書き換える。** `--unsafe-fixes` を含むため、lint node は read-only の品質ゲートではない。
 4. **pytest-json-report が必須である。** プラグイン未導入時の fallback はない。対象テストが解決できない場合、ui/gui 名を除く既存テストを広く実行する。
-5. **`GraphState` の `test_feedback_instruction` は型上必須だが初期 state では未設定である。** node は `get()` を使用するため実行時には許容される。
-6. **ブランチ prefix は一部不整合である。** 実行前の作業ブランチ名は `work_branch_prefix` を用いるが、PR 作成時の head は `sbos/<ISSUE_ID>` に固定される。
-7. **`run_task --resume --fresh` は相互排他ではない。** 両方指定時は resume の動作が優先される。
-8. **通常実行の event は保存しない。** events ディレクトリへの記録が確認できるのはロック競合時である。
-9. **`spec_draft_node` と `test_feedback_node` は `content` を優先して読む。** `call_llm(expect_json=False)` の通常戻り値は `raw` のため、成功時に辞書文字列表現が state へ入る場合がある。
+5. **`run_task --resume --fresh` は相互排他ではない。** 両方指定時は resume の動作が優先される。
+6. **通常実行の event は保存しない。** events ディレクトリへの記録が確認できるのはロック競合時である。
+
+### 10.2 既知の実装差異
+
+以下は現行コードに存在する不整合であり、仕様として依存してはならない。
+
+1. **`GraphState` の `test_feedback_instruction` は型上必須だが初期 state では未設定である。** node は `get()` を使用するため実行時には許容される。
+2. **ブランチ prefix は一部不整合である。** 実行前の作業ブランチ名は `work_branch_prefix` を用いるが、PR 作成時の head は `sbos/<ISSUE_ID>` に固定される。
+3. **`spec_draft_node` と `test_feedback_node` は `content` を優先して読む。** `call_llm(expect_json=False)` の通常戻り値は `raw` のため、成功時に辞書文字列表現が state へ入る場合がある。
+
+### 10.3 要件決定が必要な事項
+
+- `target_files` を「Aider への編集ガイドライン」とするか、変更・stage・PR の全工程で守る厳密な不変条件とするかを決定する。
+- LLM に渡す Issue、diff、テストログと、実行履歴・Failure Report に保存するデータについて、機密情報・個人情報の分類、マスキング、保持期間を定義する。
+- 常駐プロセスや連続実行を導入する場合は、設定キャッシュの再読み込み Interface と status の型安全な表現を設計する。
 
 ## 11. テスト・検証設計
 
@@ -379,6 +417,16 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
 | `tests/test_backend_coordinator.py`            | intent route、Ollama/llama-server Adapter、GPU リース、未定義 intent、Ollama 到達不能時の llama-server 起動を検証する。              |
 | `tests/test_llm_client.py`                     | role 設定、OpenAI SDK へのパラメータ伝達、intent 補完を検証する。                                                                    |
 | `tests/test_run_task.py`                       | クリーンアップ順、resume 時の skip、dry-run の非実行性を検証する。                                                                   |
+
+### 11.1 保証範囲
+
+| 検証層            | 現在の保証                                                                                              | 未保証・追加が必要な検証                                                                           |
+| :---------------- | :------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------- |
+| Unit / 契約テスト | 設定解決、Aider 引数・例外、Backend route、LLM パラメータ、run_task の分岐をモックで検証する。          | 実行ファイルのインストールや外部サービスの可用性。                                                 |
+| 統合テスト        | LangGraph の状態遷移、監査保存、Git/PR の失敗正規化、レビュー結果の構造化を隔離環境とモックで検証する。 | 実 Git remote、実 PR、実 LLM の応答品質。                                                          |
+| 実環境 smoke test | 現行テストスイートには含まれない。                                                                      | Ollama、Aider、Ruff、pytest、Reviewdog、GitHub CLI、リモート Git を接続した最小 Issue の完走検証。 |
+
+実環境 smoke test は、衛星リポジトリを破壊しない専用の一時 repository と Issue を用意して別の運用手順として実施する。
 
 ```bash
 uv run pytest
