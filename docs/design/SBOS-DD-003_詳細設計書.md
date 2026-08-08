@@ -57,53 +57,15 @@ flowchart LR
 
 ## 3. 設定モデルとルーティング
 
-### 3.1 設定スキーマ
+LLM 関連設定の検証、Pydantic スキーマ、および intent に基づくプロファイルルーティングの詳細については、以下を参照すること。
 
-`config/models.json` は LLM 関連設定の SSOT である。`RootConfig` は `extra='forbid'` の Pydantic 検証を行うため、未知のキーを許可しない。`load_model_config()` と `get_coordinator()` は `lru_cache` によりプロセス内でキャッシュされる。通常 CLI や `run_task.py` は短寿命プロセスとして終了するため現状は許容範囲であるが、設定変更を反映する場合は新しい Python プロセスで実行（再起動）すること。
-
-| 設定ブロック        | 主な項目                                                      | 契約                                                                                           |
-| :------------------ | :------------------------------------------------------------ | :--------------------------------------------------------------------------------------------- |
-| `models.<role>`     | `temperature`、`max_tokens`                                   | `planner`、`coder`、`reviewer` の生成パラメータ。モデル名は保持しない。                        |
-| `aider`             | `no_auto_commits`、`edit_format`、`timeout`                   | Aider の編集形式とタイムアウト。`no_auto_commits` は設定値にかかわらず実装で常に有効化される。 |
-| `backend_execution` | `mode`、`fallback`、`gpu_lease_timeout`、`routes`、`profiles` | backend の排他実行と intent ルーティング。                                                     |
-| `profiles.<name>`   | `backend`、`model`、`openai_endpoint`                         | `ollama` は管理 endpoint、`llama_server` は port と model_path も必須。                        |
-
-### 3.2 Intent route
-
-| intent                                                    | 現行 profile       | role               |
-| :-------------------------------------------------------- | :----------------- | :----------------- |
-| `spec_draft`、`task_decomposition`、`task_prioritization` | `reasoning_ollama` | planner            |
-| `code_edit`、`aider_edit`                                 | `coding_ollama`    | coder / Aider      |
-| `code_review`、`failure_analysis`、`test_feedback`        | `reasoning_ollama` | reviewer / planner |
-
-現行 route はすべて Ollama profile を参照する。`reasoning_economy`（llama-server）は profile として定義されるが、現行設定の route からは選択されない。`fallback` は設定整合性の検証対象であり、別 profile へ自動再試行する実装は存在しない。
+👉 **[SBOS-DD-005_Backend_GPUリース仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPUリース仕様.md)**
 
 ## 4. プロジェクト・メタデータ設計
 
-### 4.1 ディレクトリと責任分離
+ディレクトリ構成、メタデータ形式の詳細については、以下を参照すること。
 
-```text
-metadata/
-├── .project-registry.json                 # 衛星の台帳
-└── projects/<PROJECT_KEY>/
-    ├── project.json                       # 衛星の構成・ブランチ設定
-    ├── tasks.md                           # 人間向けタスク一覧
-    ├── issues/<ISSUE_ID>.md               # Issue の詳細・Target Files・DoD
-    ├── state.json                         # Issue 終端状態の正本
-    ├── .lock                              # プロジェクト実行ロック
-    └── events/                            # ロック競合などの個別イベント
-```
-
-衛星ソースは `projects/<name>/` にあり、台帳の `dir` と `meta` で対応付ける。`validate_project_consistency()` は Issue ID、prefix、CLI の project key、台帳、メタデータディレクトリ、`project.json.key` の一致を検証する。
-
-### 4.2 メタデータ形式
-
-| ファイル                 | 主な項目                                                                              | 使用箇所                                                  |
-| :----------------------- | :------------------------------------------------------------------------------------ | :-------------------------------------------------------- |
-| `.project-registry.json` | `projects.<key>.dir`、`meta`                                                          | 衛星ディレクトリとメタデータディレクトリの解決。          |
-| `project.json`           | `key`、`base_branch`、任意の `work_branch_prefix`、`target_files`、`exclude_files`    | 文脈・ブランチ・対象ファイルの解決。                      |
-| `issues/<ISSUE_ID>.md`   | Target Files、制約、Non-goals、DoD                                                    | Aider への instruction と対象 Python ファイルの優先解決。 |
-| `state.json`             | Issue ID ごとの `status`、`review_round`、`max_round`、`error_category`、`updated_at` | 終端状態の SSOT。                                         |
+👉 **[SBOS-DD-007_永続化_排他制御仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_永続化_排他制御仕様.md)**
 
 `resolve_project_context()` は順に `project.json.target_files`、`tasks.md` 内の Python パス、衛星内の Python ファイル探索から候補を得る。Issue 詳細ファイルに Target Files がある場合はそれを優先し、実在しない Python パスはファイル名の近似で衛星内ファイルへ補正する。衛星は `.git` が存在するディレクトリでなければ無効とする。
 
@@ -242,53 +204,23 @@ flowchart TD
 
 ## 6. 外部ツール Adapter 契約
 
-### 6.1 LLM Adapter
+### 6.1 LLM Adapter & Backend Coordinator
 
-`call_llm(role, system_prompt, user_prompt, expect_json=False, timeout=300, intent='', **kwargs)` は次の手順で動作する。
+LLMへのリクエスト構成、OpenAI互換APIエンドポイントの切り替え、およびGPUリソースのリース制御の詳細については、以下を参照すること。
 
-1. intent が未指定の場合、`planner`、`coder`、`reviewer` をそれぞれ `spec_draft`、`code_edit`、`code_review` に補完する。補完不能な role は `ValueError` とする。
-2. `BackendExecutionCoordinator` から intent に対応する profile を取得する。
-3. profile の model、role 設定の temperature・max_tokens、呼び出し時の上書き値で OpenAI SDK のリクエストを構成する。
-4. Coordinator が一時設定した `OPENAI_API_BASE`、なければ `OLLAMA_API_BASE` を `OpenAI(base_url=..., api_key='local')` に渡す。
-5. 通常応答は `{"raw": <text>}` を返し、`expect_json=True` は JSON object を解析して返す。JSON object にできない応答は `changes_requested` の安全側フォールバックとして扱う。
+👉 **[SBOS-DD-005_Backend_GPUリース仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPUリース仕様.md)**
 
-`litellm` は依存関係に残るが、この呼び出し経路では使用しない。
+### 6.2 Aider Adapter
 
-### 6.2 Backend Coordinator と GPU リース
+Aider の起動オプション、一時ファイル制御、モデル解決、フェイルセーフ仕様の詳細については、以下を参照すること。
 
-`BackendExecutionCoordinator.execute(intent, {"action": callable})` は route を profile に解決し、`GpuLeaseAdapter` のコンテキスト内で該当 Adapter を実行する。未定義 intent、未定義 profile、`action` の欠落は例外とする。GPU リースは `metadata/.gpu_lease.lock` を利用し、待機時間は `gpu_lease_timeout` を使用する。
+👉 **[SBOS-DD-004_詳細設計書.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_詳細設計書.md)**
 
-- **Ollama Adapter**: action 実行中のみ OpenAI 互換 endpoint と Ollama 管理 endpoint を環境変数へ設定し、終了後に復元する。
-- **llama-server Adapter**: Ollama profile がある場合はロード済みモデルの解放を試み、`managed_llama_server()` 内で action を実行する。Ollama 管理 API が到達不能な場合は VRAM が空いているものとして起動を継続する。
-- **排他性**: `mode` は `exclusive` のみを許容し、複数 backend の同時 GPU 利用は行わない。
+### 6.3 品質・レビュー Adapter
 
-### 6.3 Aider Adapter
+Ruff (lint)、pytest (test)、LLM レビューおよび Reviewdog の詳細仕様とエスカレーション処理については、以下を参照すること。
 
-`run_aider(instruction, target_files, cwd=None, model=None, timeout=None, edit_format=None)` は次の Interface を提供する。
-
-- モデル未指定時は `aider_edit`、なければ `code_edit` route の profile から解決し、Ollama モデル名には `ollama/` を補う。
-- `edit_format` と `timeout` は `aider` 設定から取得し、設定取得に失敗した場合の timeout は 1200 秒とする。
-- Aider は `--no-auto-commits`、`--yes-always`、`--no-show-model-warnings`、必要に応じて `--edit-format` を付けて実行する。
-- 指示本文は UUID 付き `.aider.instruction_*.tmp` へ書き出し、`--message-file` で渡す。成功・失敗を問わず finally で削除する。
-- 未存在の target file は新規作成候補として許容する。`OLLAMA_API_BASE` の末尾 `/v1` は Aider 実行前に除去する。
-- timeout、非ゼロ終了、その他の実行例外は `AiderRunError` に正規化する。
-
-`get_git_diff(cwd)` は未追跡ファイルを差分へ含めるため `git add -N .` を先行させる。通常は `git diff HEAD` を使い、初回 commit 前は staged と unstaged の差分へ fallback する。取得不能時は `GitDiffError` とし、review node は fail-closed で停止する。
-
-### 6.4 品質 Adapter
-
-| 処理       | 実行内容                                                                                        | 副作用・失敗契約                                                                                            |
-| :--------- | :---------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------- |
-| Ruff       | `ruff format`、`ruff check --fix --unsafe-fixes --ignore E501`、最終 `ruff check --ignore E501` | lint は検査専用ではなく対象ファイルを自動修正する。最終 check の非0を `LINT_ERROR` とする。                 |
-| pytest     | 関連テスト、または `tests/test_*.py` を `python -m pytest --json-report` で実行                 | ui/gui を含む名前の fallback テストは除外する。JSON report は `.report.json` に保存後、finally で削除する。 |
-| テスト助言 | `test_feedback` intent で LLM に失敗ログを渡す                                                  | 助言が失敗してもテスト失敗自体は保持し、修正ループを継続する。                                              |
-| Reviewdog  | RDJSON を標準入力で渡し、`-f=rdjson -diff=git diff HEAD` を実行                                 | 非0終了・実行例外は記録するが、LLM レビュー結果を無効化しない。                                             |
-
-### 6.5 Review Adapter
-
-review node は implementation plan と Git diff を reviewer に渡し、`LGTM` または `changes_requested`、コメント配列を要求する。コメントは `file`、`line`、`message`、`severity` を補完して構造化する。`changes_requested` でコメントが空の場合は `LGTM` に補正する。
-
-各レビューは LGTM を含めて `review_rounds` に保存する。severity が structural、major、error 等の場合、または対象外ファイルへの指摘がある場合は、その情報を Aider feedback へ加える。
+👉 **[SBOS-DD-006_品質ゲート_レビュー仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_品質ゲート_レビュー仕様.md)**
 
 ### 6.6 Git・PR Adapter
 
@@ -304,36 +236,9 @@ review node は implementation plan と Git diff を reviewer に渡し、`LGTM`
 
 ## 7. 永続化・監査・排他制御
 
-### 7.1 state.json
+`state.json` および `execution_history.json` の永続化契約（fsync + 原子置換）、ならびに `ProjectLockManager` による排他制御（ロック取得・競合時の挙動）の詳細については、以下を参照すること。
 
-`update_task_state()` は `state.json` の対象 Issue エントリのみを更新する。旧フラット形式を検出した場合は Issue ID をキーとする形式へ移行する。書き込みは一時ファイルへの JSON 出力、`fsync`、`os.replace` の順で原子的に行う。
-
-```json
-{
-  "TFG-0006": {
-    "status": "ESCALATED_NEEDS_REVISION",
-    "review_round": 0,
-    "max_round": 3,
-    "error_category": "LINT_ERROR",
-    "updated_at": "2026-08-04T10:30:12.518004+00:00"
-  }
-}
-```
-
-### 7.2 実行履歴
-
-`record_execution_history()` は `tools/.cache/execution_history.json` の `records` 配列へ追記する。履歴専用 FileLock と一時ファイル置換を使用し、保存失敗は `safe_record_execution_history()` が吸収して、すでに確定した `state.json` を変更しない。
-
-| 項目       | 内容                                                                                                                                |
-| :--------- | :---------------------------------------------------------------------------------------------------------------------------------- |
-| 実行識別   | `timestamp`、`issue_id`、`project_key`、`project_path`                                                                              |
-| 終端状態   | `final_status`、`error_category`、`error_message`、`llm_timeout_count`                                                              |
-| 試行回数   | `actual_round`、`lint_round`、`test_round`、`review_round`、`max_round`                                                             |
-| 品質・監査 | `review_rounds`、`reviewdog_result`、`history_summary.lint_passed`、`history_summary.test_passed`、`history_summary.review_verdict` |
-
-### 7.3 ロックとイベント
-
-`ProjectLockManager` はプロジェクト単位の `.lock` を `FileLock(timeout=0)` で取得する。取得不能な実行は待機・キューイングせず、`SKIPPED_LOCKED` として state・履歴を保存する。さらに `events/event_<execution_id>_<timestamp>.json` を作成する。通常の各 node 遷移を event として保存する実装は存在しない。
+👉 **[SBOS-DD-007_永続化_排他制御仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_永続化_排他制御仕様.md)**
 
 ## 8. CLI・運用 Interface
 
