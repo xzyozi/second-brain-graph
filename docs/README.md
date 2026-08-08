@@ -23,13 +23,14 @@ SBOSの仕様書は、役割ごとに以下の文書コード体系で分類さ�
 ## 2. ドキュメント一覧およびリンク
 
 ### 2.1 設計書 (docs/design/)
-- **[01_基本設計書 (SBOS-BD-002)](design/01_基本設計書_SBOS-BD-002.md)**
-- **[02_詳細設計書 (SBOS-DD-003)](design/02_詳細設計書_SBOS-DD-003.md)**
-- **[03_オーケストレイト設計書 (SBOS-ORCH-001)](design/03_オーケストレイト設計書_SBOS-ORCH-001.md)**
-- **[04_環境構築仕様書 (SBOS-ENV-001)](design/04_環境構築仕様書_SBOS-ENV-001.md)**
-- **[05_運用詳細設計書 (SBOS-OP-001)](design/05_運用詳細設計書_SBOS-OP-001.md)**
-- **[06_複数リポジトリ_差分設計書 (SBOS-MULTI-001)](design/06_複数リポジトリ_差分設計書_SBOS-MULTI-001.md)**
-- **[07_課題矛盾一覧 (SBOS-PM-005)](design/07_課題矛盾一覧_SBOS-PM-005.md)**
+- **[基本設計書 (SBOS-BD-002)](design/SBOS-BD-002_基本設計書.md)**
+- **[詳細設計書 (SBOS-DD-003)](design/SBOS-DD-003_詳細設計書.md)**
+- **[オーケストレイト設計書 (SBOS-ORCH-001)](design/SBOS-ORCH-001_オーケストレイト設計書.md)**
+- **[環境構築仕様書 (SBOS-ENV-001)](design/SBOS-ENV-001_環境構築仕様書.md)**
+- **[運用詳細設計書 (SBOS-OP-001)](design/SBOS-OP-001_運用詳細設計書.md)**
+- **[複数リポジトリ_差分設計書 (SBOS-MULTI-001)](design/SBOS-MULTI-001_複数リポジトリ_差分設計書.md)**
+- **[課題矛盾一覧 (SBOS-PM-005)](design/SBOS-PM-005_課題矛盾一覧.md)**
+- **[詳細設計書 (SBOS-DD-004)](design/SBOS-DD-004_詳細設計書.md)**
 
 ### 2.2 セットアップ・環境ガイド (docs/setup/)
 - **[environment_setup_guide.md](setup/environment_setup_guide.md)**: 環境構築総合ガイド
@@ -43,6 +44,6 @@ SBOSの仕様書は、役割ごとに以下の文書コード体系で分類さ�
 ## 3. ドキュメント配置規約
 新しいドキュメントを作成・追加する際は、以下のルールに従って配置してください。
 
-1. **アーキテクチャ・設計仕様**: `docs/design/` に配置し、ファイル名冒頭に連番および文書コードを付与する（例: `07_〇〇仕様書_SBOS-XXX-001.md`）。
+1. **アーキテクチャ・設計仕様**: `docs/design/` に配置し、ファイル名冒頭に文書コードを付与する（例: `SBOS-XXX-001_〇〇仕様書.md`）。
 2. **手順・開発ガイド**: `docs/setup/` または `docs/how-to/` に配置する。
 3. **新規作成時の更新手続き**: ドキュメントを追加した場合は、必ず本ファイル (`docs/README.md`) の一覧および直下の [README.md](../README.md) のリンク表を更新すること。
