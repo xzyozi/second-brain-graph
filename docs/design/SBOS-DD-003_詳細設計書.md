@@ -214,7 +214,7 @@ LLMへのリクエスト構成、OpenAI互換APIエンドポイントの切り�
 
 Aider の起動オプション、一時ファイル制御、モデル解決、フェイルセーフ仕様の詳細については、以下を参照すること。
 
-👉 **[SBOS-DD-004_詳細設計書.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_詳細設計書.md)**
+👉 **[SBOS-DD-004_Aider統合仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider統合仕様.md)**
 
 ### 6.3 品質・レビュー Adapter
 

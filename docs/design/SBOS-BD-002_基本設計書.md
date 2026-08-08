@@ -4,10 +4,10 @@
 | 項目     | 内容                                                                                                                                            |
 | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-BD-002                                                                                                                                     |
-| 版数     | Rev.5.1（スリム化・レイヤー分離最適化版）                                                                                                       |
+| 版数     | Rev.5.2（詳細設計書分離に伴うマップ追記版）                                                                                                     |
 | 改訂日   | 2026年8月8日                                                                                                                                    |
 | 作成日   | 2026年7月28日                                                                                                                                   |
-| 関連文書 | SBOS-DD-003（詳細設計書）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
+| 関連文書 | SBOS-DD-003（詳細設計書）、SBOS-DD-004（Aider統合仕様）、SBOS-DD-005（Backend仕様）、SBOS-DD-006（品質仕様）、SBOS-DD-007（永続化仕様）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 | 対象読者 | システムアーキテクト／リード開発エンジニア／ナレッジマネジメント運用者／DevOps エンジニア                                                       |
 
 ---
@@ -17,7 +17,7 @@
 ### 1.1 文書の目的と対象範囲
 本書は、クラウド LLM API に依存せず、ローカル環境の Ollama、llama-server、および実績ある OSS を統合して動作する「第二の脳（Second Brain OS）」の自律開発・ナレッジ管理スタックの基本設計を定義する。
 
-本書は採用理由、コンポーネントの責務境界、全体アーキテクチャ、母艦・衛星の隔離方針、運用上の基本前提を扱う。関数の Interface、状態遷移、詳細な外部コマンド仕様、永続化形式、失敗時の振る舞いは SBOS-DD-003 を正本とする。
+本書は採用理由、コンポーネントの責務境界、全体アーキテクチャ、母艦・衛星の隔離方針、運用上の基本前提を扱う。関数の Interface、状態遷移、詳細な外部コマンド仕様、永続化形式、失敗時の振る舞いは [SBOS-DD-003](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-003_%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88%E6%9B%B8.md) および各詳細設計書（[DD-004](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md), [DD-005](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md), [DD-006](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md), [DD-007](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)）を正本とする。
 
 従来の自前ループや自作編集ロジックを、**LangGraph（状態管理・条件分岐グラフ）、OpenAI SDK を利用する OpenAI 互換 API 呼出、Aider（コード編集）、Ruff（一次静的解析）、Reviewdog（差分行アノテーション表示）**を中心とする構成へ置き換える。
 
