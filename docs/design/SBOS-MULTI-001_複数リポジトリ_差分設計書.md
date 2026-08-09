@@ -1,13 +1,13 @@
-# 複数リポジトリ管理および差分検証・スコアリング設計書 Rev.2.7
+# 複数リポジトリ管理および差分検証・スコアリング設計書 Rev.2.8
 **「第二の脳」母艦 × 衛星アーキテクチャ 拡張仕様**
 
 | 項目 | 内容 |
 | :--- | :--- |
 | 文書番号 | SBOS-MULTI-001 |
-| 版数 | Rev.2.7（PM-036 project.json base_branch追加方針反映） |
-| 改訂日 | 2026年7月29日 |
+| 版数 | Rev.2.8（詳細設計書分離に伴うマップ追記版） |
+| 改訂日 | 2026年8月9日 |
 | 作成日 | 2026年6月26日 |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
 
 ---
 
