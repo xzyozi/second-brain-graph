@@ -5,10 +5,10 @@ version: "1.0"
 created_at: "YYYY-MM-DD"
 updated_at: "YYYY-MM-DD"
 author: "[作成者 / チーム名]"
-purpose: "特定モジュール・関数の入出力DTO条件、処理手順、状態遷移判定、および失敗時契約を定義し、実装・変更時の不整合やバグを防ぐため"
+purpose: "特定モジュール・関数の入出力 DTO 条件、処理手順、状態遷移判定、および失敗時契約を定義し、実装・変更時の不整合やバグを防ぐため"
 related_documents:
-  - "基本設計書"
-  - "詳細設計書正本"
+  - "基本設計書正本"
+  - "データ構造仕様書正本"
 ---
 
 # 詳細設計書（機能・モジュール制御仕様）
@@ -16,12 +16,12 @@ related_documents:
 
 | 項目 | 内容 |
 | :--- | :--- |
+| 文書番号 | [PROJECT_PREFIX]-DD-[NUMBER] （例: SBOS-DD-001） |
 | ドキュメント名 | [詳細設計書名] |
-| 版数 | Rev.1.0（新規作成） |
-| 改訂日 | YYYY年MM月DD日 |
-| 作成日 | YYYY年MM月DD日 |
-| 関連ドキュメント | 基本設計書、詳細設計書正本、仕様書 |
-| 適用目的・利用意図 | 特定モジュール・関数の入出力DTO条件、処理手順、状態遷移判定、および失敗時契約を定義し、実装・変更時の不整合やバグを防ぐため |
+| 版数 | [Rev.1.0 (新規作成)] |
+| 改訂日 | [YYYY-MM-DD] |
+| 作成日 | [YYYY-MM-DD] |
+| 作成者 | [作成者 / チーム名] |
 
 ---
 
@@ -61,11 +61,12 @@ related_documents:
 
 ---
 
-## 3. 処理フローと状態遷移ロジック (Mermaid 状態遷移・フロー図)
+## 3. 処理フロー・シーケンス・状態遷移ロジック (Mermaid 図)
 
-### 3.1 処理シーケンス / 状態遷移図
-本モジュールの制御フローやノード間状態遷移を Mermaid 記法を用いて記述する。
+### 3.1 処理フロー・シーケンス / 状態遷移図
+本モジュールの制御フロー、モジュール間シーケンス対話、または状態遷移を Mermaid 記法を用いて記述する。（※用途に応じて状態遷移図またはシーケンス図を選択・併用すること）
 
+#### A. 状態遷移図サンプル (State Diagram)
 ```mermaid
 stateDiagram-v2
     [*] --> InitialVerification: 処理開始 (入力DTO受け取り)
@@ -81,6 +82,21 @@ stateDiagram-v2
 
     Completed --> [*]
     Escalated --> [*]
+```
+
+#### B. シーケンス図サンプル (Sequence Diagram)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as 呼び出し元 / コアエンジン
+    participant Module as 本モジュール
+    participant Adapter as 外部アダプター/ツール
+
+    Client->>Module: 処理要求 (入力DTO)
+    Module->>Adapter: コマンド実行リクエスト
+    Adapter-->>Module: 実行レスポンス / ログ
+    Module->>Module: 結果判定・状態更新
+    Module-->>Client: 最終完了DTO返却
 ```
 
 ### 3.2 状態遷移およびルーティングルール
