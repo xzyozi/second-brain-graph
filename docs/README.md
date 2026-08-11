@@ -1,48 +1,24 @@
-# SBOS (Second Brain OS) ドキュメント体系 & 索引
+# ドキュメント管理・運用ガイド
 
-本ディレクトリ（`docs/`）は、**「第二の脳」母艦 (second-brain-graph)** の仕様書・設計書・運用ガイドラインを一括管理するディレクトリです。
-
----
-
-## 1. 文書コード（プレフィックス）凡例
-
-SBOSの仕様書は、役割ごとに以下の文書コード体系で分類されています。
-
-| プレフィックス | 体系名 | 概要・対象範囲 |
-| :--- | :--- | :--- |
-| **`SBOS-BD`** | Basic Design (基本設計) | システム構成、全体コンセプト、アーキテクチャ設計 |
-| **`SBOS-DD`** | Detailed Design (詳細設計) | エージェント構造、モジュール定義、データモデル |
-| **`SBOS-ORCH`** | Orchestrator (オーケストレーション) | タスク自動実行ループ、ブロッカー判定、状態遷移 |
-| **`SBOS-ENV`** | Environment (環境仕様) | パッケージ管理、依存関係、実行環境定義 |
-| **`SBOS-OP`** | Operations (運用設計) | 日次バッチ、ログ監査、バックアップ運用 |
-| **`SBOS-MULTI`** | Multi-Repo (複数リポジトリ) | 母艦×衛星のGit分離、中央台帳 (`.project-registry.json`) |
-| **`SBOS-PM`** | Problem Management (課題・矛盾一覧) | 設計文書間の矛盾点、未決事項のトラッキング |
+本 `docs/` ディレクトリは、プロジェクトの設計仕様書および各種ガイドラインを管理する領域です。
 
 ---
 
-## 2. ドキュメント一覧およびリンク
+## ディレクトリ構造とテンプレート
 
-### 2.1 設計書 (docs/design/)
-- **[01_基本設計書 (SBOS-BD-002)](design/01_基本設計書_SBOS-BD-002.md)**
-- **[02_詳細設計書 (SBOS-DD-003)](design/02_詳細設計書_SBOS-DD-003.md)**
-- **[03_オーケストレイト設計書 (SBOS-ORCH-001)](design/03_オーケストレイト設計書_SBOS-ORCH-001.md)**
-- **[04_環境構築仕様書 (SBOS-ENV-001)](design/04_環境構築仕様書_SBOS-ENV-001.md)**
-- **[05_運用詳細設計書 (SBOS-OP-001)](design/05_運用詳細設計書_SBOS-OP-001.md)**
-- **[06_複数リポジトリ_差分設計書 (SBOS-MULTI-001)](design/06_複数リポジトリ_差分設計書_SBOS-MULTI-001.md)**
-- **[07_課題矛盾一覧 (SBOS-PM-005)](design/07_課題矛盾一覧_SBOS-PM-005.md)**
-
-### 2.2 セットアップ・環境ガイド (docs/setup/)
-- **[environment_setup_guide.md](setup/environment_setup_guide.md)**: 環境構築総合ガイド
-- **[reviewdog_setup_guide.md](setup/reviewdog_setup_guide.md)**: Reviewdog クローン・ビルド・配置ガイド
-- **[oss_license_policy.md](setup/oss_license_policy.md)**: OSSライセンス・モデル利用規約管理ポリシー
-- **[dependency_management.md](setup/dependency_management.md)**: uvによる依存関係管理仕様
-- **[toml_project_setup.md](setup/toml_project_setup.md)**: pyproject.toml / ruff / mypy 設定ガイド
+* **`docs/design/`**: システムの各種設計書（基本設計、詳細設計、データ構造仕様）および運用ガイドラインを格納する主領域
+  * `TEMPLATE_基本設計書.md`: アーキテクチャ・コンポーネント分離用テンプレート
+  * `TEMPLATE_詳細設計書.md`: モジュール制御・入出力契約・状態遷移用テンプレート
+  * `TEMPLATE_データ構造仕様書.md`: データ型・スキーマ・原子置換・排他制御用テンプレート
+  * `README.md`: 設計ドキュメントの命名規則・執筆・更新運用ルール
 
 ---
 
-## 3. ドキュメント配置規約
-新しいドキュメントを作成・追加する際は、以下のルールに従って配置してください。
+## ドキュメント運用ルール概要
 
-1. **アーキテクチャ・設計仕様**: `docs/design/` に配置し、ファイル名冒頭に連番および文書コードを付与する（例: `07_〇〇仕様書_SBOS-XXX-001.md`）。
-2. **手順・開発ガイド**: `docs/setup/` または `docs/how-to/` に配置する。
-3. **新規作成時の更新手続き**: ドキュメントを追加した場合は、必ず本ファイル (`docs/README.md`) の一覧および直下の [README.md](../README.md) のリンク表を更新すること。
+詳細な命名ルールや参照規約については **`docs/design/README.md`** を参照してください。
+
+1. **命名ルール**: `[PROJECT_PREFIX]-[TYPE_CODE]-[NUMBER]_[TITLE].md` の統一フォーマットを使用
+2. **環境依存リンクの禁止**: 特定環境の絶対パス (`file:///...`) を避け、相対パスまたは標準文書名テキストで参照
+3. **具象コード非掲載**: プログラムコードを直接貼らず、パラメータ表・事前/事後条件・契約で記述
+4. **SSOT原則**: 同一仕様の重複記述を避け、専門の設計書を一元管理正本とする
