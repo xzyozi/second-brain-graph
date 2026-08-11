@@ -1,7 +1,7 @@
 """Configuration Loader for Second Brain OS Model Management."""
 
-from functools import lru_cache
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
@@ -14,6 +14,7 @@ class AiderConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     no_auto_commits: bool = True
     edit_format: Optional[str] = None
+    timeout: int = 1200
     description: Optional[str] = None
 
 class RoleConfig(BaseModel):
@@ -85,7 +86,7 @@ def load_model_config() -> RootConfig:
             data = json.load(f)
             return RootConfig.model_validate(data)
     except Exception as e:
-        raise RuntimeError(f"Failed to parse or validate config from {config_path}: {e}")
+        raise RuntimeError(f"Failed to parse or validate config from {config_path}: {e}") from e
 
 
 def get_model_params(role: str) -> Dict[str, Any]:
@@ -103,3 +104,10 @@ def get_backend_execution_config() -> BackendExecutionConfig:
     """Get backend execution routing and profiles."""
     config = load_model_config()
     return config.backend_execution
+
+
+def get_aider_config() -> AiderConfig:
+    """Get Aider execution configuration."""
+    config = load_model_config()
+    return config.aider
+

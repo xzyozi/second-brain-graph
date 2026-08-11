@@ -1,8 +1,8 @@
 """Tests for tools/llm_client.py and config_loader parameters integration."""
 
-from unittest.mock import MagicMock, patch
 import os
-import pytest
+from unittest.mock import MagicMock, patch
+
 from tools.config_loader import get_model_params
 from tools.llm_client import call_llm
 

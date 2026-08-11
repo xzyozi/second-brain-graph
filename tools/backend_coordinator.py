@@ -2,15 +2,15 @@
 """tools/backend_coordinator.py - LLMバックエンドの排他併用を管理するCoordinator."""
 
 import contextlib
-from functools import lru_cache
 import json
 import logging
 import os
-from pathlib import Path
 import time
-from typing import Any, Callable, Dict, Iterator, Optional, Union
 import urllib.error
 import urllib.request
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterator, Optional, Union
 
 from filelock import FileLock, Timeout
 
@@ -68,9 +68,9 @@ class GpuLeaseAdapter:
             logger.info("Waiting for GPU lease...")
             self.lock.acquire()
             logger.info("GPU lease acquired.")
-        except Timeout:
+        except Timeout as e:
             logger.error("Failed to acquire GPU lease within timeout.")
-            raise TimeoutError(f"Failed to acquire GPU lease within {self.timeout} seconds.")
+            raise TimeoutError(f"Failed to acquire GPU lease within {self.timeout} seconds.") from e
 
     def release(self) -> None:
         """
@@ -83,44 +83,54 @@ class GpuLeaseAdapter:
             logger.error(f"Error releasing GPU lease: {e}")
 
 
-def unload_ollama_models(management_endpoint: str) -> None:
-    """Ollamaにロードされているモデルを解放する"""
+def _normalize_management_url(management_endpoint: str) -> str:
     if management_endpoint.endswith("/v1") or management_endpoint.endswith("/v1/"):
         logger.warning("Passed a /v1 endpoint to unload_ollama_models. Assuming management endpoint by stripping /v1")
-        base_url = management_endpoint.rsplit("/v1", 1)[0]
-    else:
-        base_url = management_endpoint
+        return management_endpoint.rsplit("/v1", 1)[0].rstrip('/')
+    return management_endpoint.rstrip('/')
 
-    ps_url = f"{base_url.rstrip('/')}/api/ps"
-    gen_url = f"{base_url.rstrip('/')}/api/generate"
+
+def _list_loaded_models(base_url: str) -> list[str]:
+    ps_url = f"{base_url}/api/ps"
+    req = urllib.request.urlopen(ps_url, timeout=2)
+    if req.getcode() == 200:
+        data = json.loads(req.read().decode('utf-8'))
+        return [m.get("name") for m in data.get("models", []) if m.get("name")]
+    return []
+
+
+def _unload_model(base_url: str, model_name: str) -> None:
+    gen_url = f"{base_url}/api/generate"
+    logger.info(f"Unloading Ollama model: {model_name}")
+    unload_req = urllib.request.Request(
+        gen_url,
+        data=json.dumps({"model": model_name, "keep_alive": 0}).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+    urllib.request.urlopen(unload_req, timeout=5)
+
+
+def _wait_until_unloaded(base_url: str, timeout: float = 10.0) -> None:
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if not _list_loaded_models(base_url):
+            return
+        time.sleep(1)
+    raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
+
+
+def unload_ollama_models(management_endpoint: str) -> None:
+    """Ollamaにロードされているモデルを解放する"""
+    base_url = _normalize_management_url(management_endpoint)
+    ps_url = f"{base_url}/api/ps"
 
     try:
-        # ps api で現在ロードされているモデルを取得
-        req = urllib.request.urlopen(ps_url, timeout=2)
-        if req.getcode() == 200:
-            data = json.loads(req.read().decode('utf-8'))
-            models = data.get("models", [])
-            for m in models:
-                model_name = m.get("name")
-                if model_name:
-                    logger.info(f"Unloading Ollama model: {model_name}")
-                    unload_req = urllib.request.Request(
-                        gen_url,
-                        data=json.dumps({"model": model_name, "keep_alive": 0}).encode('utf-8'),
-                        headers={'Content-Type': 'application/json'}
-                    )
-                    urllib.request.urlopen(unload_req, timeout=5)
+        loaded_models = _list_loaded_models(base_url)
+        for model_name in loaded_models:
+            _unload_model(base_url, model_name)
 
-            # Verify unloading
-            start_time = time.time()
-            while time.time() - start_time < 10:
-                req = urllib.request.urlopen(ps_url, timeout=2)
-                if req.getcode() == 200:
-                    data = json.loads(req.read().decode('utf-8'))
-                    if not data.get("models"):
-                        return
-                time.sleep(1)
-            raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
+        if loaded_models:
+            _wait_until_unloaded(base_url)
 
     except urllib.error.URLError as e:
         logger.warning(
@@ -148,8 +158,9 @@ class OllamaBackendAdapter:
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
 
         endpoint = self.profile.openai_endpoint
+        ollama_base = self.profile.ollama_management_endpoint or endpoint.removesuffix("/v1").removesuffix("/v1/")
 
-        with patch_env(OLLAMA_API_BASE=endpoint, OPENAI_API_BASE=endpoint):
+        with patch_env(OLLAMA_API_BASE=ollama_base, OPENAI_API_BASE=endpoint):
             return action(self.profile)
 
 
