@@ -10,6 +10,8 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Generator
 
+from tools.gguf_manager import validate_gguf_exists
+
 logger = logging.getLogger("llama_backend")
 
 @contextmanager
@@ -22,15 +24,24 @@ def managed_llama_server(
 ) -> Generator[subprocess.Popen, None, None]:
     """
     指定されたパラメータで llama-server をバックグラウンド起動し、ブロックを抜ける際に終了(VRAM解放)する。
+    起動前に GGUF モデルファイルの存在確認を実施する。
     """
+    # GGUF モデルファイルの事前検証
+    resolved_model_path = str(validate_gguf_exists(model_path, "main"))
+    resolved_draft_path = str(validate_gguf_exists(draft_model_path, "draft")) if draft_model_path else None
     cmd = [
         executable,
-        "-m", model_path,
-        "--model-draft", draft_model_path,
+        "-m", resolved_model_path,
+    ]
+    if resolved_draft_path:
+        cmd.extend([
+            "--model-draft", resolved_draft_path,
+            "--spec-type", "draft-mtp",
+            "--spec-draft-n-max", "4",
+        ])
+    cmd.extend([
         "-ngl", "99",
         "-ngld", "99",
-        "--spec-type", "draft-mtp",
-        "--spec-draft-n-max", "4",
         "-c", str(ctx_size),
         "-fa", "on",
         "--jinja",
@@ -42,7 +53,7 @@ def managed_llama_server(
         "-b", "4096",
         "-ub", "1280",
         "--port", str(port)
-    ]
+    ])
 
     logger.info(f"Starting llama-server dynamically on port {port}...")
     logger.debug(f"Command: {' '.join(cmd)}")

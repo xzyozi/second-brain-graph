@@ -6,7 +6,7 @@
 | 版数 | Rev.1.0 |
 | 改訂日 | 2026年8月8日 |
 | 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計） |
-| 対象コンポーネント | `tools/backend_coordinator.py`、`tools/llama_backend.py`、`tools/config_loader.py`、`tools/llm_client.py` |
+| 対象コンポーネント | `tools/backend_coordinator.py`、`tools/llama_backend.py`、`tools/gguf_manager.py`、`tools/config_loader.py`、`tools/llm_client.py` |
 | 役割 | LLM プロファイルの検証、Ollama と llama-server の排他制御、GPU リソースのリース管理、OpenAI 互換 API へのリクエスト構成 |
 
 ---
@@ -59,4 +59,17 @@
 
 ### 5.2 各 Backend Adapter の挙動
 * **Ollama Adapter**: action 実行中のみ OpenAI 互換 endpoint と Ollama 管理 endpoint を環境変数へ設定し、終了後に復元する。
-* **llama-server Adapter**: Ollama profile がある場合はロード済みモデルの解放を試み、`managed_llama_server()` 内で action を実行する。Ollama 管理 API が到達不能な場合は VRAM が空いているものとして起動を継続する。
+* **llama-server Adapter**: Ollama profile がある場合はロード済みモデルの解放を試み、`managed_llama_server()` 内で action を実行する。Ollama API 到達不能時は VRAM 解放済みと判定して処理を継続する。
+
+## 6. GGUFモデル管理仕様 (`tools/gguf_manager.py`)
+
+`llama-server` 起動時に読み込む GGUF フォーマットのモデルファイル（`*.gguf`）の配置・パス解決および存在検証を管理する。
+
+### 6.1 配置ディレクトリ規約
+* **正本配置パス**: プロジェクトルート直下の `./models/` (`get_models_dir()`) を標準配置場所とする。
+* **自動ディレクトリルート判定**: `ensure_models_dir()` により `models/` ディレクトリが存在しない場合は自動生成する。
+
+### 6.2 パス解決と存在検証
+* **パス解決 (`resolve_gguf_path`)**: `config/models.json` 内の `model_path` または `draft_model_path` の相対パス・絶対パスをプロジェクトルート基準で一元的に解決する。
+* **存在検証 (`validate_gguf_exists`)**: `managed_llama_server()` のプロセス起動前にモデルファイルおよびドラフトモデルファイルの存在を判定する。存在しない場合は `GgufFileNotFoundError` を送出し、モデルファイルの配置手順を案内するログを出力して安全に早期失敗させる。
+
