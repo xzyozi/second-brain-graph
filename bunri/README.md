@@ -13,11 +13,12 @@
 
 ## 検証
 
-`bunri/` をカレントディレクトリとして、次を実行します。
+`bunri/` をカレントディレクトリとして、最初にローカル環境を同期してから実行します。
 
 ```powershell
-uv run --no-sync python -m pytest
-uv run --no-sync ruff check tools tests
+uv sync --extra dev
+uv run python -m pytest
+uv run ruff check tools tests
 ```
 
 テストでは外部の LLM、Ollama、Aider、llama-server を起動しません。各外部依存は Module の seam でモック化します。
