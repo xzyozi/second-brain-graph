@@ -42,7 +42,7 @@ def managed_llama_server(
                     break
         except (urllib.error.URLError, ConnectionResetError):
             if process.poll() is not None:
-                raise RuntimeError("llama-server failed to start.")
+                raise RuntimeError("llama-server failed to start.") from None
             time.sleep(2)
     else:
         process.terminate()
