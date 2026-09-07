@@ -16,7 +16,7 @@
 `bunri/` をカレントディレクトリとして、次を実行します。
 
 ```powershell
-uv run --no-sync pytest
+uv run --no-sync python -m pytest
 uv run --no-sync ruff check tools tests
 ```
 
