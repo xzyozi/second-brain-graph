@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bunri-modules"
+version = "0.1.0"
+description = "Self-contained LLM orchestration modules"
+requires-python = ">=3.10, <3.14"
+dependencies = [
+    "openai==2.20.0",
+    "pydantic==2.12.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".git", ".venv", "__pycache__", "runtime"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tools"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tools*"]
