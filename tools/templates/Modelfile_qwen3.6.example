@@ -1,0 +1,44 @@
+# ==============================================================================
+# Ollama Modelfile for Qwen-3.6-35B-MoE (Coding Agent Optimized)
+# ==============================================================================
+
+# install command
+# ollama create qwen3.6-35B-A3B-UD-IQ4_XS -f ./Modelfile_Modelfile_qwen3_6_35b-a3b
+
+# 1. ベースとなるGGUFモデルのパスを指定
+FROM ./Qwen3.6-35B-A3B-UD-IQ4_XS.gguf
+
+# 2. ハードウェア・リソース最適化パラメータ
+# エージェントがコードや文脈を十分に読み込めるよう、コンテキストを8Kに設定（メモリ消費とのバランス）
+PARAMETER num_ctx 8192
+
+# システムRAMへのオフロードを考慮し、CPUの物理コア数にスレッドを固定（環境に合わせて6〜8等に調整）
+PARAMETER num_thread 8
+
+# GPUへ割り当てるレイヤー数（12GB VRAM環境では、IQ3_Sなら自動認識または明示指定で約6〜7割をVRAMへ格納）
+# 完全に自動に任せる場合はこの行をコメントアウトしても構いません
+PARAMETER num_gpu 32
+
+# 3. 推論挙動の最適化（コーディング・ツール呼び出しの堅実性を重視）
+# 出力のランダム性を抑え、決定論的で正確なコード生成・JSON出力を促す
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+PARAMETER top_k 20
+
+# 繰り返しペナルティ（コードの無限ループ出力を防止）
+PARAMETER repeat_penalty 1.05
+
+# 4. チャットテンプレートの設定（Qwenシリーズの標準フォーマット）
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}<|im_end|>"""
+
+# 5. システムプロンプト（自律型コーディングエージェントとしての役割定義）
+SYSTEM """You are an expert software engineer and systems architect. 
+Your task is to help the user with precise, highly efficient, and bug-free code.
+When asked to perform file operations, structural log analysis, or tool executions, ensure that your responses conform strictly to the required schema or functional calling format without any conversational filler.
+Always prioritize code portability, utilizing standard libraries or designated robust frameworks.
+"""
