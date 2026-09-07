@@ -4,13 +4,12 @@ import contextlib
 import json
 import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional
-
-from filelock import FileLock, Timeout
+from typing import Any, BinaryIO, Callable, Iterator, Optional
 
 from tools.config_loader import ProfileConfig, get_backend_execution_config
 from tools.llama_backend import managed_llama_server
@@ -39,20 +38,59 @@ class GpuLeaseAdapter:
     def __init__(self, timeout: int = 60) -> None:
         runtime_dir = Path(__file__).resolve().parent.parent / "runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = FileLock(str(runtime_dir / ".gpu_lease.lock"), timeout=timeout)
+        self._lock_path = runtime_dir / ".gpu_lease.lock"
         self._timeout = timeout
+        self._handle: Optional[BinaryIO] = None
 
     def __enter__(self) -> "GpuLeaseAdapter":
-        try:
-            self._lock.acquire()
-        except Timeout as exc:
-            raise TimeoutError(
-                f"Failed to acquire GPU lease within {self._timeout} seconds."
-            ) from exc
-        return self
+        self._handle = self._lock_path.open("a+b")
+        if self._lock_path.stat().st_size == 0:
+            self._handle.write(b"\\0")
+            self._handle.flush()
+        deadline = time.monotonic() + self._timeout
+        while True:
+            try:
+                self._lock()
+                return self
+            except OSError as error:
+                if time.monotonic() >= deadline:
+                    self._handle.close()
+                    self._handle = None
+                    raise TimeoutError(
+                        f"Failed to acquire GPU lease within {self._timeout} seconds."
+                    ) from error
+                time.sleep(0.1)
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        self._lock.release()
+        if self._handle is None:
+            return
+        self._unlock()
+        self._handle.close()
+        self._handle = None
+
+    def _lock(self) -> None:
+        assert self._handle is not None
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock(self) -> None:
+        assert self._handle is not None
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
 
 
 def _normalise_management_url(endpoint: str) -> str:

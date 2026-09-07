@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Self-contained LLM orchestration modules"
 requires-python = ">=3.10, <3.14"
 dependencies = [
-    "filelock==3.20.3",
     "openai==2.20.0",
     "pydantic==2.12.5",
 ]
