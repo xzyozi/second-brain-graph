@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """tests/test_gguf_manager.py - tools/gguf_manager.py の単体テスト."""
 
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
+import pytest
 
 from tools.gguf_manager import (
     GgufFileNotFoundError,

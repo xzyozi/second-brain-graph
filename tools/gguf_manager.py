@@ -3,7 +3,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Union
 
 logger = logging.getLogger("gguf_manager")
 

@@ -5,13 +5,13 @@ SimpleQAなどの標準データセットに基づくエージェント評価・
 モデル/エージェントの正確性 (Correct)、ハルシネーション (Incorrect)、回答拒否 (Abstain) を判定・集計する。
 """
 
+import argparse
 import json
 import logging
-import argparse
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("eval_simpleqa")
@@ -101,7 +101,7 @@ class SimpleQAEvaluator:
 
         # 1. 回答拒否 (Abstain) の判定
         is_abstain = any(kw in response_lower for kw in ABSTAIN_KEYWORDS)
-        
+
         # ターゲットまたは同義語自体が Abstain/不明 を要求している場合
         if allow_abstain or any(kw in target_lower for kw in ABSTAIN_KEYWORDS):
             if is_abstain or target_lower in response_lower or any(a in response_lower for a in aliases_lower):
@@ -149,10 +149,10 @@ class SimpleQAEvaluator:
             if use_llm:
                 prompt = f"以下の質問に簡潔かつ事実に基づき一言または1文で回答してください。\n質問: {problem}\n分からない場合は『分かりません』と回答してください。"
                 logger.info(f"[{idx}/{len(self.data)}] 推論実行中 ({item_id}): {problem}")
-                
+
                 # 1. Ollama API による直接呼出を試行 (最終回答と内部思考を分離)
                 response, reasoning = call_ollama_gemma4(prompt, model_name=model_name)
-                
+
                 # 2. 失敗した場合は AgentClient を試行
                 if response == "分かりません" and agent_client:
                     try:
