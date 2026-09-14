@@ -6,7 +6,7 @@
             "max_tokens": 35000
         },
         "coder": {
-            "description": "Python・コード記述特化モデル",
+            "description": "汎用・コード編集用モデル",
             "temperature": 0.1,
             "max_tokens": 35000
         },
