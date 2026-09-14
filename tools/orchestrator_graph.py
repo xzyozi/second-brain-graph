@@ -543,7 +543,7 @@ def resolve_project_context(
         }
 
 
-class GraphState(TypedDict):
+class GraphState(TypedDict, total=False):
     issue_id: str
     project_key: str
     execution_id: str
@@ -987,7 +987,7 @@ def test_feedback_node(state: GraphState) -> GraphState:
     try:
         from tools.llm_client import call_llm
 
-        test_res = state.get("test_result", {})
+        test_res: Dict[str, Any] = state.get("test_result") or {}
         stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
 
         system_prompt = (
@@ -1009,7 +1009,7 @@ def test_feedback_node(state: GraphState) -> GraphState:
             f"Issue ID: {state['issue_id']}\n"
             f"Target Files: {state.get('target_files', [])}\n"
             f"Test Round: {state.get('test_round', 1)}\n\n"
-            f"--- Implementation Plan ---\n{state.get('impl_plan', '')[:1000]}\n\n"
+            f"--- Implementation Plan ---\n{(state.get('impl_plan') or '')[:1000]}\n\n"
             f"--- Pytest Output Log ---\n{stdout_stderr[:3000]}"
         )
 
@@ -1197,11 +1197,11 @@ def review_node(state: GraphState) -> GraphState:
             unauthorized_files = []
             if active_targets:
                 unauthorized_files = [
-                    c.get("file")
+                    file
                     for c in structured_comments
-                    if c.get("file")
-                    and c.get("file") not in active_targets
-                    and c.get("file") != "N/A"
+                    if isinstance((file := c.get("file")), str)
+                    and file not in active_targets
+                    and file != "N/A"
                 ]
             else:
                 logger.debug("target_files is empty; skipping unauthorized_files validation.")
@@ -1461,7 +1461,9 @@ def escalate_node(state: GraphState) -> GraphState:
             )
 
             analysis_text = (
-                res.get("raw", res.get("content", str(res))) if isinstance(res, dict) else str(res)
+                str(res.get("raw", res.get("content", "")) or "")
+                if isinstance(res, dict)
+                else str(res)
             )
 
             # ワークスペース内にレポートを出力
