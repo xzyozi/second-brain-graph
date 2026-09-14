@@ -10,11 +10,13 @@ logger = logging.getLogger("aider_runner")
 
 class AiderRunError(Exception):
     """Aider 実行時のタイムアウトおよびシステムエラー例外"""
+
     pass
 
 
 class GitDiffError(Exception):
     """Git diff 取得失敗時の例外 (fail-closed 契約)"""
+
     pass
 
 
@@ -24,6 +26,7 @@ def get_default_aider_model() -> str:
     """
     try:
         from tools.config_loader import get_backend_execution_config
+
         config = get_backend_execution_config()
         profile_name = config.routes.get("aider_edit") or config.routes.get("code_edit")
         if profile_name and profile_name in config.profiles:
@@ -43,7 +46,14 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
     """
     try:
         # 新規作成された未追跡ファイル (untracked files) も git diff 対象に含めるため intent-to-add を設定
-        subprocess.run(["git", "add", "-N", "."], cwd=cwd, capture_output=True, text=True, check=False, timeout=30)
+        subprocess.run(
+            ["git", "add", "-N", "."],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
 
         res = subprocess.run(
             ["git", "diff", "HEAD"],
@@ -55,7 +65,11 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
         )
         if res.returncode != 0:
             err_msg = res.stderr.lower()
-            if "bad revision" in err_msg or "ambiguous argument 'head'" in err_msg or "unknown revision" in err_msg:
+            if (
+                "bad revision" in err_msg
+                or "ambiguous argument 'head'" in err_msg
+                or "unknown revision" in err_msg
+            ):
                 # Fallback for initial commit (no HEAD)
                 # Capture both staged and unstaged changes since 'git diff HEAD' is unavailable.
                 diffs = []
@@ -83,7 +97,9 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
 
                 if cached_res.returncode == 0 and unstaged_res.returncode == 0:
                     return "\n".join(diffs)
-            raise GitDiffError(f"git diff command failed with returncode {res.returncode}: {res.stderr}")
+            raise GitDiffError(
+                f"git diff command failed with returncode {res.returncode}: {res.stderr}"
+            )
         return res.stdout
     except Exception as e:
         if isinstance(e, GitDiffError):
@@ -111,6 +127,7 @@ def run_aider(
     if edit_format is None or timeout is None:
         try:
             from tools.config_loader import get_aider_config
+
             aider_cfg = get_aider_config()
             if edit_format is None:
                 edit_format = aider_cfg.edit_format
@@ -143,7 +160,8 @@ def run_aider(
     try:
         cmd = [
             "aider",
-            "--model", model,
+            "--model",
+            model,
             "--no-auto-commits",
             "--yes-always",
             "--no-show-model-warnings",
@@ -171,7 +189,9 @@ def run_aider(
         )
         if result.returncode != 0:
             logger.error(f"Aider failed with exit code {result.returncode}: {result.stderr}")
-            raise AiderRunError(f"Aider process failed with returncode {result.returncode}: {result.stderr}")
+            raise AiderRunError(
+                f"Aider process failed with returncode {result.returncode}: {result.stderr}"
+            )
         return True
     except subprocess.TimeoutExpired as e:
         raise AiderRunError(f"Aider execution timed out after {timeout} seconds") from e

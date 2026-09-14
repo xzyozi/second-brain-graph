@@ -52,6 +52,7 @@ def test_run_aider_custom_model_and_timeout(mock_run: MagicMock) -> None:
 def test_run_aider_timeout_raises_error(mock_run: MagicMock) -> None:
     """Aider 実行タイムアウト時に AiderRunError が発生することを検証する。"""
     import subprocess
+
     mock_run.side_effect = subprocess.TimeoutExpired(cmd="aider", timeout=300)
     with pytest.raises(AiderRunError, match="timed out"):
         run_aider("Fix bug", ["test.py"])
@@ -69,13 +70,16 @@ def test_run_aider_allows_nonexistent_files(mock_run: MagicMock, tmp_path: Path)
 def test_get_default_aider_model() -> None:
     """config/models.json からモデル名を正常取得できることを検証する。"""
     from tools.aider_runner import get_default_aider_model
+
     model = get_default_aider_model()
     assert isinstance(model, str)
     assert len(model) > 0
 
 
 @patch("subprocess.run")
-def test_run_aider_sanitizes_ollama_api_base_v1_suffix(mock_run: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_aider_sanitizes_ollama_api_base_v1_suffix(
+    mock_run: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """OLLAMA_API_BASE に /v1 サフィックスが含まれる場合、自動的に除去されることを検証する。"""
     mock_run.return_value.returncode = 0
     monkeypatch.setenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
