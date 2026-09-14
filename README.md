@@ -15,7 +15,8 @@
 本プロジェクトの標準ディレクトリ構成および各ファイルの役割は以下の通りです。
 
 ```text
-~/second-brain-graph/               # 母�│   ├── design/                     # 各種設計書 (BD, DD, ORCH, ENV, OP, MULTI, PM)
+~/second-brain-graph/               # 母艦
+│   ├── design/                     # 各種設計書 (BD, DD, ORCH, ENV, OP, MULTI, PM)
 │   │   ├── SBOS-BD-002_基本設計書.md
 │   │   ├── SBOS-DD-003_詳細設計書.md
 │   │   ├── SBOS-ORCH-001_オーケストレイト設計書.md
@@ -106,7 +107,7 @@ uv run python tools/orchestrator_graph.py execute --issue-id EC-012
 - **[環境構築仕様書 (SBOS-ENV-001)](docs/design/SBOS-ENV-001_環境構築仕様書.md)**: パッケージ管理および環境変数規定
 - **[運用詳細設計書 (SBOS-OP-001)](docs/design/SBOS-OP-001_運用詳細設計書.md)**: 日次バッチと監査ログ運用
 - **[複数リポジトリ差分設計書 (SBOS-MULTI-001)](docs/design/SBOS-MULTI-001_複数リポジトリ_差分設計書.md)**: 母艦×衛星のGit隔離と中央台帳仕様
-- **[課題・矛盾点一覧 (SBOS-PM-005)](docs/design/SBOS-PM-005_課題矛盾一覧.md)**: 仕様書間の矛盾解消・課題トラッキングマトリクス��メタデータ
+- **[課題・矛盾点一覧 (SBOS-PM-005)](docs/design/SBOS-PM-005_課題矛盾一覧.md)**: 仕様書間の矛盾解消・課題トラッキングマトリクス��メタデータ
 │           ├── project.json        # 衛星識別メタデータ
 │           └── tasks.md            # タスク定義ファイル
 │

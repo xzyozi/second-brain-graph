@@ -42,7 +42,9 @@ jobs:
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
           else
             base_sha="${{ github.event.before }}"
+            head_sha="${{ github.sha }}"
           fi
-          node .github/scripts/validateMermaidMarkdown.mjs --base "$base_sha"
+          node .github/scripts/validateMermaidMarkdown.mjs --base "$base_sha" --head "$head_sha"
