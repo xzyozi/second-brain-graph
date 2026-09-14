@@ -34,6 +34,8 @@ jobs:
 
       - name: Validate changed Mermaid diagrams
         shell: bash
+        env:
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             node .github/scripts/validateMermaidMarkdown.mjs --all
