@@ -74,7 +74,9 @@ class GpuLeaseAdapter:
         if os.name == "nt":
             import msvcrt
 
-            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+            locking = getattr(msvcrt, "locking")
+            nonblocking_lock = getattr(msvcrt, "LK_NBLCK")
+            locking(self._handle.fileno(), nonblocking_lock, 1)
         else:
             import fcntl
 
@@ -86,7 +88,9 @@ class GpuLeaseAdapter:
         if os.name == "nt":
             import msvcrt
 
-            msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            locking = getattr(msvcrt, "locking")
+            unlock = getattr(msvcrt, "LK_UNLCK")
+            locking(self._handle.fileno(), unlock, 1)
         else:
             import fcntl
 
@@ -167,7 +171,7 @@ class LlamaServerBackendAdapter:
             OPENAI_API_BASE=self._profile.openai_endpoint,
             OLLAMA_API_BASE=self._profile.openai_endpoint,
         ):
-            with managed_llama_server(self._profile.model_path, self._profile.port):
+            with managed_llama_server(self._profile.model_path, port=self._profile.port):
                 return action(self._profile)
 
 

@@ -52,7 +52,7 @@ def get_default_model_from_config(root_dir: Path = Path(".")) -> str:
     return "gemma4-12b-it-Q4_K_M:latest"
 
 
-def call_ollama_gemma4(prompt: str, model_name: str = None) -> Tuple[str, str]:
+def call_ollama_gemma4(prompt: str, model_name: Optional[str] = None) -> Tuple[str, str]:
     """Ollama API (http://localhost:11434/api/generate) を使用して推論を行い、(最終回答, 内部思考/Reasoning) のタプルを返す"""
     if not model_name:
         model_name = get_default_model_from_config()
@@ -102,7 +102,7 @@ class SimpleQAEvaluator:
         self.data = json.loads(self.dataset_path.read_text(encoding="utf-8"))
 
     def evaluate_response(
-        self, target: str, response: str, allow_abstain: bool = False, aliases: List[str] = None
+        self, target: str, response: str, allow_abstain: bool = False, aliases: Optional[List[str]] = None
     ) -> str:
         """
         モデルのレスポンスを評価し、'correct', 'incorrect', 'abstain' のいずれかを返す。
@@ -136,10 +136,10 @@ class SimpleQAEvaluator:
 
     def run_eval(
         self,
-        mock_responses: Dict[str, str] = None,
+        mock_responses: Optional[Dict[str, str]] = None,
         use_llm: bool = False,
         agent_name: str = "coder",
-        model_name: str = None,
+        model_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         全問題に対して評価を実行する。
@@ -221,7 +221,7 @@ class SimpleQAEvaluator:
         }
         return summary
 
-    def print_report(self, summary: Dict[str, Any], verbose: bool = False):
+    def print_report(self, summary: Dict[str, Any], verbose: bool = False) -> None:
         print("\n========================================")
         print(" SimpleQA Evaluation Summary Report")
         print("========================================")
@@ -262,7 +262,7 @@ class SimpleQAEvaluator:
 
     def save_eval_history(
         self, summary: Dict[str, Any], model_name: str, output_path: Optional[Path] = None
-    ):
+    ) -> None:
         """評価結果ログを JSON ファイルに保存・追加記録する"""
         from datetime import datetime
 
@@ -305,7 +305,7 @@ class SimpleQAEvaluator:
             logger.error(f"評価ログの保存に失敗しました: {e}")
 
 
-def main():
+def main() -> None:
     default_model = get_default_model_from_config()
     parser = argparse.ArgumentParser(description="SimpleQA データセット評価スクリプト")
     parser.add_argument(

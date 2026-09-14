@@ -2,6 +2,7 @@
 """tools.build_modelfileの単体テスト。"""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -16,7 +17,9 @@ def _prepare_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pa
     return gguf_path
 
 
-def test_build_modelfile_uses_project_root_and_logical_name(monkeypatch, tmp_path):
+def test_build_modelfile_uses_project_root_and_logical_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     gguf_path = _prepare_project_root(monkeypatch, tmp_path)
 
     result = build_modelfile.build_modelfile(
@@ -31,7 +34,9 @@ def test_build_modelfile_uses_project_root_and_logical_name(monkeypatch, tmp_pat
     assert "# Registered name: local/qwen3:coder" in content
 
 
-def test_missing_gguf_requires_explicit_preparation_mode(monkeypatch, tmp_path):
+def test_missing_gguf_requires_explicit_preparation_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(build_modelfile, "PROJECT_ROOT", tmp_path)
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match="was not found"):
@@ -49,7 +54,9 @@ def test_missing_gguf_requires_explicit_preparation_mode(monkeypatch, tmp_path):
     assert "FROM ../../models/future.gguf" in result.output_path.read_text(encoding="utf-8")
 
 
-def test_gguf_extension_is_required_even_in_preparation_mode(monkeypatch, tmp_path):
+def test_gguf_extension_is_required_even_in_preparation_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(build_modelfile, "PROJECT_ROOT", tmp_path)
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match=".gguf extension"):
@@ -62,7 +69,9 @@ def test_gguf_extension_is_required_even_in_preparation_mode(monkeypatch, tmp_pa
         )
 
 
-def test_existing_modelfile_requires_force(monkeypatch, tmp_path):
+def test_existing_modelfile_requires_force(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
     build_modelfile.build_modelfile("models/example.gguf", "qwen3", "coder", template="qwen")
 
@@ -87,7 +96,9 @@ def test_existing_modelfile_requires_force(monkeypatch, tmp_path):
         ({"repeat_penalty": 0.0}, "repeat_penalty"),
     ],
 )
-def test_parameter_ranges_are_validated(monkeypatch, tmp_path, kwargs, message):
+def test_parameter_ranges_are_validated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kwargs: dict[str, Any], message: str
+) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match=message):
@@ -96,7 +107,9 @@ def test_parameter_ranges_are_validated(monkeypatch, tmp_path, kwargs, message):
         )
 
 
-def test_num_gpu_auto_omits_parameter(monkeypatch, tmp_path):
+def test_num_gpu_auto_omits_parameter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
 
     result = build_modelfile.build_modelfile(
@@ -106,7 +119,9 @@ def test_num_gpu_auto_omits_parameter(monkeypatch, tmp_path):
     assert "PARAMETER num_gpu" not in result.output_path.read_text(encoding="utf-8")
 
 
-def test_system_prompt_file_is_included(monkeypatch, tmp_path):
+def test_system_prompt_file_is_included(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
     prompt_path = tmp_path / "prompt.txt"
     prompt_path.write_text("Use concise answers.", encoding="utf-8", newline="\n")
@@ -122,7 +137,9 @@ def test_system_prompt_file_is_included(monkeypatch, tmp_path):
     assert 'SYSTEM """Use concise answers."""' in result.output_path.read_text(encoding="utf-8")
 
 
-def test_system_prompt_file_rejects_modelfile_delimiter(monkeypatch, tmp_path):
+def test_system_prompt_file_rejects_modelfile_delimiter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
     prompt_path = tmp_path / "prompt.txt"
     prompt_path.write_text('bad """ delimiter', encoding="utf-8", newline="\n")
@@ -137,12 +154,14 @@ def test_system_prompt_file_rejects_modelfile_delimiter(monkeypatch, tmp_path):
         )
 
 
-def test_template_must_be_explicit_in_cli():
+def test_template_must_be_explicit_in_cli() -> None:
     with pytest.raises(SystemExit):
         build_modelfile.parse_args(["--gguf-path", "models/example.gguf", "--model-name", "qwen3"])
 
 
-def test_invalid_model_name_is_rejected(monkeypatch, tmp_path):
+def test_invalid_model_name_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match="model_name"):

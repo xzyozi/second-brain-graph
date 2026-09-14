@@ -3,7 +3,7 @@
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Annotated, Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,9 +30,9 @@ class ProfileConfig(BaseModel):
     backend: Literal["ollama", "llama_server"]
     model: str = Field(min_length=1)
     openai_endpoint: str = Field(min_length=1, pattern=r"^https?://")
-    ollama_management_endpoint: Optional[str] = Field(None, pattern=r"^https?://")
-    port: Optional[int] = Field(None, ge=1, le=65535)
-    model_path: Optional[str] = Field(None, min_length=1)
+    ollama_management_endpoint: Annotated[Optional[str], Field(pattern=r"^https?://")] = None
+    port: Annotated[Optional[int], Field(ge=1, le=65535)] = None
+    model_path: Annotated[Optional[str], Field(min_length=1)] = None
 
     @model_validator(mode="after")
     def check_backend_fields(self) -> "ProfileConfig":
@@ -55,7 +55,7 @@ class BackendExecutionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["exclusive"]
     fallback: str = Field(min_length=1)
-    gpu_lease_timeout: int = Field(120, ge=1)
+    gpu_lease_timeout: Annotated[int, Field(ge=1)] = 120
     routes: Dict[str, str]
     profiles: Dict[str, ProfileConfig]
 

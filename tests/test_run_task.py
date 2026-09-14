@@ -10,7 +10,13 @@ def test_clean_satellite_repository_executes_git_commands() -> None:
     """clean_satellite_repository が git checkout, git reset, git clean を正しい順番で実行することを検証する。"""
     executed_cmds = []
 
-    def mock_run(cmd, cwd=None, text=True, capture_output=True, check=True):
+    def mock_run(
+        cmd: list[str],
+        cwd: str | None = None,
+        text: bool = True,
+        capture_output: bool = True,
+        check: bool = True,
+    ) -> MagicMock:
         executed_cmds.append(" ".join(cmd))
         return MagicMock(returncode=0, stdout="", stderr="")
 

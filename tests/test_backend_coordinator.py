@@ -13,7 +13,9 @@ from tools.config_loader import BackendExecutionConfig, ProfileConfig
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
 @patch("tools.backend_coordinator.GpuLeaseAdapter")
-def test_coordinator_routing_ollama(mock_gpu_lease_class, mock_get_config):
+def test_coordinator_routing_ollama(
+    mock_gpu_lease_class: MagicMock, mock_get_config: MagicMock
+) -> None:
     # Mock config to route 'aider_edit' to ollama
     mock_get_config.return_value = BackendExecutionConfig(
         mode="exclusive",
@@ -60,7 +62,9 @@ def test_coordinator_routing_ollama(mock_gpu_lease_class, mock_get_config):
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
 @patch("tools.backend_coordinator.GpuLeaseAdapter")
-def test_coordinator_routing_llama_server(mock_gpu_lease_class, mock_get_config):
+def test_coordinator_routing_llama_server(
+    mock_gpu_lease_class: MagicMock, mock_get_config: MagicMock
+) -> None:
     # Mock config to route 'spec_draft' to llama_server
     mock_get_config.return_value = BackendExecutionConfig(
         mode="exclusive",
@@ -107,7 +111,7 @@ def test_coordinator_routing_llama_server(mock_gpu_lease_class, mock_get_config)
 
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
-def test_coordinator_unmapped_intent(mock_get_config):
+def test_coordinator_unmapped_intent(mock_get_config: MagicMock) -> None:
     mock_get_config.return_value = BackendExecutionConfig(
         mode="exclusive",
         fallback="disabled",
@@ -129,7 +133,9 @@ def test_coordinator_unmapped_intent(mock_get_config):
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
 @patch("tools.backend_coordinator.GpuLeaseAdapter")
-def test_coordinator_gpu_lease_timeout(mock_gpu_lease_class, mock_get_config):
+def test_coordinator_gpu_lease_timeout(
+    mock_gpu_lease_class: MagicMock, mock_get_config: MagicMock
+) -> None:
     mock_get_config.return_value = BackendExecutionConfig(
         mode="exclusive",
         fallback="disabled",
@@ -159,8 +165,8 @@ def test_coordinator_gpu_lease_timeout(mock_gpu_lease_class, mock_get_config):
 @patch("tools.backend_coordinator.managed_llama_server")
 @patch("tools.backend_coordinator.patch_env")
 def test_llama_server_adapter_skips_ollama_unload_when_no_ollama_profile(
-    mock_patch_env, mock_managed_llama, mock_unload
-):
+    mock_patch_env: MagicMock, mock_managed_llama: MagicMock, mock_unload: MagicMock
+) -> None:
     mock_managed_llama.return_value.__enter__ = MagicMock()
     mock_managed_llama.return_value.__exit__ = MagicMock()
     mock_patch_env.return_value.__enter__ = MagicMock()
@@ -192,8 +198,8 @@ def test_llama_server_adapter_skips_ollama_unload_when_no_ollama_profile(
 @patch("tools.backend_coordinator.managed_llama_server")
 @patch("tools.backend_coordinator.patch_env")
 def test_llama_server_adapter_ollama_unreachable_fallback(
-    mock_patch_env, mock_managed_llama, mock_urlopen
-):
+    mock_patch_env: MagicMock, mock_managed_llama: MagicMock, mock_urlopen: MagicMock
+) -> None:
     # urlopen raising URLError (simulating Ollama unreachable)
     import urllib.error
 
@@ -238,7 +244,9 @@ def test_llama_server_adapter_ollama_unreachable_fallback(
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
 @patch("tools.backend_coordinator.GpuLeaseAdapter")
-def test_coordinator_passes_gpu_lease_timeout_from_config(mock_gpu_lease_class, mock_get_config):
+def test_coordinator_passes_gpu_lease_timeout_from_config(
+    mock_gpu_lease_class: MagicMock, mock_get_config: MagicMock
+) -> None:
     # Config has custom timeout
     mock_get_config.return_value = BackendExecutionConfig(
         mode="exclusive",

@@ -562,6 +562,7 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
         assert len(res["review_rounds"]) == 1
         assert res["review_rounds"][0]["verdict"] == "changes_requested"
         assert "rdjson" in res
+        assert res["rdjson"] is not None
         assert res["rdjson"]["diagnostics"][0]["message"] == "Syntax error"
 
     # 2. Test LGTM with fresh state
@@ -621,6 +622,7 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
     ):
         res = review_node(state)
         assert res["status"] == "review_lgtm"
+        assert res["reviewdog_result"] is not None
         assert res["reviewdog_result"]["returncode"] == 1
         assert res["reviewdog_result"]["stderr"] == "reviewdog error"
 
@@ -1043,7 +1045,7 @@ def test_lint_node_passes_ignore_e501_flag() -> None:
     """lint_node が ruff check 呼び出し時に --ignore E501 オプションを付与することを検証する。"""
     executed_cmds = []
 
-    def mock_run_cmd(cmd, cwd=None, timeout=300):
+    def mock_run_cmd(cmd: list[str], cwd: str | None = None, timeout: int = 300) -> MagicMock:
         executed_cmds.append(" ".join(cmd))
         return MagicMock(returncode=0, stdout="", stderr="")
 

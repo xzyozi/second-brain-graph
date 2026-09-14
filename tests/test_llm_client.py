@@ -7,7 +7,7 @@ from tools.config_loader import get_model_params
 from tools.llm_client import call_llm
 
 
-def test_get_model_params():
+def test_get_model_params() -> None:
     planner_params = get_model_params("planner")
     assert planner_params["max_tokens"] == 35000
     assert planner_params["temperature"] == 0.2
@@ -19,7 +19,9 @@ def test_get_model_params():
 @patch("tools.llm_client.OpenAI")
 @patch("tools.llm_client.get_coordinator")
 @patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
-def test_call_llm_with_dynamic_params(mock_get_coordinator, mock_openai_class):
+def test_call_llm_with_dynamic_params(
+    mock_get_coordinator: MagicMock, mock_openai_class: MagicMock
+) -> None:
     mock_coordinator = MagicMock()
     from tools.config_loader import ProfileConfig
 
@@ -52,7 +54,9 @@ def test_call_llm_with_dynamic_params(mock_get_coordinator, mock_openai_class):
 @patch("tools.llm_client.OpenAI")
 @patch("tools.llm_client.get_coordinator")
 @patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
-def test_call_llm_fallback_intent(mock_get_coordinator, mock_openai_class):
+def test_call_llm_fallback_intent(
+    mock_get_coordinator: MagicMock, mock_openai_class: MagicMock
+) -> None:
     mock_coordinator = MagicMock()
     from tools.config_loader import ProfileConfig
 

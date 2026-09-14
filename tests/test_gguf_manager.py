@@ -16,33 +16,33 @@ from tools.gguf_manager import (
 )
 
 
-def test_get_models_dir():
+def test_get_models_dir() -> None:
     models_dir = get_models_dir()
     assert isinstance(models_dir, Path)
     assert models_dir.name == "models"
 
 
-def test_ensure_models_dir(tmp_path):
+def test_ensure_models_dir(tmp_path: Path) -> None:
     with patch("tools.gguf_manager.get_models_dir", return_value=tmp_path / "models"):
         res = ensure_models_dir()
         assert res.exists()
         assert res.is_dir()
 
 
-def test_resolve_gguf_path_relative():
+def test_resolve_gguf_path_relative() -> None:
     rel_path = "models/sample.gguf"
     resolved = resolve_gguf_path(rel_path)
     assert resolved.is_absolute()
     assert resolved.name == "sample.gguf"
 
 
-def test_resolve_gguf_path_absolute(tmp_path):
+def test_resolve_gguf_path_absolute(tmp_path: Path) -> None:
     abs_file = tmp_path / "sample.gguf"
     resolved = resolve_gguf_path(abs_file)
     assert resolved == abs_file
 
 
-def test_validate_gguf_exists_success(tmp_path):
+def test_validate_gguf_exists_success(tmp_path: Path) -> None:
     dummy_gguf = tmp_path / "test_model.gguf"
     dummy_gguf.touch()
 
@@ -50,14 +50,14 @@ def test_validate_gguf_exists_success(tmp_path):
     assert resolved == dummy_gguf
 
 
-def test_validate_gguf_exists_not_found(tmp_path):
+def test_validate_gguf_exists_not_found(tmp_path: Path) -> None:
     non_existent = tmp_path / "non_existent.gguf"
     with pytest.raises(GgufFileNotFoundError) as exc_info:
         validate_gguf_exists(non_existent, "main")
     assert "not found at" in str(exc_info.value)
 
 
-def test_list_gguf_models(tmp_path):
+def test_list_gguf_models(tmp_path: Path) -> None:
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     (models_dir / "b_model.gguf").touch()
