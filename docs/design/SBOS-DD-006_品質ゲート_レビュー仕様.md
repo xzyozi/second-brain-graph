@@ -1,47 +1,72 @@
 # 詳細設計書（品質ゲート・レビュー仕様）
 
-| 項目 | 内容 |
-| --- | --- |
-| 文書名 | Second Brain OS - 品質ゲートおよびレビュー制御仕様 |
-| 版数 | Rev.1.0 |
-| 改訂日 | 2026年8月8日 |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計） |
-| 対象コンポーネント | `lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node`、`reviewdog` |
-| 役割 | コード生成後の静的解析、自動テスト、LLMによるコードレビュー、およびRDJSONフォーマットへの変換とエスカレーション処理 |
+| 項目               | 内容                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| 文書名             | Second Brain OS - 品質ゲートおよびレビュー仕様                                        |
+| 版数               | Rev.2.0（言語非依存の品質ゲート化・CI連携方針追記）                                   |
+| 改訂日             | 2026年9月14日                                                                         |
+| 関連文書           | [SBOS-DD-003](SBOS-DD-003_詳細設計書.md)、[SBOS-DD-004](SBOS-DD-004_Aider統合仕様.md) |
+| 対象コンポーネント | `metadata/projects/<PROJECT_KEY>/project.json`、`tools/orchestrator_graph.py`         |
 
 ---
 
 ## 1. 概要と基本方針
 
-本仕様は、Aider等によるコード生成の直後に実行される「品質検証ループ」を定義する。
-品質検証ループは、Ruffによるフォーマットと構文チェック、pytestによる自動テスト、そしてLLM（Reviewer）による静的コードレビューの3段階で構成される。
+品質検証は、実装言語・テストフレームワーク・パッケージマネージャーをオーケストレーターに埋め込まない。各衛星プロジェクトが `project.json` に宣言する品質ゲートを実行し、失敗出力を Aider の修正ループへ返す。
 
-## 2. 品質 Adapter (`lint_node` / `run_pytest_node`)
+母艦の GitHub Actions は母艦自身の CI であり、衛星 PR の CI 結果を現在のグラフへ取り込む機能は未実装である。CI 結果の監視、失敗ログ取得、再修正・再評価は、後続の CI Adapter 実装で追加する。ローカル品質ゲートと外部 CI を混同して成功扱いにしてはならない。
 
-### 2.1 Ruff 実行仕様
-* **実行内容**: 
-  1. `ruff format` 
-  2. `ruff check --fix --unsafe-fixes --ignore E501` 
-  3. 最終チェックとして `ruff check --ignore E501` を実行する。
-* **副作用・失敗契約**: 
-  * lintは単なる検査専用ではなく、対象ファイルを直接自動修正する（`--unsafe-fixes`）。
-  * 最終チェックが非ゼロ終了となった場合、`LINT_ERROR` として扱い、`lint_round` を加算する。最大回数（3回）を超えると `FAILED_B7` にエスカレーションされる。
+## 2. プロジェクト宣言型品質ゲート
 
-### 2.2 pytest 実行仕様
-* **実行内容**: 
-  * 関連テスト、または `tests/test_*.py` を `python -m pytest --json-report` で実行する。
-  * `ui` や `gui` を含む名前のフォールバックテストは実行対象から除外する。
-* **副作用・失敗契約**: 
-  * JSONレポートは `.report.json` に一時保存され、処理終了時に `finally` ブロックで確実に削除される。
-  * テストが失敗した場合、`TEST_ERROR` として `test_round` を加算し、最大回数（3回）を超えると `FAILED_B7` にエスカレーションされる。
+### 2.1 設定契約
 
-### 2.3 テスト助言 (`test_feedback_node`)
-* **実行内容**: テストが失敗した場合、`test_feedback` intentを用いてPlanner LLMに失敗ログを渡し、修正のための助言を生成させる。
-* **副作用・失敗契約**: 助言生成自体がLLMエラー等で失敗した場合でも、テスト失敗の事実（rawテスト出力）は維持し、そのまま修正ループ（`retry_code`）へ継続させる。
+`metadata/projects/<PROJECT_KEY>/project.json` の `quality_gates` に任意のゲートを定義する。各ゲートは shell 文字列ではなく、`subprocess` に渡す引数配列とする。
 
-## 3. Review Adapter (`review_node` / Reviewdog)
+```json
+{
+  "quality_gates": {
+    "lint": {
+      "command": ["<package-manager>", "run", "lint"],
+      "timeout": 300
+    },
+    "test": {
+      "command": ["<package-manager>", "run", "test"],
+      "timeout": 300
+    }
+  }
+}
+```
 
-### 3.1 LLM レビュー仕様
+| 項目      | 制約                      | 意味                                                                                |
+| --------- | ------------------------- | ----------------------------------------------------------------------------------- |
+| ゲート名  | 任意の文字列              | `lint` と `test` は現行グラフが呼び出す標準名。追加名は将来のノードで利用する。     |
+| `command` | 空でない文字列配列        | 衛星リポジトリの `cwd` で直接実行するコマンド。シェル展開・連結文字列は許可しない。 |
+| `timeout` | 1 以上の整数、既定 300 秒 | コマンドごとの停止上限。                                                            |
+
+設定が不正なら `resolve_project_context()` は衛星を無効として安全停止する。標準ゲートが未宣言の場合、現行実装は後方互換のためスキップして成功状態へ遷移する。新規衛星では `lint` と `test` の明示を推奨する。
+
+### 2.2 実行・再試行契約
+
+`execute_quality_gate()` は、宣言済みのコマンドを衛星の `cwd` で実行する。成功時は `<gate>_passed`、失敗時は `<GATE>_ERROR` を記録し、`<gate>_round` を加算する。標準出力または標準エラーは `aider_message` に正規化して保存し、`max_round` 未満では `retry_code` により Aider へ戻す。上限到達時は `FAILED_B7`、実行例外は `FAILED_SYSTEM` とする。
+
+`lint_node` は `lint`、互換名を維持する `run_pytest_node` は `test` の品質ゲートを実行する。後者は pytest 専用ではない。`test_feedback_node` は `test_result` の出力を Planner に渡すが、言語・テストフレームワーク・ディレクトリ構成を仮定しない。
+
+## 3. CI フィードバックループ（後続実装の設計方針）
+
+PR 作成後は、ローカル品質ゲートを通過していても CI の完了を待ち、必須チェックの結果で判定する。CI 失敗はコード・設定・ワークフローのいずれに起因するかを区別し、修正可能な失敗だけを Aider の再編集へ戻す。
+
+1. PR URL と対象リポジトリを明示的に確定する。母艦 CI と衛星 PR CI を同一視しない。
+2. 必須チェックを監視し、成功・失敗・キャンセル・タイムアウトを正規化する。
+3. 失敗時は対象チェックのログだけを取得し、認証情報を除去してサイズを制限した要約を作る。
+4. コードまたはプロジェクト設定で解消可能な失敗は `aider_message` に渡して再編集・再 push・再監視する。
+5. CI 定義自体の不具合が疑われる場合は、ワークフローと設定を検証対象に含める。ただし必須チェックの無効化、権限昇格、秘密情報の出力は行わない。
+6. 取得不能、最大試行超過、または人間判断が必要な失敗は、PR とログ要約を保持して明示的に停止する。
+
+この Adapter は、ユーザーが明示した PR URL を対象に CI 結果を取得・修正・再監視する `github-pr-ci-fixer` と同等の安全境界を持つ。実装時には `CI_PENDING`、`CI_PASSED`、`CI_FAILED`、`CI_UNAVAILABLE` などを `PR_FAILED` と別の状態として定義し、DD-003 の状態遷移・永続化・統合テストを同時に更新する。
+
+## 4. Review Adapter (`review_node` / Reviewdog)
+
+### 4.1 LLM レビュー仕様
 * **実行内容**: `review_node` は `implementation_plan` と現在の Git diff を Reviewer LLM に渡し、判定（`LGTM` または `changes_requested`）およびコメント配列を要求する。
 * **コメントの構造化**: 
   * LLMからのコメントは `file`、`line`、`message`、`severity` を補完して構造化される。
@@ -50,11 +75,11 @@
   * severityが `structural`、`major`、`error` 等の重大な指摘、または対象外ファイルへの指摘がある場合は、その内容を Aider への次回のフィードバック指示（`aider_message`）に優先的に追加する。
   * 修正要求（`changes_requested`）は最大3回まで `retry_code` で Aider に差し戻される。
 
-### 3.2 Reviewdog によるアノテーション
+### 4.2 Reviewdog によるアノテーション
 * **実行内容**: 構造化されたLLMレビューコメントを RDJSON 形式に変換し、それを標準入力で渡して `reviewdog -f=rdjson -diff="git diff HEAD"` を実行する。
 * **副作用・失敗契約**: Reviewdogは補助的な表示機能（CLIやPR上のコメント用）であり、Reviewdog自体の非ゼロ終了や実行例外はログに記録するが、LLMレビュー結果（`review_verdict`）を無効化・中断させることはない。
 
-## 4. エスカレーション (`escalate_node`)
+## 5. エスカレーション (`escalate_node`)
 
 lint または test が上限回数に到達し修正不可能な場合、`escalate_node` が呼び出される。
 * **敗因レポートの生成**: 失敗原因とログを含む敗因レポート（`FAILURE_REPORT_<ISSUE_ID>.md`）の生成を試みる。
