@@ -69,9 +69,7 @@ def test_gguf_extension_is_required_even_in_preparation_mode(
         )
 
 
-def test_existing_modelfile_requires_force(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_existing_modelfile_requires_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
     build_modelfile.build_modelfile("models/example.gguf", "qwen3", "coder", template="qwen")
 
@@ -107,9 +105,7 @@ def test_parameter_ranges_are_validated(
         )
 
 
-def test_num_gpu_auto_omits_parameter(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_num_gpu_auto_omits_parameter(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
 
     result = build_modelfile.build_modelfile(
@@ -119,9 +115,7 @@ def test_num_gpu_auto_omits_parameter(
     assert "PARAMETER num_gpu" not in result.output_path.read_text(encoding="utf-8")
 
 
-def test_system_prompt_file_is_included(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_system_prompt_file_is_included(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
     prompt_path = tmp_path / "prompt.txt"
     prompt_path.write_text("Use concise answers.", encoding="utf-8", newline="\n")
@@ -159,9 +153,7 @@ def test_template_must_be_explicit_in_cli() -> None:
         build_modelfile.parse_args(["--gguf-path", "models/example.gguf", "--model-name", "qwen3"])
 
 
-def test_invalid_model_name_is_rejected(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_invalid_model_name_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _prepare_project_root(monkeypatch, tmp_path)
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match="model_name"):

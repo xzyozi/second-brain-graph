@@ -102,7 +102,11 @@ class SimpleQAEvaluator:
         self.data = json.loads(self.dataset_path.read_text(encoding="utf-8"))
 
     def evaluate_response(
-        self, target: str, response: str, allow_abstain: bool = False, aliases: Optional[List[str]] = None
+        self,
+        target: str,
+        response: str,
+        allow_abstain: bool = False,
+        aliases: Optional[List[str]] = None,
     ) -> str:
         """
         モデルのレスポンスを評価し、'correct', 'incorrect', 'abstain' のいずれかを返す。
