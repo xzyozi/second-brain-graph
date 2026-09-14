@@ -4,6 +4,12 @@
   "base_branch": "develop",
   "created_at": "2026-07-30T21:58:00Z",
   "description": "Office/Text files grep search engine validation sub-project",
+  "language": "python",
+  "automation": {
+    "quality_gates_enabled": true,
+    "ci_enabled": false,
+    "ci_auto_fix": false
+  },
   "quality_gates": {
     "lint": {
       "command": [

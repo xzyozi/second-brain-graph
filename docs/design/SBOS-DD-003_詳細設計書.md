@@ -4,7 +4,7 @@
 | 項目     | 内容                                                                                                  |
 | :------- | :---------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                                                           |
-| 版数     | Rev.6.1（宣言型品質ゲート・対象探索の実装追随版）                                                     |
+| 版数     | Rev.6.2（言語ラベル・automationフラグの実装追随版）                                                   |
 | 改訂日   | 2026年9月14日                                                                                         |
 | 作成日   | 2026年7月28日                                                                                         |
 | 実装正本 | `tools/`、`config/models.json`、`metadata/.project-registry.json`、`metadata/projects/<PROJECT_KEY>/` |
@@ -96,12 +96,12 @@ LLM 関連設定の検証、Pydantic スキーマ、および intent に基づ�
 
 `GraphState` は LangGraph 内部の共有状態であり、外部永続化スキーマではない。
 
-| 区分           | フィールド                                                                                                                    |
-| :------------- | :---------------------------------------------------------------------------------------------------------------------------- |
-| 識別・文脈     | `issue_id`、`project_key`、`execution_id`、`generation`、`cwd`、`base_branch`、`target_files`、`quality_gates`、`instruction` |
-| 制御・失敗     | `status`、`error`、`error_category`、`llm_timeout_count`、`<gate>_round`、`review_round`、`max_round`                         |
-| 生成・品質結果 | `impl_plan`、`aider_message`、`test_feedback_instruction`、`<gate>_result`、`review_verdict`、`review_comments`               |
-| 監査結果       | `review_rounds`、`rdjson`、`reviewdog_result`、`history_summary`                                                              |
+| 区分           | フィールド                                                                                                                                              |
+| :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 識別・文脈     | `issue_id`、`project_key`、`execution_id`、`generation`、`cwd`、`base_branch`、`language`、`automation`、`target_files`、`quality_gates`、`instruction` |
+| 制御・失敗     | `status`、`error`、`error_category`、`llm_timeout_count`、`<gate>_round`、`review_round`、`max_round`                                                   |
+| 生成・品質結果 | `impl_plan`、`aider_message`、`test_feedback_instruction`、`<gate>_result`、`review_verdict`、`review_comments`                                         |
+| 監査結果       | `review_rounds`、`rdjson`、`reviewdog_result`、`history_summary`                                                                                        |
 
 初期状態は `status='running'`、各 round と `llm_timeout_count` は 0、`max_round` は 3 とする。`TypedDict` は実行時検証を行わないため、各 node は存在しない任意値を `get()` または `setdefault()` で扱う。
 

@@ -3,7 +3,7 @@
 | 項目               | 内容                                                                                  |
 | ------------------ | ------------------------------------------------------------------------------------- |
 | 文書名             | Second Brain OS - 品質ゲートおよびレビュー仕様                                        |
-| 版数               | Rev.2.0（言語非依存の品質ゲート化・CI連携方針追記）                                   |
+| 版数               | Rev.2.1（Node.js・Rustプロファイルとautomationフラグ追記）                            |
 | 改訂日             | 2026年9月14日                                                                         |
 | 関連文書           | [SBOS-DD-003](SBOS-DD-003_詳細設計書.md)、[SBOS-DD-004](SBOS-DD-004_Aider統合仕様.md) |
 | 対象コンポーネント | `metadata/projects/<PROJECT_KEY>/project.json`、`tools/orchestrator_graph.py`         |
@@ -24,28 +24,51 @@
 
 ```json
 {
+  "language": "nodejs",
+  "automation": {
+    "quality_gates_enabled": true,
+    "ci_enabled": true,
+    "ci_auto_fix": false
+  },
   "quality_gates": {
     "lint": {
       "command": ["<package-manager>", "run", "lint"],
       "timeout": 300
     },
     "test": {
-      "command": ["<package-manager>", "run", "test"],
+      "commands": [
+        ["<package-manager>", "run", "test"],
+        ["<package-manager>", "run", "typecheck"]
+      ],
       "timeout": 300
     }
   }
 }
 ```
 
-| 項目      | 制約                      | 意味                                                                                |
-| --------- | ------------------------- | ----------------------------------------------------------------------------------- |
-| ゲート名  | 任意の文字列              | `lint` と `test` は現行グラフが呼び出す標準名。追加名は将来のノードで利用する。     |
-| `command` | 空でない文字列配列        | 衛星リポジトリの `cwd` で直接実行するコマンド。シェル展開・連結文字列は許可しない。 |
-| `timeout` | 1 以上の整数、既定 300 秒 | コマンドごとの停止上限。                                                            |
+| 項目                               | 制約                                | 意味                                                                            |
+| ---------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------- |
+| `language`                         | `python`、`nodejs`、`rust`、`other` | プロジェクトの言語ラベル。現在は設定・将来のCI選択に使用し、実行分岐はしない。  |
+| `automation.quality_gates_enabled` | 真偽値、既定 `true`                 | `false` の場合、ローカル品質ゲートを実行せず成功状態へ遷移する。                |
+| `automation.ci_enabled`            | 真偽値、既定 `false`                | PR CI 監視を要求する宣言。CI Adapter 実装まで外部CIを実行・判定しない。         |
+| `automation.ci_auto_fix`           | 真偽値、既定 `false`                | CI 失敗の自動修正を許可する予約フラグ。`ci_enabled: true` が必須。              |
+| ゲート名                           | 任意の文字列                        | `lint` と `test` は現行グラフが呼び出す標準名。追加名は将来のノードで利用する。 |
+| `command`                          | 空でない文字列配列                  | 単一コマンド。衛星の `cwd` で直接実行し、シェル展開・連結文字列は許可しない。   |
+| `commands`                         | 空でない `command` 配列             | 順に実行する複数コマンド。いずれかの失敗で停止する。`command` と併用不可。      |
+| `timeout`                          | 1 以上の整数、既定 300 秒           | ゲート内の各コマンドの停止上限。                                                |
 
 設定が不正なら `resolve_project_context()` は衛星を無効として安全停止する。標準ゲートが未宣言の場合、現行実装は後方互換のためスキップして成功状態へ遷移する。新規衛星では `lint` と `test` の明示を推奨する。
 
-### 2.2 実行・再試行契約
+### 2.2 Node.js / Rust プロファイル
+
+| 言語    | `language` | `lint` の推奨 `commands`                                                                                        | `test` の推奨 `command`               | 前提                                                                                                                    |
+| ------- | ---------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Node.js | `nodejs`   | `[["npm", "run", "lint"]]`                                                                                      | `["npm", "run", "test"]`              | `package.json` に対応する scripts をプロジェクト自身が定義する。pnpm を使う場合はすべてのコマンドを `pnpm` に統一する。 |
+| Rust    | `rust`     | `[["cargo", "fmt", "--check"], ["cargo", "clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]]` | `["cargo", "test", "--all-features"]` | Rust toolchain とプロジェクトの `Cargo.toml` が存在する。                                                               |
+
+これらはオーケストレーターへ言語別ロジックを追加しない宣言例である。実行環境、lockfile、プロジェクト固有の scripts は衛星リポジトリの正本に従う。`ci_enabled` は CI Adapter 実装後にだけ外部CIの監視を開始し、言語ラベルと必須チェックの対応はその Adapter の設定で決定する。
+
+### 2.3 実行・再試行契約
 
 `execute_quality_gate()` は、宣言済みのコマンドを衛星の `cwd` で実行する。成功時は `<gate>_passed`、失敗時は `<GATE>_ERROR` を記録し、`<gate>_round` を加算する。標準出力または標準エラーは `aider_message` に正規化して保存し、`max_round` 未満では `retry_code` により Aider へ戻す。上限到達時は `FAILED_B7`、実行例外は `FAILED_SYSTEM` とする。
 

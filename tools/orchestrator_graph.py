@@ -38,6 +38,12 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelna
 logger = logging.getLogger("orchestrator_graph")
 
 ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
+SUPPORTED_PROJECT_LANGUAGES = frozenset({"python", "nodejs", "rust", "other"})
+DEFAULT_AUTOMATION_FLAGS = {
+    "quality_gates_enabled": True,
+    "ci_enabled": False,
+    "ci_auto_fix": False,
+}
 
 
 class ProcessTimeoutError(Exception):
@@ -419,6 +425,8 @@ def resolve_project_context(
         work_branch_prefix = "sbos/"
         raw_target_files: List[str] = []
         exclude_files: List[str] = []
+        language = "other"
+        automation = DEFAULT_AUTOMATION_FLAGS.copy()
         quality_gates: Dict[str, Dict[str, Any]] = {}
 
         if meta_dir:
@@ -428,6 +436,20 @@ def resolve_project_context(
                     pdata = json.load(pf)
                     base_branch = pdata.get("base_branch", "develop")
                     work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
+                    language = pdata.get("language", "other")
+                    if not isinstance(language, str) or language not in SUPPORTED_PROJECT_LANGUAGES:
+                        supported = ", ".join(sorted(SUPPORTED_PROJECT_LANGUAGES))
+                        raise ValueError(f"language must be one of: {supported}")
+                    configured_automation = pdata.get("automation", {})
+                    if not isinstance(configured_automation, dict):
+                        raise ValueError("automation must be an object")
+                    for flag_name, default_value in DEFAULT_AUTOMATION_FLAGS.items():
+                        value = configured_automation.get(flag_name, default_value)
+                        if not isinstance(value, bool):
+                            raise ValueError(f"automation.{flag_name} must be a boolean")
+                        automation[flag_name] = value
+                    if automation["ci_auto_fix"] and not automation["ci_enabled"]:
+                        raise ValueError("automation.ci_auto_fix requires automation.ci_enabled")
                     if (
                         "target_files" in pdata
                         and isinstance(pdata["target_files"], list)
@@ -443,18 +465,32 @@ def resolve_project_context(
                         if not isinstance(gate_config, dict):
                             raise ValueError(f"quality gate '{gate_name}' must be an object")
                         command = gate_config.get("command")
-                        if not isinstance(command, list) or not command or not all(
-                            isinstance(part, str) and part for part in command
+                        commands = gate_config.get("commands")
+                        if command is not None and commands is not None:
+                            raise ValueError(
+                                f"quality gate '{gate_name}' cannot define both command and commands"
+                            )
+                        if command is not None:
+                            commands = [command]
+                        if not isinstance(commands, list) or not commands:
+                            raise ValueError(
+                                f"quality gate '{gate_name}' requires command or commands"
+                            )
+                        if not all(
+                            isinstance(item, list)
+                            and item
+                            and all(isinstance(part, str) and part for part in item)
+                            for item in commands
                         ):
                             raise ValueError(
-                                f"quality gate '{gate_name}' requires a non-empty command array"
+                                f"quality gate '{gate_name}' commands must be non-empty command arrays"
                             )
                         timeout = gate_config.get("timeout", 300)
                         if not isinstance(timeout, int) or timeout < 1:
                             raise ValueError(
                                 f"quality gate '{gate_name}' timeout must be a positive integer"
                             )
-                        quality_gates[gate_name] = {"command": command, "timeout": timeout}
+                        quality_gates[gate_name] = {"commands": commands, "timeout": timeout}
 
             if not raw_target_files:
                 tasks_md = project_root / meta_dir / "tasks.md"
@@ -482,6 +518,8 @@ def resolve_project_context(
                 "target_files": [],
                 "base_branch": base_branch,
                 "work_branch_prefix": work_branch_prefix,
+                "language": language,
+                "automation": automation,
                 "quality_gates": quality_gates,
                 "valid": False,
             }
@@ -491,6 +529,8 @@ def resolve_project_context(
             "target_files": valid_target_files,
             "base_branch": base_branch,
             "work_branch_prefix": work_branch_prefix,
+            "language": language,
+            "automation": automation,
             "quality_gates": quality_gates,
             "valid": True,
         }
@@ -522,6 +562,8 @@ class GraphState(TypedDict, total=False):
     instruction: str
     cwd: Optional[str]
     base_branch: str
+    language: str
+    automation: Dict[str, bool]
     quality_gates: Dict[str, Dict[str, Any]]
     aider_message: str
     test_feedback_instruction: Optional[str]
@@ -652,36 +694,59 @@ def code_node(state: GraphState) -> GraphState:
 
 
 def execute_quality_gate(state: GraphState, gate_name: str) -> GraphState:
-    """Execute a project-declared quality gate without assuming a language or framework."""
+    """Execute project-declared commands without assuming a language or framework."""
+    automation = state.get("automation") or DEFAULT_AUTOMATION_FLAGS
+    if not automation.get("quality_gates_enabled", True):
+        logger.info("Quality gates are disabled for this project; skipping %s.", gate_name)
+        state["status"] = f"{gate_name}_passed"
+        return state
+
     gate = (state.get("quality_gates") or {}).get(gate_name)
     if gate is None:
         logger.info("No %s quality gate is configured; skipping it.", gate_name)
         state["status"] = f"{gate_name}_passed"
         return state
 
-    command = gate.get("command")
+    commands = gate.get("commands")
+    if commands is None and gate.get("command") is not None:
+        commands = [gate["command"]]
     timeout = gate.get("timeout", 300)
-    if not isinstance(command, list) or not command or not all(isinstance(part, str) for part in command):
+    if (
+        not isinstance(commands, list)
+        or not commands
+        or not all(
+            isinstance(command, list)
+            and command
+            and all(isinstance(part, str) for part in command)
+            for command in commands
+        )
+    ):
         state["status"] = "FAILED_SYSTEM"
         state["error_category"] = "SYSTEM_ERROR"
-        state["error"] = f"Invalid {gate_name} quality gate command"
+        state["error"] = f"Invalid {gate_name} quality gate commands"
         return state
 
     try:
-        result = run_cmd(command, cwd=state.get("cwd"), timeout=timeout)
+        results = []
+        for command in commands:
+            result = run_cmd(command, cwd=state.get("cwd"), timeout=timeout)
+            results.append(result)
+            if result.returncode != 0:
+                break
+        final_result = results[-1]
         state[f"{gate_name}_result"] = {
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "returncode": final_result.returncode,
+            "stdout": final_result.stdout,
+            "stderr": final_result.stderr,
         }
-        if result.returncode == 0:
+        if final_result.returncode == 0:
             state["status"] = f"{gate_name}_passed"
             return state
 
         round_key = f"{gate_name}_round"
         state[round_key] = state.get(round_key, 0) + 1
         state["error_category"] = f"{gate_name.upper()}_ERROR"
-        output = result.stdout or result.stderr
+        output = final_result.stdout or final_result.stderr
         state["aider_message"] = (
             f"Configured {gate_name} quality gate failed (round {state[round_key]}):\n{output}\n\n"
             "Review the complete command output, identify the root cause, and make the smallest "
@@ -1244,6 +1309,8 @@ def execute_issue(
         target_files = ctx.get("target_files", [])
         base_branch = ctx.get("base_branch", "develop")
         work_branch_prefix = ctx.get("work_branch_prefix", "sbos/")
+        language = ctx.get("language", "other")
+        automation = ctx.get("automation", DEFAULT_AUTOMATION_FLAGS)
         quality_gates = ctx.get("quality_gates", {})
         is_valid = ctx.get("valid", False)
 
@@ -1653,6 +1720,8 @@ def execute_issue(
                 instruction=instruction_text,
                 cwd=cwd,
                 base_branch=base_branch,
+                language=language,
+                automation=automation,
                 quality_gates=quality_gates,
                 aider_message="",
                 impl_plan=None,
