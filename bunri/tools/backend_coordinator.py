@@ -130,9 +130,7 @@ class OllamaBackendAdapter:
         action: Optional[Callable[[ProfileConfig], Any]] = request.get("action")
         if action is None:
             raise ValueError("OllamaBackendAdapter requires an 'action' callable.")
-        management_endpoint = (
-            self._profile.ollama_management_endpoint or self._profile.openai_endpoint
-        )
+        management_endpoint = self._profile.ollama_management_endpoint or self._profile.openai_endpoint
         with patch_env(
             OLLAMA_API_BASE=_normalise_management_url(management_endpoint),
             OPENAI_API_BASE=self._profile.openai_endpoint,
@@ -181,9 +179,7 @@ class BackendExecutionCoordinator:
     def execute(self, intent: str, request: dict[str, Any]) -> Any:
         profile_name = self._config.routes.get(intent)
         if not profile_name:
-            raise ValueError(
-                f"No route mapped for intent '{intent}'. Explicit routing is required."
-            )
+            raise ValueError(f"No route mapped for intent '{intent}'. Explicit routing is required.")
         profile = self._config.profiles.get(profile_name)
         if profile is None:
             raise ValueError(f"Profile '{profile_name}' is not defined in backend profiles.")

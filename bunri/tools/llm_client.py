@@ -57,18 +57,14 @@ def call_llm(
         # Coordinator Adapter sets OPENAI_API_BASE / OLLAMA_API_BASE
         api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("OLLAMA_API_BASE")
         if not api_base:
-            raise ValueError(
-                f"Endpoint (api_base) is not set by Coordinator for intent '{intent}'."
-            )
+            raise ValueError(f"Endpoint (api_base) is not set by Coordinator for intent '{intent}'.")
 
         # Load dynamic model parameters from config/models.json (PM-007, PM-011 SSOT)
         role_params = get_model_params(role)
 
         model_name = profile.model
         if not model_name:
-            raise ValueError(
-                f"Profile provided by Coordinator is missing 'model' for intent '{intent}'."
-            )
+            raise ValueError(f"Profile provided by Coordinator is missing 'model' for intent '{intent}'.")
 
         temperature = role_params.get("temperature")
         if temperature is None:
@@ -113,7 +109,7 @@ def call_llm(
         except json.JSONDecodeError:
             pass
 
-        start_idx = raw_output.find("{")
+        start_idx = raw_output.find('{')
         if start_idx != -1:
             try:
                 decoder = json.JSONDecoder()
@@ -126,11 +122,7 @@ def call_llm(
                     "raw": raw_output,
                 }
             except json.JSONDecodeError as e:
-                return {
-                    "verdict": "changes_requested",
-                    "comment": f"JSONパースエラー: {e}",
-                    "raw": raw_output,
-                }
+                return {"verdict": "changes_requested", "comment": f"JSONパースエラー: {e}", "raw": raw_output}
 
         return {"verdict": "changes_requested", "comment": "JSON抽出失敗", "raw": raw_output}
 

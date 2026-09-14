@@ -259,13 +259,11 @@ Register-ScheduledTask -TaskName "SecondBrainDailyScoring" -Action $Action -Trig
 ```python
 #!/usr/bin/env python3
 """Second Brain OS (Rev.4.3) 環境健全性診断スクリプト"""
-
 import os
 import sys
 import subprocess
 import urllib.request
 import json
-
 
 def print_result(check_name: str, passed: bool, msg: str = ""):
     icon = "✓" if passed else "✗"
@@ -274,17 +272,12 @@ def print_result(check_name: str, passed: bool, msg: str = ""):
     if not passed:
         sys.exit(1)
 
-
 def main():
     print("=== Second Brain OS Full Environment Diagnostic ===")
 
     # 1. Python バージョンチェック
     py_ver = sys.version_info
-    print_result(
-        "Python Version >= 3.10",
-        py_ver.major == 3 and py_ver.minor >= 10,
-        f"{py_ver.major}.{py_ver.minor}",
-    )
+    print_result("Python Version >= 3.10", py_ver.major == 3 and py_ver.minor >= 10, f"{py_ver.major}.{py_ver.minor}")
 
     # 2. Ollama API アクセスチェック
     try:
@@ -295,12 +288,7 @@ def main():
         print_result("Ollama API Server Running", False, str(e))
 
     # 3. 新OSSスタック (Aider, Reviewdog, Ruff, Pytest) コマンドチェック
-    for tool, cmd_flag in [
-        ("aider", "--version"),
-        ("reviewdog", "-version"),
-        ("ruff", "--version"),
-        ("pytest", "--version"),
-    ]:
+    for tool, cmd_flag in [("aider", "--version"), ("reviewdog", "-version"), ("ruff", "--version"), ("pytest", "--version")]:
         try:
             out = subprocess.check_output([tool, cmd_flag], stderr=subprocess.STDOUT, text=True)
             print_result(f"Tool '{tool}' Available", True, out.splitlines()[0].strip())
@@ -312,10 +300,7 @@ def main():
         import langgraph
         import litellm
         import pytest_jsonreport
-
-        print_result(
-            "Python OSS Packages (LangGraph, LiteLLM, etc.)", True, "Imported successfully"
-        )
+        print_result("Python OSS Packages (LangGraph, LiteLLM, etc.)", True, "Imported successfully")
     except ImportError as e:
         print_result("Python OSS Packages", False, f"ImportError: {e}")
 
@@ -324,7 +309,6 @@ def main():
     print_result("Project Registry File Exists", os.path.exists(reg_path), reg_path)
 
     print("=== All Diagnostics Passed Successfully! ===")
-
 
 if __name__ == "__main__":
     main()
