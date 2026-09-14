@@ -168,7 +168,7 @@ def parse_tasks_file(text: str, project_key: str, project_name: str) -> list[dic
     return issues
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Issue スコアリング（Layer 2 / Step 1）")
     parser.add_argument("--roadmap", default="roadmap.md")
     parser.add_argument("--out",     default="tools/.cache/priority-cache.json")

@@ -10,7 +10,10 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Generator
 
+from tools.gguf_manager import validate_gguf_exists
+
 logger = logging.getLogger("llama_backend")
+
 
 @contextmanager
 def managed_llama_server(
@@ -18,41 +21,68 @@ def managed_llama_server(
     draft_model_path: str = "./models/mtp-gemma-4-12B-it.gguf",
     port: int = 8080,
     ctx_size: int = 131072,
-    executable: str = "llama-server.exe"
+    executable: str = "llama-server.exe",
 ) -> Generator[subprocess.Popen, None, None]:
     """
     指定されたパラメータで llama-server をバックグラウンド起動し、ブロックを抜ける際に終了(VRAM解放)する。
+    起動前に GGUF モデルファイルの存在確認を実施する。
     """
+    # GGUF モデルファイルの事前検証
+    resolved_model_path = str(validate_gguf_exists(model_path, "main"))
+    resolved_draft_path = (
+        str(validate_gguf_exists(draft_model_path, "draft")) if draft_model_path else None
+    )
     cmd = [
         executable,
-        "-m", model_path,
-        "--model-draft", draft_model_path,
-        "-ngl", "99",
-        "-ngld", "99",
-        "--spec-type", "draft-mtp",
-        "--spec-draft-n-max", "4",
-        "-c", str(ctx_size),
-        "-fa", "on",
-        "--jinja",
-        "-np", "1",
-        "-ctk", "q8_0",
-        "-ctv", "q8_0",
-        "-ctkd", "f16",
-        "-ctvd", "f16",
-        "-b", "4096",
-        "-ub", "1280",
-        "--port", str(port)
+        "-m",
+        resolved_model_path,
     ]
+    if resolved_draft_path:
+        cmd.extend(
+            [
+                "--model-draft",
+                resolved_draft_path,
+                "--spec-type",
+                "draft-mtp",
+                "--spec-draft-n-max",
+                "4",
+            ]
+        )
+    cmd.extend(
+        [
+            "-ngl",
+            "99",
+            "-ngld",
+            "99",
+            "-c",
+            str(ctx_size),
+            "-fa",
+            "on",
+            "--jinja",
+            "-np",
+            "1",
+            "-ctk",
+            "q8_0",
+            "-ctv",
+            "q8_0",
+            "-ctkd",
+            "f16",
+            "-ctvd",
+            "f16",
+            "-b",
+            "4096",
+            "-ub",
+            "1280",
+            "--port",
+            str(port),
+        ]
+    )
 
     logger.info(f"Starting llama-server dynamically on port {port}...")
     logger.debug(f"Command: {' '.join(cmd)}")
 
     # サーバープロセスの起動 (標準出力・エラー出力は親プロセスに流すか捨てる)
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+    process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # サーバーがリクエストを受け付けられるまでポーリング待機
     health_url = f"http://localhost:{port}/health"
@@ -71,7 +101,9 @@ def managed_llama_server(
 
         # プロセスが予期せず落ちていないか確認
         if process.poll() is not None:
-            logger.error(f"llama-server terminated unexpectedly with exit code {process.returncode}")
+            logger.error(
+                f"llama-server terminated unexpectedly with exit code {process.returncode}"
+            )
             raise RuntimeError("llama-server failed to start.")
 
         time.sleep(2)
@@ -99,7 +131,7 @@ def managed_llama_server(
         port_freed = False
         for _ in range(10):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                result = s.connect_ex(('127.0.0.1', port))
+                result = s.connect_ex(("127.0.0.1", port))
                 if result != 0:
                     port_freed = True
                     break
@@ -109,4 +141,3 @@ def managed_llama_server(
             raise RuntimeError(f"llama-server failed to free port {port} after termination.")
 
         logger.info("VRAM has been completely freed.")
-

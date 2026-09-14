@@ -12,6 +12,7 @@ def _ollama_config() -> BackendExecutionConfig:
     return BackendExecutionConfig(
         mode="exclusive",
         fallback="disabled",
+        gpu_lease_timeout=120,
         routes={"code_edit": "coding"},
         profiles={
             "coding": ProfileConfig(

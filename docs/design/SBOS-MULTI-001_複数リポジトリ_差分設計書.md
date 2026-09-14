@@ -103,6 +103,7 @@ metadata/projects/EC/
 # score-issues.py 概念ロジック（実物実装と整合させたもの。詳細はSBOS-OP-001 §5.1を正とする）
 import os, json
 
+
 def load_registry(root_dir: str) -> dict:
     """metadata/.project-registry.json を読み込む。
     形式: {"version": "1.0", "projects": {"EC": {"dir": "projects/ec-site", "meta": "metadata/projects/EC"}}}"""
@@ -112,6 +113,7 @@ def load_registry(root_dir: str) -> dict:
     with open(reg_path, encoding="utf-8") as f:
         data = json.load(f)
         return data.get("projects", {})
+
 
 all_issues = []
 projects = load_registry(root_dir=".")

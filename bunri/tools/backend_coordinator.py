@@ -74,7 +74,8 @@ class GpuLeaseAdapter:
         if os.name == "nt":
             import msvcrt
 
-            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+            msvcrt_vars = vars(msvcrt)
+            msvcrt_vars["locking"](self._handle.fileno(), msvcrt_vars["LK_NBLCK"], 1)
         else:
             import fcntl
 
@@ -86,7 +87,8 @@ class GpuLeaseAdapter:
         if os.name == "nt":
             import msvcrt
 
-            msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            msvcrt_vars = vars(msvcrt)
+            msvcrt_vars["locking"](self._handle.fileno(), msvcrt_vars["LK_UNLCK"], 1)
         else:
             import fcntl
 
@@ -130,7 +132,9 @@ class OllamaBackendAdapter:
         action: Optional[Callable[[ProfileConfig], Any]] = request.get("action")
         if action is None:
             raise ValueError("OllamaBackendAdapter requires an 'action' callable.")
-        management_endpoint = self._profile.ollama_management_endpoint or self._profile.openai_endpoint
+        management_endpoint = (
+            self._profile.ollama_management_endpoint or self._profile.openai_endpoint
+        )
         with patch_env(
             OLLAMA_API_BASE=_normalise_management_url(management_endpoint),
             OPENAI_API_BASE=self._profile.openai_endpoint,
@@ -165,7 +169,7 @@ class LlamaServerBackendAdapter:
             OPENAI_API_BASE=self._profile.openai_endpoint,
             OLLAMA_API_BASE=self._profile.openai_endpoint,
         ):
-            with managed_llama_server(self._profile.model_path, self._profile.port):
+            with managed_llama_server(self._profile.model_path, port=self._profile.port):
                 return action(self._profile)
 
 
@@ -179,7 +183,9 @@ class BackendExecutionCoordinator:
     def execute(self, intent: str, request: dict[str, Any]) -> Any:
         profile_name = self._config.routes.get(intent)
         if not profile_name:
-            raise ValueError(f"No route mapped for intent '{intent}'. Explicit routing is required.")
+            raise ValueError(
+                f"No route mapped for intent '{intent}'. Explicit routing is required."
+            )
         profile = self._config.profiles.get(profile_name)
         if profile is None:
             raise ValueError(f"Profile '{profile_name}' is not defined in backend profiles.")

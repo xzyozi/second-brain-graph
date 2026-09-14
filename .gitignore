@@ -228,5 +228,10 @@ __marimo__/
 /tmp/
 .aider*
 
+# GGUF models directory
+/models/*
+!/models/.gitkeep
+
+
 
 

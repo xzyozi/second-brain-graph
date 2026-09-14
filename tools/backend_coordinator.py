@@ -19,6 +19,7 @@ from tools.llama_backend import managed_llama_server
 
 logger = logging.getLogger("backend_coordinator")
 
+
 @contextlib.contextmanager
 def patch_env(**env_vars: str) -> Iterator[None]:
     """
@@ -47,6 +48,7 @@ class GpuLeaseAdapter:
     filelock (OSネイティブロック) を用いたリース管理を行う。
     プロセス異常終了時は OS がロックを自動回収するため TOCTOU の心配がない。
     """
+
     def __init__(self, lock_file: str = ".gpu_lease.lock", timeout: int = 60) -> None:
         lock_path = Path(__file__).resolve().parent.parent / "metadata" / lock_file
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,16 +87,18 @@ class GpuLeaseAdapter:
 
 def _normalize_management_url(management_endpoint: str) -> str:
     if management_endpoint.endswith("/v1") or management_endpoint.endswith("/v1/"):
-        logger.warning("Passed a /v1 endpoint to unload_ollama_models. Assuming management endpoint by stripping /v1")
-        return management_endpoint.rsplit("/v1", 1)[0].rstrip('/')
-    return management_endpoint.rstrip('/')
+        logger.warning(
+            "Passed a /v1 endpoint to unload_ollama_models. Assuming management endpoint by stripping /v1"
+        )
+        return management_endpoint.rsplit("/v1", 1)[0].rstrip("/")
+    return management_endpoint.rstrip("/")
 
 
 def _list_loaded_models(base_url: str) -> list[str]:
     ps_url = f"{base_url}/api/ps"
     req = urllib.request.urlopen(ps_url, timeout=2)
     if req.getcode() == 200:
-        data = json.loads(req.read().decode('utf-8'))
+        data = json.loads(req.read().decode("utf-8"))
         return [m.get("name") for m in data.get("models", []) if m.get("name")]
     return []
 
@@ -104,8 +108,8 @@ def _unload_model(base_url: str, model_name: str) -> None:
     logger.info(f"Unloading Ollama model: {model_name}")
     unload_req = urllib.request.Request(
         gen_url,
-        data=json.dumps({"model": model_name, "keep_alive": 0}).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}
+        data=json.dumps({"model": model_name, "keep_alive": 0}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
     )
     urllib.request.urlopen(unload_req, timeout=5)
 
@@ -147,6 +151,7 @@ class OllamaBackendAdapter:
     実行時に OLLAMA_API_BASE を一時的に環境変数としてパッチし、
     タスク終了後に元に戻す（副作用をブロック内に閉じ込める）。
     """
+
     def __init__(self, profile: ProfileConfig) -> None:
         self.profile = profile
 
@@ -158,7 +163,9 @@ class OllamaBackendAdapter:
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
 
         endpoint = self.profile.openai_endpoint
-        ollama_base = self.profile.ollama_management_endpoint or endpoint.removesuffix("/v1").removesuffix("/v1/")
+        ollama_base = self.profile.ollama_management_endpoint or endpoint.removesuffix(
+            "/v1"
+        ).removesuffix("/v1/")
 
         with patch_env(OLLAMA_API_BASE=ollama_base, OPENAI_API_BASE=endpoint):
             return action(self.profile)
@@ -172,6 +179,7 @@ class LlamaServerBackendAdapter:
     実行中は APIエンドポイントを :8080/v1 に一時パッチし、
     タスク終了時には必ずプロセスを終了（VRAM解放）させ、環境変数を復元する。
     """
+
     def __init__(self, profile: ProfileConfig, config: Any) -> None:
         self.profile = profile
         self.config = config
@@ -223,7 +231,9 @@ class BackendExecutionCoordinator:
 
         profile_name = routes.get(intent)
         if not profile_name:
-            raise ValueError(f"No route mapped for intent '{intent}'. Explicit routing is required.")
+            raise ValueError(
+                f"No route mapped for intent '{intent}'. Explicit routing is required."
+            )
 
         profile = profiles.get(profile_name)
         if not profile:
@@ -231,7 +241,9 @@ class BackendExecutionCoordinator:
 
         backend_type = profile.backend
 
-        logger.info(f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})")
+        logger.info(
+            f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})"
+        )
         adapter: Union[LlamaServerBackendAdapter, OllamaBackendAdapter]
         if backend_type == "llama_server":
             adapter = LlamaServerBackendAdapter(profile, self.config)

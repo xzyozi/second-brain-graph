@@ -10,7 +10,13 @@ def test_clean_satellite_repository_executes_git_commands() -> None:
     """clean_satellite_repository が git checkout, git reset, git clean を正しい順番で実行することを検証する。"""
     executed_cmds = []
 
-    def mock_run(cmd, cwd=None, text=True, capture_output=True, check=True):
+    def mock_run(
+        cmd: list[str],
+        cwd: str | None = None,
+        text: bool = True,
+        capture_output: bool = True,
+        check: bool = True,
+    ) -> MagicMock:
         executed_cmds.append(" ".join(cmd))
         return MagicMock(returncode=0, stdout="", stderr="")
 
@@ -33,16 +39,20 @@ def test_run_task_resume_skips_cleanup(tmp_path: Path) -> None:
     sat_dir = project_root / "projects" / "test_file_grep"
     (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
 
-    (meta_tfg / "project.json").write_text('{"key": "TFG", "base_branch": "develop"}', encoding="utf-8")
+    (meta_tfg / "project.json").write_text(
+        '{"key": "TFG", "base_branch": "develop"}', encoding="utf-8"
+    )
     (metadata_dir / ".project-registry.json").write_text(
         '{"projects": {"TFG": {"name": "test_file_grep", "dir": "projects/test_file_grep", "meta": "metadata/projects/TFG"}}}',
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
-    with patch("tools.run_task.clean_satellite_repository") as mock_clean, \
-         patch("tools.run_task.PROJECT_ROOT", project_root), \
-         patch("sys.argv", ["run_task.py", "TFG-0006", "--resume"]), \
-         patch("subprocess.run") as mock_run:
+    with (
+        patch("tools.run_task.clean_satellite_repository") as mock_clean,
+        patch("tools.run_task.PROJECT_ROOT", project_root),
+        patch("sys.argv", ["run_task.py", "TFG-0006", "--resume"]),
+        patch("subprocess.run") as mock_run,
+    ):
         mock_run.return_value = MagicMock(returncode=0)
         try:
             main()
@@ -64,18 +74,22 @@ def test_run_task_main_dry_run(tmp_path: Path) -> None:
     (sat_dir / "src").mkdir(parents=True, exist_ok=True)
     (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
 
-    (meta_tfg / "project.json").write_text('{"key": "TFG", "base_branch": "develop"}', encoding="utf-8")
+    (meta_tfg / "project.json").write_text(
+        '{"key": "TFG", "base_branch": "develop"}', encoding="utf-8"
+    )
     (metadata_dir / ".project-registry.json").write_text(
         '{"projects": {"TFG": {"name": "test_file_grep", "dir": "projects/test_file_grep", "meta": "metadata/projects/TFG"}}}',
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     test_args = ["run_task.py", "TFG-0005", "--dry-run", "--fresh"]
 
-    with patch("sys.argv", test_args), \
-         patch("tools.run_task.PROJECT_ROOT", project_root), \
-         patch("tools.run_task.clean_satellite_repository") as mock_clean, \
-         patch("subprocess.run") as mock_sub_run:
+    with (
+        patch("sys.argv", test_args),
+        patch("tools.run_task.PROJECT_ROOT", project_root),
+        patch("tools.run_task.clean_satellite_repository") as mock_clean,
+        patch("subprocess.run") as mock_sub_run,
+    ):
         main()
         mock_clean.assert_not_called()
         mock_sub_run.assert_not_called()
