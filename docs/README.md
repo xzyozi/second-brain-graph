@@ -11,6 +11,8 @@
   * `TEMPLATE_詳細設計書.md`: モジュール制御・入出力契約・状態遷移用テンプレート
   * `TEMPLATE_データ構造仕様書.md`: データ型・スキーマ・原子置換・排他制御用テンプレート
   * `README.md`: 設計ドキュメントの命名規則・執筆・更新運用ルール
+* **`docs/features/`**: 機能別の利用契約と運用手順
+  * [`ollama_modelfile_profile_management.md`](features/ollama_modelfile_profile_management.md): GGUF向けQwen ModelfileのCLI入力契約・生成手順
 
 ---
 

@@ -76,6 +76,19 @@ uv run python tools/build_modelfile.py `
 
 生成後、内容を確認した上で、表示された `ollama create <登録名> -f <Modelfile>` を利用者が手動実行する。Ollama登録はこのツールの責務ではない。
 
+UTF-8のSYSTEMプロンプトを既定値から置き換える場合:
+
+```powershell
+uv run python tools/build_modelfile.py `
+  --gguf-path .\models\qwen3.gguf `
+  --model-name qwen3 `
+  --role coder `
+  --template qwen `
+  --system-prompt-file .\prompts\qwen3-coder-system.txt
+```
+
+`--system-prompt-file` と `--top-p`、`--top-k` を含む表記済みの全パラメータはCLIから指定できる。既定SYSTEMプロンプト、Qwenテンプレート本文、出力先 `tools/modelfiles/` は、合意済みの固定契約として直接指定しない。
+
 ## 責務分離
 
 | モジュール                       | 責務                                                              |
