@@ -27,6 +27,11 @@ from langgraph.graph import END, StateGraph
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.coder_workflow import (
+    discover_project_files,
+    extract_declared_files,
+    resolve_declared_files,
+)
 
 # ロガー設定
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s: %(message)s")
@@ -357,70 +362,17 @@ def write_event(
 
 
 def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
-    """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
-    target_files: List[str] = []
-    lines = issue_text.splitlines()
-    in_target_section = False
-    for line in lines:
-        stripped = line.strip()
-        if any(h in stripped.lower() for h in ["編集対象ファイル", "target files", "target_files"]):
-            in_target_section = True
-            continue
-        elif in_target_section and (stripped.startswith("## ") or stripped.startswith("# ")):
-            in_target_section = False
-
-        if in_target_section:
-            matches = re.findall(r"[\w/.-]+\.py", stripped)
-            for m in matches:
-                if m not in target_files:
-                    target_files.append(m)
-    return target_files
+    """Extract declared target files without imposing a language or test layout."""
+    return extract_declared_files(issue_text)
 
 
 def resolve_target_files_against_cwd(
     target_files: List[str], cwd: Optional[Path] = None
 ) -> List[str]:
-    """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。"""
+    """Resolve declared target files against any eligible project files."""
     if not cwd or not Path(cwd).exists():
         return target_files
-
-    resolved: List[str] = []
-    cwd_path = Path(cwd)
-    all_repo_files = [
-        str(p.relative_to(cwd_path)).replace("\\", "/")
-        for p in cwd_path.rglob("*.py")
-        if not any(
-            ignored in p.parts
-            for ignored in [".venv", ".git", ".pytest_cache", "__pycache__", ".aider"]
-        )
-    ]
-
-    for tf in target_files:
-        full_p = cwd_path / tf
-        if full_p.exists():
-            if tf not in resolved:
-                resolved.append(tf)
-        else:
-            tf_stem = Path(tf).stem
-            clean_tf_stem = tf_stem.replace("test_", "").strip("_")
-            matched = False
-            for repo_f in all_repo_files:
-                repo_stem = Path(repo_f).stem
-                clean_repo_stem = repo_stem.replace("test_", "").strip("_")
-                if clean_tf_stem and (
-                    clean_tf_stem in clean_repo_stem or clean_repo_stem in clean_tf_stem
-                ):
-                    if repo_f not in resolved:
-                        logger.info(
-                            f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{repo_f}'"
-                        )
-                        resolved.append(repo_f)
-                        matched = True
-                        break
-            if not matched and tf not in resolved:
-                resolved.append(tf)
-
-    return resolved
+    return resolve_declared_files(target_files, Path(cwd))
 
 
 def resolve_project_context(
@@ -467,6 +419,7 @@ def resolve_project_context(
         work_branch_prefix = "sbos/"
         raw_target_files: List[str] = []
         exclude_files: List[str] = []
+        quality_gates: Dict[str, Dict[str, Any]] = {}
 
         if meta_dir:
             project_json = project_root / meta_dir / "project.json"
@@ -483,26 +436,33 @@ def resolve_project_context(
                         raw_target_files.extend(pdata["target_files"])
                     if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
                         exclude_files.extend(pdata["exclude_files"])
+                    configured_gates = pdata.get("quality_gates", {})
+                    if not isinstance(configured_gates, dict):
+                        raise ValueError("quality_gates must be an object")
+                    for gate_name, gate_config in configured_gates.items():
+                        if not isinstance(gate_config, dict):
+                            raise ValueError(f"quality gate '{gate_name}' must be an object")
+                        command = gate_config.get("command")
+                        if not isinstance(command, list) or not command or not all(
+                            isinstance(part, str) and part for part in command
+                        ):
+                            raise ValueError(
+                                f"quality gate '{gate_name}' requires a non-empty command array"
+                            )
+                        timeout = gate_config.get("timeout", 300)
+                        if not isinstance(timeout, int) or timeout < 1:
+                            raise ValueError(
+                                f"quality gate '{gate_name}' timeout must be a positive integer"
+                            )
+                        quality_gates[gate_name] = {"command": command, "timeout": timeout}
 
             if not raw_target_files:
                 tasks_md = project_root / meta_dir / "tasks.md"
                 if tasks_md.exists():
-                    text = tasks_md.read_text(encoding="utf-8")
-                    # tasks.md 内に記述された *.py や src/ パスを動的抽出
-                    matches = re.findall(r"[\w/.-]+\.py", text)
-                    for m in matches:
-                        if m not in raw_target_files:
-                            raw_target_files.append(m)
+                    raw_target_files.extend(extract_declared_files(tasks_md.read_text(encoding="utf-8")))
 
-        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在する Python ファイルを自動検出 (ハードコード排除)
         if not raw_target_files:
-            for py_file in cwd_path.rglob("*.py"):
-                rel_p = str(py_file.relative_to(cwd_path)).replace("\\", "/")
-                if not any(
-                    excluded in rel_p
-                    for excluded in [".venv", "venv", "__pycache__", "build", "dist"]
-                ):
-                    raw_target_files.append(rel_p)
+            raw_target_files.extend(discover_project_files(cwd_path))
 
         # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容) し、除外ファイルを適用
         valid_target_files = []
@@ -522,6 +482,7 @@ def resolve_project_context(
                 "target_files": [],
                 "base_branch": base_branch,
                 "work_branch_prefix": work_branch_prefix,
+                "quality_gates": quality_gates,
                 "valid": False,
             }
 
@@ -530,6 +491,7 @@ def resolve_project_context(
             "target_files": valid_target_files,
             "base_branch": base_branch,
             "work_branch_prefix": work_branch_prefix,
+            "quality_gates": quality_gates,
             "valid": True,
         }
     except Exception as e:
@@ -560,6 +522,7 @@ class GraphState(TypedDict, total=False):
     instruction: str
     cwd: Optional[str]
     base_branch: str
+    quality_gates: Dict[str, Dict[str, Any]]
     aider_message: str
     test_feedback_instruction: Optional[str]
     impl_plan: Optional[str]
@@ -665,7 +628,7 @@ def code_node(state: GraphState) -> GraphState:
                             if " -> " in raw_path:
                                 raw_path = raw_path.split(" -> ")[1].strip()
                             rel_path = raw_path.replace("\\", "/")
-                            if rel_path.endswith(".py") and rel_path not in target_files:
+                            if rel_path not in target_files:
                                 target_files.append(rel_path)
     except AiderRunError as e:
         logger.warning(f"AiderRunError caught in code_node: {e}")
@@ -688,295 +651,66 @@ def code_node(state: GraphState) -> GraphState:
     return state
 
 
-def lint_node(state: GraphState) -> GraphState:
-    """Ruff による静的解析を実行するノード (DD-003 §4)。
-    例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
-    """
-    logger.info("Executing lint_node (Ruff check)")
-    cwd = state.get("cwd")
-    target_files = state.get("target_files", [])
-    try:
-        existing_targets = [
-            tf
-            for tf in target_files
-            if tf.endswith(".py")
-            and cwd
-            and (Path(cwd) / tf).exists()
-            and (Path(cwd) / tf).is_file()
-        ]
-        targets_to_check = (
-            existing_targets
-            if existing_targets
-            else [tf for tf in target_files if tf.endswith(".py")]
-        )
-        if not targets_to_check:
-            state["status"] = "lint_passed"
-            return state
+def execute_quality_gate(state: GraphState, gate_name: str) -> GraphState:
+    """Execute a project-declared quality gate without assuming a language or framework."""
+    gate = (state.get("quality_gates") or {}).get(gate_name)
+    if gate is None:
+        logger.info("No %s quality gate is configured; skipping it.", gate_name)
+        state["status"] = f"{gate_name}_passed"
+        return state
 
-        cmd = [sys.executable, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
-        # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
-        run_cmd([sys.executable, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
-        run_cmd(
-            [sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
-            + targets_to_check,
-            cwd=cwd,
-            timeout=300,
-        )
-        res = run_cmd(cmd, cwd=cwd, timeout=300)
-        state["lint_result"] = {
-            "returncode": res.returncode,
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-        }
-        if res.returncode == 0:
-            state["status"] = "lint_passed"
-        else:
-            state["lint_round"] = state.get("lint_round", 0) + 1
-            state["error_category"] = "LINT_ERROR"
-            logger.warning(
-                f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}"
-            )
-
-            # --- 動的エラー分析・復旧ルール (Lint Recovery Tips) ---
-            combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
-            lint_recovery_tips = []
-
-            # 1. F811 (二重定義・再定義エラー) の柔軟な動的抽出
-            redef_match = re.search(
-                r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output
-            )
-            if not redef_match:
-                redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output)
-
-            if redef_match:
-                groups = redef_match.groups()
-                sym_name = groups[0]
-                orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
-                lint_recovery_tips.append(
-                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition (originally at line {orig_line}).\n"
-                    f"  ACTION REQUIRED:\n"
-                    f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
-                    f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
-                )
-
-            # 2. F821 (未定義変数エラー) の動的抽出
-            undef_match = re.search(r"F821 Undefined name `([^`]+)`", combined_lint_output)
-            if undef_match:
-                undef_name = undef_match.group(1)
-                lint_recovery_tips.append(
-                    f"・UNDEFINED NAME ERROR (F821): `{undef_name}` is used but not defined or imported. "
-                    f"Import or define `{undef_name}` before using it."
-                )
-
-            # フィードバックメッセージの構築
-            dynamic_instructions = ""
-            if lint_recovery_tips:
-                tips_str = "\n".join(lint_recovery_tips)
-                dynamic_instructions = f"【DYNAMIC RECOVERY INSTRUCTIONS】\n{tips_str}\n\n"
-
-            lint_feedback = (
-                f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
-                f"{dynamic_instructions}"
-                "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
-                "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
-                "Follow these general rules:\n"
-                "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
-                "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
-                "3. Redefined/Duplicate symbols: If a function, class, or method is redefined or duplicated, delete the duplicate definition so that exactly one definition remains.\n"
-                "4. Line too long (E501): Split long string literals, URLs, or expressions across multiple lines using parentheses `(...)` or multi-line string concatenation so that every line is strictly under 120 characters.\n"
-                "5. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
-            )
-
-            state["aider_message"] = lint_feedback
-            if state["lint_round"] >= state.get("max_round", 3):
-                state["status"] = "FAILED_B7"
-            else:
-                state["status"] = "retry_code"
-    except Exception as e:
-        logger.error(f"Error running lint: {e}")
+    command = gate.get("command")
+    timeout = gate.get("timeout", 300)
+    if not isinstance(command, list) or not command or not all(isinstance(part, str) for part in command):
         state["status"] = "FAILED_SYSTEM"
         state["error_category"] = "SYSTEM_ERROR"
-        state["error"] = str(e)
+        state["error"] = f"Invalid {gate_name} quality gate command"
+        return state
+
+    try:
+        result = run_cmd(command, cwd=state.get("cwd"), timeout=timeout)
+        state[f"{gate_name}_result"] = {
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+        if result.returncode == 0:
+            state["status"] = f"{gate_name}_passed"
+            return state
+
+        round_key = f"{gate_name}_round"
+        state[round_key] = state.get(round_key, 0) + 1
+        state["error_category"] = f"{gate_name.upper()}_ERROR"
+        output = result.stdout or result.stderr
+        state["aider_message"] = (
+            f"Configured {gate_name} quality gate failed (round {state[round_key]}):\n{output}\n\n"
+            "Review the complete command output, identify the root cause, and make the smallest "
+            "change that restores the project's declared quality gate."
+        )
+        state["status"] = "FAILED_B7" if state[round_key] >= state.get("max_round", 3) else "retry_code"
+    except Exception as exc:
+        logger.error("Error running %s quality gate: %s", gate_name, exc)
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(exc)
     return state
+
+
+def lint_node(state: GraphState) -> GraphState:
+    """Run the project-declared static-analysis quality gate."""
+    return execute_quality_gate(state, "lint")
 
 
 def run_pytest_node(state: GraphState) -> GraphState:
-    """Pytest による単体テストを実行するノード (DD-003 §4)。
-    pytest-json-report を使用してテスト結果を構造化ログとしてパースし Aider へフィードバックする。
-    例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
+    """Run the project-declared test quality gate.
+
+    The public name is retained for graph and caller compatibility.
     """
-    logger.info("Executing test_node (Pytest)")
-    cwd = state.get("cwd")
-    target_files = state.get("target_files", [])
-    report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
-
-    # 対象タスクに関連するテストファイルを特定
-    test_files = [tf for tf in target_files if "test" in Path(tf).name.lower()]
-    if not test_files and cwd:
-        for tf in target_files:
-            stem = Path(tf).stem
-            candidate = f"tests/test_{stem}.py"
-            if candidate not in test_files:
-                test_files.append(candidate)
-
-    # ディスク上に実際に存在するテストファイルのみに絞り込み
-    existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
-
-    # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
-    if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
-        for p in (Path(cwd) / "tests").glob("test_*.py"):
-            if "ui" not in p.name.lower() and "gui" not in p.name.lower():
-                rel_test = str(p.relative_to(cwd)).replace("\\", "/")
-                if rel_test not in existing_test_files:
-                    existing_test_files.append(rel_test)
-
-    cmd_test_files = existing_test_files if existing_test_files else test_files
-
-    try:
-        # pytest-json-report オプションを付加して対象テストファイルを実行
-        cmd = (
-            [sys.executable, "-m", "pytest"]
-            + (cmd_test_files if cmd_test_files else [])
-            + ["--json-report", f"--json-report-file={report_file}"]
-        )
-        res = run_cmd(cmd, cwd=cwd, timeout=300)
-
-        # JSON レポートのパース
-        report_data = None
-        failed_details = []
-        if report_file.exists():
-            try:
-                with open(report_file, "r", encoding="utf-8") as f:
-                    report_data = json.load(f)
-
-                tests = report_data.get("tests", [])
-                for t in tests:
-                    if t.get("outcome") == "failed":
-                        nodeid = t.get("nodeid", "unknown_test")
-                        call_info = t.get("call", {})
-                        setup_info = t.get("setup", {})
-                        teardown_info = t.get("teardown", {})
-                        longrepr = call_info.get("longrepr", "") or setup_info.get("longrepr", "")
-
-                        log_parts = [f"FAILED {nodeid}:\n{longrepr}"]
-                        for sec_name, sec in [
-                            ("setup", setup_info),
-                            ("call", call_info),
-                            ("teardown", teardown_info),
-                        ]:
-                            if isinstance(sec, dict):
-                                if sec.get("stdout"):
-                                    log_parts.append(
-                                        f"--- Captured stdout ({sec_name}) ---\n{sec['stdout']}"
-                                    )
-                                if sec.get("stderr"):
-                                    log_parts.append(
-                                        f"--- Captured stderr ({sec_name}) ---\n{sec['stderr']}"
-                                    )
-
-                                logs = sec.get("log", [])
-                                if isinstance(logs, list):
-                                    for log_entry in logs:
-                                        if isinstance(log_entry, dict) and "message" in log_entry:
-                                            lvl = log_entry.get("levelname", "INFO")
-                                            log_parts.append(
-                                                f"--- Captured log ({lvl}) ---\n{log_entry['message']}"
-                                            )
-
-                        failed_details.append("\n".join(log_parts))
-            except Exception as pe:
-                logger.warning(f"Failed to parse pytest json report: {pe}")
-
-        state["test_result"] = {
-            "returncode": res.returncode,
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-            "report_summary": report_data.get("summary") if report_data else None,
-        }
-
-        if res.returncode == 0:
-            state["status"] = "test_passed"
-        else:
-            state["test_round"] = state.get("test_round", 0) + 1
-            state["error_category"] = "TEST_ERROR"
-            logger.warning(
-                f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}"
-            )
-
-            # --- 汎用的なエラー分析・復旧ルール (フレームワークレベルのエラーのみ対象) ---
-            combined_error_text = f"{res.stdout or ''}\n{res.stderr or ''}\n" + "\n".join(
-                failed_details
-            )
-            recovery_tips = []
-
-            # 同じテストでループしている場合の思考リセット指示 (Hallucination Escape Prompt)
-            if state.get("test_round", 1) >= 2:
-                recovery_tips.append(
-                    "・STUCK LOOP WARNING: You are repeatedly failing the same tests. Your current mental model or hardcoded values are wrong. "
-                    "DO NOT try to guess magic bytes (like 'PK...'). DO NOT guess internal data structures. "
-                    "Rely on robust standard libraries or specific format parsers, and print variables to inspect the actual structures."
-                )
-
-            # 1. Pytest 固有のフィクスチャ誤用
-            fixture_match = re.search(r"fixture '([^']+)' not found", combined_error_text)
-            if fixture_match:
-                missing_fixture = fixture_match.group(1)
-                recovery_tips.append(
-                    f"・FIXTURE ERROR: The fixture '{missing_fixture}' does not exist. "
-                    "Use standard pytest fixture `tmp_path` for temporary directories."
-                )
-
-            # 2. Pytest 固有のテスト文法誤用
-            if "has no attribute 'assertRaises'" in combined_error_text:
-                recovery_tips.append(
-                    "・SYNTAX ERROR: `self.assertRaises` is a unittest method. "
-                    "Use `with pytest.raises(ExpectedException):` in pytest functions."
-                )
-
-            # フィードバックメッセージの構築 (Captured log を注意深く確認する汎用指示)
-            generic_instruction = (
-                "\n\n【IMPORTANT】 Review the failure traceback AND 'Captured log/stdout' above.\n"
-                "The root cause of the error is often buried in the captured logs (e.g. swallowed exceptions, underlying library errors).\n"
-                "Fix the underlying code to handle these edge cases gracefully."
-            )
-
-            if recovery_tips:
-                generic_instruction = (
-                    "\n\n【CRITICAL RECOVERY INSTRUCTIONS】\n"
-                    + "\n".join(recovery_tips)
-                    + generic_instruction
-                )
-
-            if failed_details:
-                formatted_failures = "\n\n".join(failed_details[:5])
-                state["aider_message"] = (
-                    f"Pytest failed with json-report details:\n{formatted_failures}{generic_instruction}"
-                )
-            else:
-                state["aider_message"] = f"Pytest failed:\n{res.stdout}{generic_instruction}"
-
-            if state["test_round"] >= state.get("max_round", 3):
-                state["status"] = "FAILED_B7"
-            else:
-                state["status"] = "retry_code"
-    except Exception as e:
-        logger.error(f"Error running pytest: {e}")
-        state["status"] = "FAILED_SYSTEM"
-        state["error_category"] = "SYSTEM_ERROR"
-        state["error"] = str(e)
-    finally:
-        if report_file.exists():
-            try:
-                report_file.unlink()
-            except Exception:
-                pass
-    return state
+    return execute_quality_gate(state, "test")
 
 
 def test_feedback_node(state: GraphState) -> GraphState:
-    """Pytest 失敗ログとコードを Reasoning LLM (アドバイザー) に分析させ、
-    エラーカテゴリに応じた具体的な修正命令文を生成して state['aider_message'] にセットするノード。
-    """
+    """Analyze a configured test quality-gate failure and feed concise guidance to Aider."""
     logger.info(
         f"Executing test_feedback_node for {state['issue_id']} (Round {state.get('test_round', 1)})"
     )
@@ -991,17 +725,12 @@ def test_feedback_node(state: GraphState) -> GraphState:
         stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
 
         system_prompt = (
-            "You are a Senior Software Architect advising an automated coding agent (Coder).\n"
-            "The Coder failed a Pytest execution. Your task is to analyze the failure traceback and captured logs, "
-            "categorize the root cause, and generate CLEAR, STEP-BY-STEP INSTRUCTIONS for the Coder to fix the issue.\n\n"
-            "Categorize the error into one of the following and tailor your instructions accordingly:\n"
-            "1. ASSERTION_MISMATCH: If test assertions failed (e.g. len(results) == 3 vs 2), analyze whether the test expectation or core implementation logic is wrong. Explicitly tell Coder which one to adjust.\n"
-            "2. DEPENDENCY_OR_IMPORT: If ModuleNotFoundError or ImportError occurred, instruct Coder to fix import paths or remove forbidden external dependencies.\n"
-            "3. TEST_SYNTAX_OR_FIXTURE: If pytest fixtures or syntax failed, instruct Coder to use standard pytest functions.\n"
-            "4. UNHANDLED_EXCEPTION: If I/O or decode exceptions occurred, instruct Coder to add proper try-except error handling.\n"
-            "5. REPEATED_STUCK: If this is a repeated failure, instruct Coder to drop invalid assumptions and rewrite with clean logic.\n\n"
+            "You are a Senior Software Architect advising an automated coding agent.\n"
+            "A project-declared test quality gate failed. Analyze its command output, identify the "
+            "likely root cause, and produce concise, ordered remediation steps.\n\n"
             "Rules:\n"
-            "- Do NOT write full file rewrites. Provide concise, direct action items.\n"
+            "- Do not assume a programming language, test framework, directory layout, or package manager.\n"
+            "- Do not write full file rewrites. Provide the smallest actionable changes.\n"
             "- Provide clear actionable guidance in Japanese."
         )
 
@@ -1010,7 +739,7 @@ def test_feedback_node(state: GraphState) -> GraphState:
             f"Target Files: {state.get('target_files', [])}\n"
             f"Test Round: {state.get('test_round', 1)}\n\n"
             f"--- Implementation Plan ---\n{(state.get('impl_plan') or '')[:1000]}\n\n"
-            f"--- Pytest Output Log ---\n{stdout_stderr[:3000]}"
+            f"--- Quality Gate Output ---\n{stdout_stderr[:3000]}"
         )
 
         res = call_llm(
@@ -1023,9 +752,9 @@ def test_feedback_node(state: GraphState) -> GraphState:
         feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
 
         enhanced_message = (
-            f"【ARCHITECT ADVICE FOR PYTEST FAILURE (Round {state.get('test_round', 1)})】\n"
+            f"【ARCHITECT ADVICE FOR TEST QUALITY GATE (Round {state.get('test_round', 1)})】\n"
             f"{feedback_advice}\n\n"
-            f"【RAW PYTEST OUTPUT】\n"
+            f"【RAW QUALITY GATE OUTPUT】\n"
             f"{stdout_stderr[:1500]}"
         )
 
@@ -1515,6 +1244,7 @@ def execute_issue(
         target_files = ctx.get("target_files", [])
         base_branch = ctx.get("base_branch", "develop")
         work_branch_prefix = ctx.get("work_branch_prefix", "sbos/")
+        quality_gates = ctx.get("quality_gates", {})
         is_valid = ctx.get("valid", False)
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
@@ -1923,6 +1653,7 @@ def execute_issue(
                 instruction=instruction_text,
                 cwd=cwd,
                 base_branch=base_branch,
+                quality_gates=quality_gates,
                 aider_message="",
                 impl_plan=None,
                 lint_result=None,
