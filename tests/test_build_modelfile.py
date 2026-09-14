@@ -35,9 +35,7 @@ def test_missing_gguf_requires_explicit_preparation_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(build_modelfile, "PROJECT_ROOT", tmp_path)
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match="was not found"):
-        build_modelfile.build_modelfile(
-            "models/future.gguf", "qwen3", "coder", template="qwen"
-        )
+        build_modelfile.build_modelfile("models/future.gguf", "qwen3", "coder", template="qwen")
 
     result = build_modelfile.build_modelfile(
         "models/future.gguf",
@@ -69,9 +67,7 @@ def test_existing_modelfile_requires_force(monkeypatch, tmp_path):
     build_modelfile.build_modelfile("models/example.gguf", "qwen3", "coder", template="qwen")
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match="already exists"):
-        build_modelfile.build_modelfile(
-            "models/example.gguf", "qwen3", "coder", template="qwen"
-        )
+        build_modelfile.build_modelfile("models/example.gguf", "qwen3", "coder", template="qwen")
 
     result = build_modelfile.build_modelfile(
         "models/example.gguf", "qwen3", "coder", template="qwen", force=True
@@ -123,13 +119,13 @@ def test_system_prompt_file_is_included(monkeypatch, tmp_path):
         system_prompt_file=prompt_path,
     )
 
-    assert "SYSTEM \"\"\"Use concise answers.\"\"\"" in result.output_path.read_text(encoding="utf-8")
+    assert 'SYSTEM """Use concise answers."""' in result.output_path.read_text(encoding="utf-8")
 
 
 def test_system_prompt_file_rejects_modelfile_delimiter(monkeypatch, tmp_path):
     _prepare_project_root(monkeypatch, tmp_path)
     prompt_path = tmp_path / "prompt.txt"
-    prompt_path.write_text('bad \"\"\" delimiter', encoding="utf-8", newline="\n")
+    prompt_path.write_text('bad """ delimiter', encoding="utf-8", newline="\n")
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match="unsupported"):
         build_modelfile.build_modelfile(
@@ -150,6 +146,4 @@ def test_invalid_model_name_is_rejected(monkeypatch, tmp_path):
     _prepare_project_root(monkeypatch, tmp_path)
 
     with pytest.raises(build_modelfile.ModelfileValidationError, match="model_name"):
-        build_modelfile.build_modelfile(
-            "models/example.gguf", "../qwen3", "coder", template="qwen"
-        )
+        build_modelfile.build_modelfile("models/example.gguf", "../qwen3", "coder", template="qwen")

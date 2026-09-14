@@ -18,10 +18,7 @@ from pathlib import Path
 from typing import List, Optional
 
 # ロガー設定
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(name)s %(levelname)s: %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("run_task")
 
 # プロジェクトルートを sys.path に追加
@@ -34,7 +31,9 @@ from tools.orchestrator_graph import (  # noqa: E402
 )
 
 
-def run_command(cmd: List[str], cwd: Optional[str] = None, check: bool = True) -> subprocess.CompletedProcess:
+def run_command(
+    cmd: List[str], cwd: Optional[str] = None, check: bool = True
+) -> subprocess.CompletedProcess:
     """サブプロセス実行ヘルパー関数"""
     logger.info(f"Running: {' '.join(cmd)} (cwd: {cwd or '.'})")
     return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, check=check)
@@ -48,7 +47,9 @@ def clean_satellite_repository(cwd: str, base_branch: str = "develop") -> None:
     try:
         run_command(["git", "checkout", "-f", base_branch], cwd=cwd)
     except subprocess.CalledProcessError as e:
-        logger.warning(f"Failed to checkout {base_branch}: {e.stderr}. Trying git checkout -f main...")
+        logger.warning(
+            f"Failed to checkout {base_branch}: {e.stderr}. Trying git checkout -f main..."
+        )
         try:
             run_command(["git", "checkout", "-f", "main"], cwd=cwd)
             base_branch = "main"
@@ -155,7 +156,15 @@ def main() -> None:
         logger.info(f"  - git checkout -f {base_branch}")
         logger.info(f"  - git reset --hard origin/{base_branch}")
         logger.info("  - git clean -fd")
-        orch_cmd = [sys.executable, "tools/orchestrator_graph.py", "execute", "--issue-id", target_issue_id, "--project-key", project_key]
+        orch_cmd = [
+            sys.executable,
+            "tools/orchestrator_graph.py",
+            "execute",
+            "--issue-id",
+            target_issue_id,
+            "--project-key",
+            project_key,
+        ]
         if args.fresh:
             orch_cmd.append("--fresh")
         if args.resume:

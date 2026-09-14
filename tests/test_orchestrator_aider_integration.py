@@ -46,21 +46,29 @@ def test_validate_project_consistency_mismatch_and_missing_metadata(tmp_path: Pa
 
     # 1. 0000 rejected
     with pytest.raises(ValueError, match="0001-9999"):
-        validate_project_consistency("EC-0000", "EC", metadata_dir=metadata_dir, project_root=tmp_path)
+        validate_project_consistency(
+            "EC-0000", "EC", metadata_dir=metadata_dir, project_root=tmp_path
+        )
 
     # 2. Issue ID prefix vs project_key mismatch
     with pytest.raises(ValueError, match="Project key mismatch"):
-        validate_project_consistency("EC-0001", "MOB", metadata_dir=metadata_dir, project_root=tmp_path)
+        validate_project_consistency(
+            "EC-0001", "MOB", metadata_dir=metadata_dir, project_root=tmp_path
+        )
 
     # 3. Missing registry
     with pytest.raises(ValueError, match="registry file"):
-        validate_project_consistency("TFG-0004", "TFG", metadata_dir=metadata_dir, project_root=tmp_path)
+        validate_project_consistency(
+            "TFG-0004", "TFG", metadata_dir=metadata_dir, project_root=tmp_path
+        )
 
     # 4. Registry missing project
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.write_text(json.dumps({"projects": {}}), encoding="utf-8")
     with pytest.raises(ValueError, match="is not registered"):
-        validate_project_consistency("TFG-0004", "TFG", metadata_dir=metadata_dir, project_root=tmp_path)
+        validate_project_consistency(
+            "TFG-0004", "TFG", metadata_dir=metadata_dir, project_root=tmp_path
+        )
 
 
 def test_generic_satellite_context_resolution(tmp_path: Path) -> None:
@@ -76,20 +84,24 @@ def test_generic_satellite_context_resolution(tmp_path: Path) -> None:
 
     meta_custom = metadata_dir / "projects" / "CST"
     meta_custom.mkdir(parents=True, exist_ok=True)
-    (meta_custom / "project.json").write_text(json.dumps({"key": "CST", "base_branch": "main"}), encoding="utf-8")
+    (meta_custom / "project.json").write_text(
+        json.dumps({"key": "CST", "base_branch": "main"}), encoding="utf-8"
+    )
 
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.write_text(
-        json.dumps({
-            "projects": {
-                "CST": {
-                    "name": "custom_satellite",
-                    "dir": "projects/custom_satellite",
-                    "meta": "metadata/projects/CST",
+        json.dumps(
+            {
+                "projects": {
+                    "CST": {
+                        "name": "custom_satellite",
+                        "dir": "projects/custom_satellite",
+                        "meta": "metadata/projects/CST",
+                    }
                 }
             }
-        }),
-        encoding="utf-8"
+        ),
+        encoding="utf-8",
     )
 
     ctx = resolve_project_context("CST", metadata_dir=metadata_dir, project_root=project_root)
@@ -131,95 +143,133 @@ def test_done_node_handles_git_failures() -> None:
 
     with patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True):
         # 1. git diff --cached returns non-zero code
-        with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=1, stderr="diff error")):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            return_value=MagicMock(returncode=1, stderr="diff error"),
+        ):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
 
         # 2. git diff --cached non-empty staged changes
-        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
-            MagicMock(returncode=0, stdout="staged_file.py\n"),
-        ]):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            side_effect=[
+                MagicMock(returncode=0, stdout="staged_file.py\n"),
+            ],
+        ):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
             assert "staged changes" in str(res["error"])
 
         # 3. git add returns non-zero code
-        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
-            MagicMock(returncode=0, stdout=""), # diff --cached (first)
-            MagicMock(returncode=1, stderr="add error"), # git add
-        ]):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            side_effect=[
+                MagicMock(returncode=0, stdout=""),  # diff --cached (first)
+                MagicMock(returncode=1, stderr="add error"),  # git add
+            ],
+        ):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
             assert "git add failed" in str(res["error"])
 
         # 4. git status returns non-zero code
-        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
-            MagicMock(returncode=0, stdout=""), # diff --cached (first)
-            MagicMock(returncode=0, stdout=""), # git add
-            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
-            MagicMock(returncode=1, stderr="status error"), # git status
-        ]):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            side_effect=[
+                MagicMock(returncode=0, stdout=""),  # diff --cached (first)
+                MagicMock(returncode=0, stdout=""),  # git add
+                MagicMock(
+                    returncode=0, stdout="src/grep/office_parser.py"
+                ),  # diff --cached (after add)
+                MagicMock(returncode=1, stderr="status error"),  # git status
+            ],
+        ):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
             assert "git status failed" in str(res["error"])
 
         # 5. git commit returns non-zero code
-        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
-            MagicMock(returncode=0, stdout=""), # diff --cached (first)
-            MagicMock(returncode=0, stdout=""), # git add
-            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
-            MagicMock(returncode=0, stdout="M src/grep/office_parser.py\n"), # git status (dirty)
-            MagicMock(returncode=1, stderr="commit error"), # git commit
-        ]):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            side_effect=[
+                MagicMock(returncode=0, stdout=""),  # diff --cached (first)
+                MagicMock(returncode=0, stdout=""),  # git add
+                MagicMock(
+                    returncode=0, stdout="src/grep/office_parser.py"
+                ),  # diff --cached (after add)
+                MagicMock(
+                    returncode=0, stdout="M src/grep/office_parser.py\n"
+                ),  # git status (dirty)
+                MagicMock(returncode=1, stderr="commit error"),  # git commit
+            ],
+        ):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
             assert "git commit failed" in str(res["error"])
 
         # 6. git push returns non-zero code
-        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
-            MagicMock(returncode=0, stdout=""), # diff --cached (first)
-            MagicMock(returncode=0, stdout=""), # git add
-            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
-            MagicMock(returncode=0, stdout="M src/grep/office_parser.py\n"), # git status (dirty)
-            MagicMock(returncode=0, stdout=""), # git commit
-            MagicMock(returncode=0, stdout=""), # git fetch
-            MagicMock(returncode=1, stderr="push error"), # git push
-        ]):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            side_effect=[
+                MagicMock(returncode=0, stdout=""),  # diff --cached (first)
+                MagicMock(returncode=0, stdout=""),  # git add
+                MagicMock(
+                    returncode=0, stdout="src/grep/office_parser.py"
+                ),  # diff --cached (after add)
+                MagicMock(
+                    returncode=0, stdout="M src/grep/office_parser.py\n"
+                ),  # git status (dirty)
+                MagicMock(returncode=0, stdout=""),  # git commit
+                MagicMock(returncode=0, stdout=""),  # git fetch
+                MagicMock(returncode=1, stderr="push error"),  # git push
+            ],
+        ):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
             assert "Git push failed" in str(res["error"])
 
         # 7. gh pr create returns non-zero code (real error, no existing PR found via gh pr list)
-        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
-            MagicMock(returncode=0, stdout=""), # diff --cached (first)
-            MagicMock(returncode=0, stdout=""), # git add
-            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
-            MagicMock(returncode=0, stdout=""), # git status (clean) - skips commit
-            MagicMock(returncode=0, stdout=""), # git fetch
-            MagicMock(returncode=0, stdout=""), # git push
-            MagicMock(returncode=0, stdout="[]"), # gh pr list (no PR exists)
-            MagicMock(returncode=1, stderr="pr create error"), # gh pr create
-        ]):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            side_effect=[
+                MagicMock(returncode=0, stdout=""),  # diff --cached (first)
+                MagicMock(returncode=0, stdout=""),  # git add
+                MagicMock(
+                    returncode=0, stdout="src/grep/office_parser.py"
+                ),  # diff --cached (after add)
+                MagicMock(returncode=0, stdout=""),  # git status (clean) - skips commit
+                MagicMock(returncode=0, stdout=""),  # git fetch
+                MagicMock(returncode=0, stdout=""),  # git push
+                MagicMock(returncode=0, stdout="[]"),  # gh pr list (no PR exists)
+                MagicMock(returncode=1, stderr="pr create error"),  # gh pr create
+            ],
+        ):
             res = done_node(state.copy())
             assert res["status"] == "PR_FAILED"
             assert res["error_category"] == "PR_ERROR"
 
         # 8. gh pr list detects existing PR (structured pre-check)
-        with patch("tools.orchestrator_graph.run_cmd", side_effect=[
-            MagicMock(returncode=0, stdout=""), # diff --cached (first)
-            MagicMock(returncode=0, stdout=""), # git add
-            MagicMock(returncode=0, stdout="src/grep/office_parser.py"), # diff --cached (after add)
-            MagicMock(returncode=0, stdout=""), # git status (clean) - skips commit
-            MagicMock(returncode=0, stdout=""), # git fetch
-            MagicMock(returncode=0, stdout=""), # git push
-            MagicMock(returncode=0, stdout='[{"number": 12}]'), # gh pr list (PR #12 exists!)
-        ]):
+        with patch(
+            "tools.orchestrator_graph.run_cmd",
+            side_effect=[
+                MagicMock(returncode=0, stdout=""),  # diff --cached (first)
+                MagicMock(returncode=0, stdout=""),  # git add
+                MagicMock(
+                    returncode=0, stdout="src/grep/office_parser.py"
+                ),  # diff --cached (after add)
+                MagicMock(returncode=0, stdout=""),  # git status (clean) - skips commit
+                MagicMock(returncode=0, stdout=""),  # git fetch
+                MagicMock(returncode=0, stdout=""),  # git push
+                MagicMock(returncode=0, stdout='[{"number": 12}]'),  # gh pr list (PR #12 exists!)
+            ],
+        ):
             res = done_node(state.copy())
             assert res["status"] == "COMPLETED"
 
@@ -229,7 +279,6 @@ def test_done_node_handles_git_failures() -> None:
         assert res["status"] == "PR_FAILED"
         assert res["error_category"] == "PR_ERROR"
         assert "not in a valid git workspace" in str(res["error"])
-
 
 
 def test_spec_draft_node_timeout_retry() -> None:
@@ -304,7 +353,10 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
         rdjson=None,
     )
 
-    with patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out after 300 seconds")):
+    with patch(
+        "tools.orchestrator_graph.run_aider",
+        side_effect=AiderRunError("Aider execution timed out after 300 seconds"),
+    ):
         # First timeout -> retry
         state_after_first = code_node(initial_state)
         assert state_after_first["llm_timeout_count"] == 1
@@ -349,7 +401,10 @@ def test_code_node_handles_aider_nonzero_exit_as_failed_system() -> None:
         rdjson=None,
     )
 
-    with patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider process failed with returncode 1")):
+    with patch(
+        "tools.orchestrator_graph.run_aider",
+        side_effect=AiderRunError("Aider process failed with returncode 1"),
+    ):
         state_after_failure = code_node(initial_state)
         assert state_after_failure["status"] == "FAILED_SYSTEM"
         assert state_after_failure["error_category"] == "SYSTEM_ERROR"
@@ -401,7 +456,10 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
         assert test_res["error_category"] == "SYSTEM_ERROR"
 
     # Test ProcessTimeoutError
-    with patch("tools.orchestrator_graph.run_cmd", side_effect=ProcessTimeoutError("Command timed out after 300 seconds")):
+    with patch(
+        "tools.orchestrator_graph.run_cmd",
+        side_effect=ProcessTimeoutError("Command timed out after 300 seconds"),
+    ):
         lint_res_timeout = lint_node(state.copy())
         assert lint_res_timeout["status"] == "FAILED_SYSTEM"
         assert lint_res_timeout["error_category"] == "SYSTEM_ERROR"
@@ -442,7 +500,9 @@ def test_review_node_fail_closed_on_git_diff_error() -> None:
         rdjson=None,
     )
 
-    with patch("tools.orchestrator_graph.get_git_diff", side_effect=GitDiffError("git diff failed")):
+    with patch(
+        "tools.orchestrator_graph.get_git_diff", side_effect=GitDiffError("git diff failed")
+    ):
         res = review_node(state)
         assert res["status"] == "FAILED_SYSTEM"
         assert res["error_category"] == "SYSTEM_ERROR"
@@ -482,10 +542,19 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
     # 1. Test changes_requested
     mock_resp = {
         "verdict": "changes_requested",
-        "comments": [{"file": "src/grep/office_parser.py", "line": 10, "message": "Syntax error", "severity": "WARNING"}]
+        "comments": [
+            {
+                "file": "src/grep/office_parser.py",
+                "line": 10,
+                "message": "Syntax error",
+                "severity": "WARNING",
+            }
+        ],
     }
-    with patch("tools.llm_client.call_llm", return_value=mock_resp), \
-         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"):
+    with (
+        patch("tools.llm_client.call_llm", return_value=mock_resp),
+        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
+    ):
         res = review_node(state.copy())
         assert res["status"] == "retry_code"
         assert res["review_round"] == 1
@@ -499,8 +568,10 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
     state_lgtm = state.copy()
     state_lgtm["review_rounds"] = []
     mock_lgtm = {"verdict": "LGTM", "comments": []}
-    with patch("tools.llm_client.call_llm", return_value=mock_lgtm), \
-         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"):
+    with (
+        patch("tools.llm_client.call_llm", return_value=mock_lgtm),
+        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
+    ):
         res_lgtm = review_node(state_lgtm)
         assert res_lgtm["status"] == "review_lgtm"
         assert res_lgtm["review_verdict"] == "LGTM"
@@ -542,10 +613,12 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
     mock_lgtm = {"verdict": "LGTM", "comments": []}
     mock_rd_fail = MagicMock(returncode=1, stdout="", stderr="reviewdog error")
 
-    with patch("tools.llm_client.call_llm", return_value=mock_lgtm), \
-         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"), \
-         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True), \
-         patch("tools.orchestrator_graph.run_cmd", return_value=mock_rd_fail):
+    with (
+        patch("tools.llm_client.call_llm", return_value=mock_lgtm),
+        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
+        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.orchestrator_graph.run_cmd", return_value=mock_rd_fail),
+    ):
         res = review_node(state)
         assert res["status"] == "review_lgtm"
         assert res["reviewdog_result"]["returncode"] == 1
@@ -578,29 +651,40 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     meta_tfg.mkdir(parents=True, exist_ok=True)
     (meta_tfg / "tasks.md").write_text("- [ ] [TFG-0004] office_parser.py test", encoding="utf-8")
     (meta_tfg / "project.json").write_text(
-        json.dumps({"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}),
-        encoding="utf-8"
+        json.dumps(
+            {"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}
+        ),
+        encoding="utf-8",
     )
 
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.write_text(
-        json.dumps({
-            "projects": {
-                "TFG": {
-                    "name": "test_file_grep",
-                    "dir": "projects/test_file_grep",
-                    "meta": "metadata/projects/TFG",
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "test_file_grep",
+                        "dir": "projects/test_file_grep",
+                        "meta": "metadata/projects/TFG",
+                    }
                 }
             }
-        }),
+        ),
         encoding="utf-8",
     )
 
-    with patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire, \
-         patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release, \
-         patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")):
-
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
+    with (
+        patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire,
+        patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release,
+        patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")),
+    ):
+        execute_issue(
+            issue_id,
+            project_key,
+            metadata_dir=metadata_dir,
+            history_file=history_file,
+            project_root=project_root,
+        )
 
         mock_acquire.assert_called_once()
         mock_release.assert_called_once()
@@ -663,11 +747,17 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
     registry_file.parent.mkdir(parents=True, exist_ok=True)
     registry_file.write_text(
         json.dumps({"projects": {"UNK": {"dir": "invalid/dir", "meta": "metadata/projects/UNK"}}}),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     with patch("tools.orchestrator_graph.run_aider") as mock_run_aider:
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=tmp_path)
+        execute_issue(
+            issue_id,
+            project_key,
+            metadata_dir=metadata_dir,
+            history_file=history_file,
+            project_root=tmp_path,
+        )
         mock_run_aider.assert_not_called()
 
     state_file = metadata_dir / "projects" / project_key / "state.json"
@@ -721,7 +811,10 @@ def test_run_pytest_node_json_report_parsing(tmp_path: Path) -> None:
     report_file = tmp_path / ".report.json"
     report_file.write_text(json.dumps(report_content), encoding="utf-8")
 
-    with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=1, stdout="Failed", stderr="")):
+    with patch(
+        "tools.orchestrator_graph.run_cmd",
+        return_value=MagicMock(returncode=1, stdout="Failed", stderr=""),
+    ):
         res = run_pytest_node(state)
         assert res["status"] == "retry_code"
         assert res["error_category"] == "TEST_ERROR"
@@ -746,32 +839,51 @@ def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
     meta_tfg = metadata_dir / "projects" / "TFG"
     meta_tfg.mkdir(parents=True, exist_ok=True)
     (meta_tfg / "project.json").write_text(
-        json.dumps({"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}),
-        encoding="utf-8"
+        json.dumps(
+            {"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}
+        ),
+        encoding="utf-8",
     )
 
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.write_text(
-        json.dumps({"projects": {"TFG": {"name": "test_file_grep", "dir": "projects/test_file_grep", "meta": "metadata/projects/TFG"}}}),
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "test_file_grep",
+                        "dir": "projects/test_file_grep",
+                        "meta": "metadata/projects/TFG",
+                    }
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
     # Simulate git switch head_branch returning 0 (existing branch), but git rebase base_branch returning 1 (rebase conflict)
     cmd_responses = [
-        MagicMock(returncode=0, stdout=""), # git status --porcelain (clean)
-        MagicMock(returncode=0, stdout=""), # git switch develop
-        MagicMock(returncode=0, stdout=""), # git pull --ff-only origin develop
-        MagicMock(returncode=0, stdout=""), # git switch sbos/TFG-0004 (existing branch!)
-        MagicMock(returncode=1, stderr="Rebase conflict"), # git rebase develop (failed!)
-        MagicMock(returncode=0, stdout=""), # git rebase --abort
+        MagicMock(returncode=0, stdout=""),  # git status --porcelain (clean)
+        MagicMock(returncode=0, stdout=""),  # git switch develop
+        MagicMock(returncode=0, stdout=""),  # git pull --ff-only origin develop
+        MagicMock(returncode=0, stdout=""),  # git switch sbos/TFG-0004 (existing branch!)
+        MagicMock(returncode=1, stderr="Rebase conflict"),  # git rebase develop (failed!)
+        MagicMock(returncode=0, stdout=""),  # git rebase --abort
     ]
 
-    with patch.object(ProjectLockManager, "_acquire_lock"), \
-         patch.object(ProjectLockManager, "_release_lock"), \
-         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True), \
-         patch("tools.orchestrator_graph.run_cmd", side_effect=cmd_responses):
-
-        execute_issue(issue_id, project_key, metadata_dir=metadata_dir, history_file=history_file, project_root=project_root)
+    with (
+        patch.object(ProjectLockManager, "_acquire_lock"),
+        patch.object(ProjectLockManager, "_release_lock"),
+        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.orchestrator_graph.run_cmd", side_effect=cmd_responses),
+    ):
+        execute_issue(
+            issue_id,
+            project_key,
+            metadata_dir=metadata_dir,
+            history_file=history_file,
+            project_root=project_root,
+        )
 
     state_file = metadata_dir / "projects" / project_key / "state.json"
     saved_data = json.loads(state_file.read_text(encoding="utf-8"))
@@ -803,7 +915,10 @@ def test_run_pytest_node_nonexistent_candidate_handling(tmp_path: Path) -> None:
         "cwd": str(tmp_path),
         "target_files": ["src/nonexistent.py"],
     }
-    with patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+    with patch(
+        "tools.orchestrator_graph.run_cmd",
+        return_value=MagicMock(returncode=0, stdout="", stderr=""),
+    ):
         res = run_pytest_node(state)
         assert res["status"] == "test_passed"
 
@@ -811,27 +926,47 @@ def test_run_pytest_node_nonexistent_candidate_handling(tmp_path: Path) -> None:
 def test_escalate_node_defensive_classification_fallback() -> None:
     """escalate_node に status 未確定 (running 等) で進入した場合、error_category に基づいて FAILED_B7 / FAILED_SYSTEM へ安全分類されることを検証する。"""
     # 1. LINT_ERROR ➔ FAILED_B7
-    state1: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "LINT_ERROR"}
+    state1: GraphState = {
+        "issue_id": "TFG-0020",
+        "status": "running",
+        "error_category": "LINT_ERROR",
+    }
     res1 = escalate_node(state1)
     assert res1["status"] == "FAILED_B7"
 
     # 2. TEST_ERROR ➔ FAILED_B7
-    state2: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "TEST_ERROR"}
+    state2: GraphState = {
+        "issue_id": "TFG-0020",
+        "status": "running",
+        "error_category": "TEST_ERROR",
+    }
     res2 = escalate_node(state2)
     assert res2["status"] == "FAILED_B7"
 
     # 3. REVIEW_REJECTED ➔ FAILED_B7
-    state3: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "REVIEW_REJECTED"}
+    state3: GraphState = {
+        "issue_id": "TFG-0020",
+        "status": "running",
+        "error_category": "REVIEW_REJECTED",
+    }
     res3 = escalate_node(state3)
     assert res3["status"] == "FAILED_B7"
 
     # 4. SYSTEM_ERROR ➔ FAILED_SYSTEM
-    state4: GraphState = {"issue_id": "TFG-0020", "status": "running", "error_category": "SYSTEM_ERROR"}
+    state4: GraphState = {
+        "issue_id": "TFG-0020",
+        "status": "running",
+        "error_category": "SYSTEM_ERROR",
+    }
     res4 = escalate_node(state4)
     assert res4["status"] == "FAILED_SYSTEM"
 
     # 5. Already determined FAILED_B7 is preserved
-    state5: GraphState = {"issue_id": "TFG-0020", "status": "FAILED_B7", "error_category": "LINT_ERROR"}
+    state5: GraphState = {
+        "issue_id": "TFG-0020",
+        "status": "FAILED_B7",
+        "error_category": "LINT_ERROR",
+    }
     res5 = escalate_node(state5)
     assert res5["status"] == "FAILED_B7"
 
@@ -849,25 +984,31 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
     (sat_dir / "src").mkdir(parents=True, exist_ok=True)
     (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
 
-    (meta_tfg / "project.json").write_text(json.dumps({"key": "TFG", "base_branch": "main"}), encoding="utf-8")
+    (meta_tfg / "project.json").write_text(
+        json.dumps({"key": "TFG", "base_branch": "main"}), encoding="utf-8"
+    )
     (meta_tfg / "state.json").write_text(json.dumps({}), encoding="utf-8")
 
     registry_file = metadata_dir / ".project-registry.json"
     registry_file.write_text(
-        json.dumps({
-            "projects": {
-                "TFG": {
-                    "name": "tfg_sat",
-                    "dir": "projects/tfg_sat",
-                    "meta": "metadata/projects/TFG",
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "tfg_sat",
+                        "dir": "projects/tfg_sat",
+                        "meta": "metadata/projects/TFG",
+                    }
                 }
             }
-        }),
-        encoding="utf-8"
+        ),
+        encoding="utf-8",
     )
 
     issue_md = issues_dir / "TFG-0005.md"
-    issue_md.write_text("# TFG-0005 Special Specification\nDetail specification content", encoding="utf-8")
+    issue_md.write_text(
+        "# TFG-0005 Special Specification\nDetail specification content", encoding="utf-8"
+    )
 
     captured_initial_state = {}
 
@@ -883,11 +1024,19 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
     mock_workflow = MagicMock()
     mock_workflow.compile.return_value = mock_app
 
-    with patch("tools.orchestrator_graph.StateGraph", return_value=mock_workflow), \
-         patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+    with (
+        patch("tools.orchestrator_graph.StateGraph", return_value=mock_workflow),
+        patch(
+            "tools.orchestrator_graph.run_cmd",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
+        ),
+    ):
         execute_issue("TFG-0005", "TFG", metadata_dir=metadata_dir, project_root=project_root)
 
-    assert captured_initial_state.get("instruction") == "# TFG-0005 Special Specification\nDetail specification content"
+    assert (
+        captured_initial_state.get("instruction")
+        == "# TFG-0005 Special Specification\nDetail specification content"
+    )
 
 
 def test_lint_node_passes_ignore_e501_flag() -> None:
@@ -927,9 +1076,11 @@ def test_lint_node_passes_ignore_e501_flag() -> None:
         "rdjson": None,
     }
 
-    with patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd), \
-         patch("pathlib.Path.exists", return_value=True), \
-         patch("pathlib.Path.is_file", return_value=True):
+    with (
+        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.is_file", return_value=True),
+    ):
         res = lint_node(state)
 
     assert res["status"] == "lint_passed"
@@ -995,8 +1146,10 @@ def test_review_node_empty_comments_guard() -> None:
 
     mock_llm_res = {"verdict": "changes_requested", "comments": []}
 
-    with patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"), \
-         patch("tools.llm_client.call_llm", return_value=mock_llm_res):
+    with (
+        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
+        patch("tools.llm_client.call_llm", return_value=mock_llm_res),
+    ):
         res_state = review_node(state)
 
     assert res_state["status"] == "review_lgtm"
@@ -1037,11 +1190,13 @@ def test_run_pytest_node_dynamic_recovery_tips(tmp_path: Path) -> None:
     mock_res = MagicMock(
         returncode=1,
         stdout="fixture 'temp_test_files' not found\nDID NOT RAISE EncryptedFileError\nhas no attribute 'assertRaises'",
-        stderr=""
+        stderr="",
     )
 
-    with patch("tools.orchestrator_graph.run_cmd", return_value=mock_res), \
-         patch("pathlib.Path.exists", return_value=False):
+    with (
+        patch("tools.orchestrator_graph.run_cmd", return_value=mock_res),
+        patch("pathlib.Path.exists", return_value=False),
+    ):
         res_state = run_pytest_node(state)
 
     aider_msg = res_state.get("aider_message", "")
@@ -1084,17 +1239,22 @@ def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
     mock_res = MagicMock(
         returncode=1,
         stdout="F811 Redefinition of unused `GrepResult` from line 8\nF821 Undefined name `foo_bar`",
-        stderr=""
+        stderr="",
     )
 
-    with patch("tools.orchestrator_graph.run_cmd", return_value=mock_res), \
-         patch("pathlib.Path.exists", return_value=True), \
-         patch("pathlib.Path.is_file", return_value=True):
+    with (
+        patch("tools.orchestrator_graph.run_cmd", return_value=mock_res),
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.is_file", return_value=True),
+    ):
         res_state = lint_node(state)
 
     aider_msg = res_state.get("aider_message", "")
     assert "REDEFINITION ERROR (F811): Symbol `GrepResult` is defined both via import" in aider_msg
-    assert "Option A (Preferred if `GrepResult` belongs to this file): REMOVE `GrepResult`" in aider_msg
+    assert (
+        "Option A (Preferred if `GrepResult` belongs to this file): REMOVE `GrepResult`"
+        in aider_msg
+    )
     assert "UNDEFINED NAME ERROR (F821): `foo_bar` is used but not defined" in aider_msg
 
 
@@ -1116,16 +1276,22 @@ def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
     assert "tests/test_engine.py" not in resolved
 
 
-def test_test_feedback_node_generates_categorized_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_test_feedback_node_generates_categorized_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """test_feedback_node が Reasoning LLM を呼び出してエラー分析メッセージを生成することを検証する。"""
     from tools.orchestrator_graph import GraphState, test_feedback_node
 
     called_intent = None
 
-    def mock_call_llm(role: str, intent: str, system_prompt: str, user_prompt: str, expect_json: bool = False) -> dict:
+    def mock_call_llm(
+        role: str, intent: str, system_prompt: str, user_prompt: str, expect_json: bool = False
+    ) -> dict:
         nonlocal called_intent
         called_intent = intent
-        return {"content": "ASSERTION_MISMATCH: Update assertion expected count from 3 to 2 in test_parallel_mode."}
+        return {
+            "content": "ASSERTION_MISMATCH: Update assertion expected count from 3 to 2 in test_parallel_mode."
+        }
 
     monkeypatch.setattr("tools.llm_client.call_llm", mock_call_llm)
 
@@ -1150,7 +1316,10 @@ def test_test_feedback_node_generates_categorized_instructions(monkeypatch: pyte
         "test_feedback_instruction": None,
         "impl_plan": "test plan",
         "lint_result": None,
-        "test_result": {"stdout": "FAILED test_parallel_mode\nAssertionError: 2 != 3", "stderr": ""},
+        "test_result": {
+            "stdout": "FAILED test_parallel_mode\nAssertionError: 2 != 3",
+            "stderr": "",
+        },
         "review_verdict": None,
         "review_comments": None,
         "review_rounds": [],
@@ -1164,11 +1333,3 @@ def test_test_feedback_node_generates_categorized_instructions(monkeypatch: pyte
     assert result["test_feedback_instruction"] is not None
     assert "ASSERTION_MISMATCH" in result["test_feedback_instruction"]
     assert "ARCHITECT ADVICE FOR PYTEST FAILURE" in result["aider_message"]
-
-
-
-
-
-
-
-

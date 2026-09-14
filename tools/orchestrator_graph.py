@@ -29,10 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
 
 # ロガー設定
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(name)s %(levelname)s: %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("orchestrator_graph")
 
 ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
@@ -40,6 +37,7 @@ ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
 
 class ProcessTimeoutError(Exception):
     """外部プロセス呼び出し時のタイムアウト例外"""
+
     pass
 
 
@@ -60,7 +58,9 @@ def run_cmd(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
-        raise ProcessTimeoutError(f"Command '{' '.join(cmd)}' timed out after {timeout} seconds") from e
+        raise ProcessTimeoutError(
+            f"Command '{' '.join(cmd)}' timed out after {timeout} seconds"
+        ) from e
 
 
 def is_in_git_workspace(cwd: Optional[str]) -> bool:
@@ -91,7 +91,9 @@ def validate_project_consistency(
     meta ディレクトリ、project.json、project.json["key"] の必須存在と一致性を検証する (MULTI-001 §2②・§4)。
     """
     if not validate_issue_id(issue_id):
-        raise ValueError(f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001' (range 0001-9999).")
+        raise ValueError(
+            f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001' (range 0001-9999)."
+        )
 
     prefix = issue_id.split("-")[0]
     if prefix != project_key:
@@ -113,11 +115,15 @@ def validate_project_consistency(
 
     projects_dict = reg.get("projects", {})
     if project_key not in projects_dict:
-        raise ValueError(f"Project key '{project_key}' is not registered in .project-registry.json.")
+        raise ValueError(
+            f"Project key '{project_key}' is not registered in .project-registry.json."
+        )
 
     meta_rel = projects_dict[project_key].get("meta")
     if not meta_rel:
-        raise ValueError(f"Missing 'meta' field for project '{project_key}' in .project-registry.json.")
+        raise ValueError(
+            f"Missing 'meta' field for project '{project_key}' in .project-registry.json."
+        )
 
     meta_dir_path = project_root / meta_rel
     if not meta_dir_path.exists():
@@ -140,6 +146,7 @@ def validate_project_consistency(
 
 class ProjectLockManager:
     """衛星プロジェクトの排他制御（ロック機構）を管理するクラス (PM-037)."""
+
     def __init__(self, project_key: str, metadata_dir: Optional[Path] = None) -> None:
         self.project_key = project_key
         if metadata_dir is None:
@@ -163,7 +170,9 @@ class ProjectLockManager:
             logger.info(f"Lock acquired for project {self.project_key}")
         except Timeout as e:
             logger.error(f"Failed to acquire project lock for {self.project_key} within timeout.")
-            raise TimeoutError(f"Failed to acquire project lock for {self.project_key} within timeout.") from e
+            raise TimeoutError(
+                f"Failed to acquire project lock for {self.project_key} within timeout."
+            ) from e
 
     def _release_lock(self) -> None:
         try:
@@ -195,14 +204,18 @@ def update_task_state(
         try:
             with open(state_file, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
-                if "issue_id" in raw_data and not any(isinstance(v, dict) for v in raw_data.values()):
+                if "issue_id" in raw_data and not any(
+                    isinstance(v, dict) for v in raw_data.values()
+                ):
                     old_id = raw_data.get("issue_id", issue_id)
                     state_data[old_id] = {
                         "status": raw_data.get("status", "PENDING"),
                         "review_round": raw_data.get("review_round", 0),
                         "max_round": raw_data.get("max_round", 3),
                         "error_category": raw_data.get("error_category"),
-                        "updated_at": raw_data.get("updated_at", datetime.now(timezone.utc).isoformat()),
+                        "updated_at": raw_data.get(
+                            "updated_at", datetime.now(timezone.utc).isoformat()
+                        ),
                     }
                 else:
                     state_data = raw_data
@@ -237,7 +250,9 @@ def record_execution_history(
     lint_passed/test_passed の returncode 正本化) に従って専用の FileLock 保護のもとアトミックに追記保存する。
     """
     if history_file is None:
-        history_file = Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
+        history_file = (
+            Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
+        )
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     lock_file = history_file.with_name(".execution_history.lock")
@@ -258,8 +273,16 @@ def record_execution_history(
 
         lint_res = state.get("lint_result")
         test_res = state.get("test_result")
-        lint_passed = lint_res.get("returncode") == 0 if isinstance(lint_res, dict) and "returncode" in lint_res else None
-        test_passed = test_res.get("returncode") == 0 if isinstance(test_res, dict) and "returncode" in test_res else None
+        lint_passed = (
+            lint_res.get("returncode") == 0
+            if isinstance(lint_res, dict) and "returncode" in lint_res
+            else None
+        )
+        test_passed = (
+            test_res.get("returncode") == 0
+            if isinstance(test_res, dict) and "returncode" in test_res
+            else None
+        )
 
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -305,12 +328,18 @@ def safe_record_execution_history(
 ) -> None:
     """履歴保存時の例外を捕捉し、確定済み state.json を汚染させない統一保護ヘルパー。"""
     try:
-        record_execution_history(state, final_status=final_status, review_round=review_round, history_file=history_file)
+        record_execution_history(
+            state, final_status=final_status, review_round=review_round, history_file=history_file
+        )
     except Exception as e:
-        logger.warning(f"Failed to record execution history safely (keeping state '{final_status}'): {e}")
+        logger.warning(
+            f"Failed to record execution history safely (keeping state '{final_status}'): {e}"
+        )
 
 
-def write_event(project_key: str, event_data: Dict[str, Any], metadata_dir: Optional[Path] = None) -> None:
+def write_event(
+    project_key: str, event_data: Dict[str, Any], metadata_dir: Optional[Path] = None
+) -> None:
     """Graph の状態に影響を与えない個別ファイルイベント記録 (PM-050)"""
     if metadata_dir is None:
         metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
@@ -348,7 +377,9 @@ def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
     return target_files
 
 
-def resolve_target_files_against_cwd(target_files: List[str], cwd: Optional[Path] = None) -> List[str]:
+def resolve_target_files_against_cwd(
+    target_files: List[str], cwd: Optional[Path] = None
+) -> List[str]:
     """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。"""
     if not cwd or not Path(cwd).exists():
         return target_files
@@ -358,7 +389,10 @@ def resolve_target_files_against_cwd(target_files: List[str], cwd: Optional[Path
     all_repo_files = [
         str(p.relative_to(cwd_path)).replace("\\", "/")
         for p in cwd_path.rglob("*.py")
-        if not any(ignored in p.parts for ignored in [".venv", ".git", ".pytest_cache", "__pycache__", ".aider"])
+        if not any(
+            ignored in p.parts
+            for ignored in [".venv", ".git", ".pytest_cache", "__pycache__", ".aider"]
+        )
     ]
 
     for tf in target_files:
@@ -373,9 +407,13 @@ def resolve_target_files_against_cwd(target_files: List[str], cwd: Optional[Path
             for repo_f in all_repo_files:
                 repo_stem = Path(repo_f).stem
                 clean_repo_stem = repo_stem.replace("test_", "").strip("_")
-                if clean_tf_stem and (clean_tf_stem in clean_repo_stem or clean_repo_stem in clean_tf_stem):
+                if clean_tf_stem and (
+                    clean_tf_stem in clean_repo_stem or clean_repo_stem in clean_tf_stem
+                ):
                     if repo_f not in resolved:
-                        logger.info(f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{repo_f}'")
+                        logger.info(
+                            f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{repo_f}'"
+                        )
                         resolved.append(repo_f)
                         matched = True
                         break
@@ -437,7 +475,11 @@ def resolve_project_context(
                     pdata = json.load(pf)
                     base_branch = pdata.get("base_branch", "develop")
                     work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
-                    if "target_files" in pdata and isinstance(pdata["target_files"], list) and pdata["target_files"]:
+                    if (
+                        "target_files" in pdata
+                        and isinstance(pdata["target_files"], list)
+                        and pdata["target_files"]
+                    ):
                         raw_target_files.extend(pdata["target_files"])
                     if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
                         exclude_files.extend(pdata["exclude_files"])
@@ -456,7 +498,10 @@ def resolve_project_context(
         if not raw_target_files:
             for py_file in cwd_path.rglob("*.py"):
                 rel_p = str(py_file.relative_to(cwd_path)).replace("\\", "/")
-                if not any(excluded in rel_p for excluded in [".venv", "venv", "__pycache__", "build", "dist"]):
+                if not any(
+                    excluded in rel_p
+                    for excluded in [".venv", "venv", "__pycache__", "build", "dist"]
+                ):
                     raw_target_files.append(rel_p)
 
         # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容) し、除外ファイルを適用
@@ -469,13 +514,33 @@ def resolve_project_context(
                 valid_target_files.append(tf)
 
         if not valid_target_files:
-            logger.error(f"No valid target files found in satellite repo for project {project_key}.")
-            return {"cwd": cwd, "target_files": [], "base_branch": base_branch, "work_branch_prefix": work_branch_prefix, "valid": False}
+            logger.error(
+                f"No valid target files found in satellite repo for project {project_key}."
+            )
+            return {
+                "cwd": cwd,
+                "target_files": [],
+                "base_branch": base_branch,
+                "work_branch_prefix": work_branch_prefix,
+                "valid": False,
+            }
 
-        return {"cwd": cwd, "target_files": valid_target_files, "base_branch": base_branch, "work_branch_prefix": work_branch_prefix, "valid": True}
+        return {
+            "cwd": cwd,
+            "target_files": valid_target_files,
+            "base_branch": base_branch,
+            "work_branch_prefix": work_branch_prefix,
+            "valid": True,
+        }
     except Exception as e:
         logger.error(f"Failed to resolve project context for {project_key}: {e}")
-        return {"cwd": None, "target_files": [], "base_branch": "develop", "work_branch_prefix": "sbos/", "valid": False}
+        return {
+            "cwd": None,
+            "target_files": [],
+            "base_branch": "develop",
+            "work_branch_prefix": "sbos/",
+            "valid": False,
+        }
 
 
 class GraphState(TypedDict):
@@ -512,6 +577,7 @@ def spec_draft_node(state: GraphState) -> GraphState:
     """Issue に対する実装方針計画を策定し、impl_plan へ構造保存するノード (DD-003 §4)."""
     logger.info("Executing spec_draft_node")
     from tools.llm_client import call_llm
+
     try:
         system_prompt = (
             "You are a technical planner. You must define a strict Definition of Done (DoD) for the issue.\n"
@@ -530,7 +596,7 @@ def spec_draft_node(state: GraphState) -> GraphState:
             role="planner",
             intent="spec_draft",
             system_prompt=system_prompt,
-            user_prompt=user_prompt
+            user_prompt=user_prompt,
         )
         plan_str = res.get("content", str(res)) if isinstance(res, dict) else str(res)
         state["impl_plan"] = plan_str
@@ -631,10 +697,18 @@ def lint_node(state: GraphState) -> GraphState:
     target_files = state.get("target_files", [])
     try:
         existing_targets = [
-            tf for tf in target_files
-            if tf.endswith(".py") and cwd and (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file()
+            tf
+            for tf in target_files
+            if tf.endswith(".py")
+            and cwd
+            and (Path(cwd) / tf).exists()
+            and (Path(cwd) / tf).is_file()
         ]
-        targets_to_check = existing_targets if existing_targets else [tf for tf in target_files if tf.endswith(".py")]
+        targets_to_check = (
+            existing_targets
+            if existing_targets
+            else [tf for tf in target_files if tf.endswith(".py")]
+        )
         if not targets_to_check:
             state["status"] = "lint_passed"
             return state
@@ -642,22 +716,35 @@ def lint_node(state: GraphState) -> GraphState:
         cmd = [sys.executable, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
         # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
         run_cmd([sys.executable, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
-        run_cmd([sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"] + targets_to_check, cwd=cwd, timeout=300)
+        run_cmd(
+            [sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
+            + targets_to_check,
+            cwd=cwd,
+            timeout=300,
+        )
         res = run_cmd(cmd, cwd=cwd, timeout=300)
-        state["lint_result"] = {"returncode": res.returncode, "stdout": res.stdout, "stderr": res.stderr}
+        state["lint_result"] = {
+            "returncode": res.returncode,
+            "stdout": res.stdout,
+            "stderr": res.stderr,
+        }
         if res.returncode == 0:
             state["status"] = "lint_passed"
         else:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
-            logger.warning(f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}")
+            logger.warning(
+                f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}"
+            )
 
             # --- 動的エラー分析・復旧ルール (Lint Recovery Tips) ---
             combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
             lint_recovery_tips = []
 
             # 1. F811 (二重定義・再定義エラー) の柔軟な動的抽出
-            redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output)
+            redef_match = re.search(
+                r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output
+            )
             if not redef_match:
                 redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output)
 
@@ -724,10 +811,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
     report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
 
     # 対象タスクに関連するテストファイルを特定
-    test_files = [
-        tf for tf in target_files
-        if "test" in Path(tf).name.lower()
-    ]
+    test_files = [tf for tf in target_files if "test" in Path(tf).name.lower()]
     if not test_files and cwd:
         for tf in target_files:
             stem = Path(tf).stem
@@ -736,10 +820,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
                 test_files.append(candidate)
 
     # ディスク上に実際に存在するテストファイルのみに絞り込み
-    existing_test_files = [
-        tf for tf in test_files
-        if cwd and (Path(cwd) / tf).exists()
-    ]
+    existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
 
     # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
     if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
@@ -753,7 +834,11 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
     try:
         # pytest-json-report オプションを付加して対象テストファイルを実行
-        cmd = [sys.executable, "-m", "pytest"] + (cmd_test_files if cmd_test_files else []) + ["--json-report", f"--json-report-file={report_file}"]
+        cmd = (
+            [sys.executable, "-m", "pytest"]
+            + (cmd_test_files if cmd_test_files else [])
+            + ["--json-report", f"--json-report-file={report_file}"]
+        )
         res = run_cmd(cmd, cwd=cwd, timeout=300)
 
         # JSON レポートのパース
@@ -774,19 +859,29 @@ def run_pytest_node(state: GraphState) -> GraphState:
                         longrepr = call_info.get("longrepr", "") or setup_info.get("longrepr", "")
 
                         log_parts = [f"FAILED {nodeid}:\n{longrepr}"]
-                        for sec_name, sec in [("setup", setup_info), ("call", call_info), ("teardown", teardown_info)]:
+                        for sec_name, sec in [
+                            ("setup", setup_info),
+                            ("call", call_info),
+                            ("teardown", teardown_info),
+                        ]:
                             if isinstance(sec, dict):
                                 if sec.get("stdout"):
-                                    log_parts.append(f"--- Captured stdout ({sec_name}) ---\n{sec['stdout']}")
+                                    log_parts.append(
+                                        f"--- Captured stdout ({sec_name}) ---\n{sec['stdout']}"
+                                    )
                                 if sec.get("stderr"):
-                                    log_parts.append(f"--- Captured stderr ({sec_name}) ---\n{sec['stderr']}")
+                                    log_parts.append(
+                                        f"--- Captured stderr ({sec_name}) ---\n{sec['stderr']}"
+                                    )
 
                                 logs = sec.get("log", [])
                                 if isinstance(logs, list):
                                     for log_entry in logs:
                                         if isinstance(log_entry, dict) and "message" in log_entry:
                                             lvl = log_entry.get("levelname", "INFO")
-                                            log_parts.append(f"--- Captured log ({lvl}) ---\n{log_entry['message']}")
+                                            log_parts.append(
+                                                f"--- Captured log ({lvl}) ---\n{log_entry['message']}"
+                                            )
 
                         failed_details.append("\n".join(log_parts))
             except Exception as pe:
@@ -804,10 +899,14 @@ def run_pytest_node(state: GraphState) -> GraphState:
         else:
             state["test_round"] = state.get("test_round", 0) + 1
             state["error_category"] = "TEST_ERROR"
-            logger.warning(f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}")
+            logger.warning(
+                f"Pytest failed (round {state['test_round']}):\n{res.stdout or res.stderr}"
+            )
 
             # --- 汎用的なエラー分析・復旧ルール (フレームワークレベルのエラーのみ対象) ---
-            combined_error_text = f"{res.stdout or ''}\n{res.stderr or ''}\n" + "\n".join(failed_details)
+            combined_error_text = f"{res.stdout or ''}\n{res.stderr or ''}\n" + "\n".join(
+                failed_details
+            )
             recovery_tips = []
 
             # 同じテストでループしている場合の思考リセット指示 (Hallucination Escape Prompt)
@@ -842,11 +941,17 @@ def run_pytest_node(state: GraphState) -> GraphState:
             )
 
             if recovery_tips:
-                generic_instruction = "\n\n【CRITICAL RECOVERY INSTRUCTIONS】\n" + "\n".join(recovery_tips) + generic_instruction
+                generic_instruction = (
+                    "\n\n【CRITICAL RECOVERY INSTRUCTIONS】\n"
+                    + "\n".join(recovery_tips)
+                    + generic_instruction
+                )
 
             if failed_details:
                 formatted_failures = "\n\n".join(failed_details[:5])
-                state["aider_message"] = f"Pytest failed with json-report details:\n{formatted_failures}{generic_instruction}"
+                state["aider_message"] = (
+                    f"Pytest failed with json-report details:\n{formatted_failures}{generic_instruction}"
+                )
             else:
                 state["aider_message"] = f"Pytest failed:\n{res.stdout}{generic_instruction}"
 
@@ -872,7 +977,9 @@ def test_feedback_node(state: GraphState) -> GraphState:
     """Pytest 失敗ログとコードを Reasoning LLM (アドバイザー) に分析させ、
     エラーカテゴリに応じた具体的な修正命令文を生成して state['aider_message'] にセットするノード。
     """
-    logger.info(f"Executing test_feedback_node for {state['issue_id']} (Round {state.get('test_round', 1)})")
+    logger.info(
+        f"Executing test_feedback_node for {state['issue_id']} (Round {state.get('test_round', 1)})"
+    )
 
     if state.get("status") in ["FAILED_B7", "FAILED_SYSTEM"]:
         return state
@@ -910,7 +1017,7 @@ def test_feedback_node(state: GraphState) -> GraphState:
             role="planner",
             intent="test_feedback",
             system_prompt=system_prompt,
-            user_prompt=user_prompt
+            user_prompt=user_prompt,
         )
 
         feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
@@ -941,6 +1048,7 @@ def review_node(state: GraphState) -> GraphState:
     """
     logger.info("Executing review_node")
     from tools.llm_client import call_llm
+
     cwd = state.get("cwd")
 
     try:
@@ -970,10 +1078,14 @@ def review_node(state: GraphState) -> GraphState:
                 "Ensure that the changes align with the Implementation Plan and report any deviations as structural comments."
             ),
             user_prompt=user_prompt,
-            expect_json=True
+            expect_json=True,
         )
 
-        if not isinstance(res, dict) or "verdict" not in res or res.get("verdict") not in ["LGTM", "changes_requested"]:
+        if (
+            not isinstance(res, dict)
+            or "verdict" not in res
+            or res.get("verdict") not in ["LGTM", "changes_requested"]
+        ):
             logger.error(f"Invalid review response structure: {res}")
             state["status"] = "FAILED_SYSTEM"
             state["error_category"] = "SYSTEM_ERROR"
@@ -990,23 +1102,29 @@ def review_node(state: GraphState) -> GraphState:
         if isinstance(raw_comments, list):
             for item in raw_comments:
                 if isinstance(item, dict):
-                    structured_comments.append({
-                        "file": item.get("file", target_file),
-                        "line": item.get("line", 1),
-                        "message": str(item.get("message", "")),
-                        "severity": item.get("severity", "WARNING"),
-                    })
+                    structured_comments.append(
+                        {
+                            "file": item.get("file", target_file),
+                            "line": item.get("line", 1),
+                            "message": str(item.get("message", "")),
+                            "severity": item.get("severity", "WARNING"),
+                        }
+                    )
                 else:
-                    structured_comments.append({
-                        "file": target_file,
-                        "line": 1,
-                        "message": str(item),
-                        "severity": "WARNING",
-                    })
+                    structured_comments.append(
+                        {
+                            "file": target_file,
+                            "line": 1,
+                            "message": str(item),
+                            "severity": "WARNING",
+                        }
+                    )
 
         # ガードロジック: Reviewer LLM が changes_requested を返したものの具体的な修正指示 (comments) が空の場合は、実質的に問題なしとみなして LGTM に安全補正する。
         if verdict == "changes_requested" and not structured_comments:
-            logger.info("Reviewer LLM returned 'changes_requested' with empty comments. Safely correcting verdict to 'LGTM'.")
+            logger.info(
+                "Reviewer LLM returned 'changes_requested' with empty comments. Safely correcting verdict to 'LGTM'."
+            )
             verdict = "LGTM"
 
         rev_round = state.get("review_round", 0) + 1
@@ -1030,12 +1148,14 @@ def review_node(state: GraphState) -> GraphState:
 
         # 全レビュー (LGTM を含む) を review_rounds に記録
         rounds = state.get("review_rounds", [])
-        rounds.append({
-            "review_round": rev_round,
-            "verdict": verdict,
-            "comments": structured_comments,
-            "rdjson": state["rdjson"],
-        })
+        rounds.append(
+            {
+                "review_round": rev_round,
+                "verdict": verdict,
+                "comments": structured_comments,
+                "rdjson": state["rdjson"],
+            }
+        )
         state["review_rounds"] = rounds
 
         # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存 (オプショナル連携のため失敗時はログ警告のみで LLM レビューを継続)
@@ -1044,7 +1164,9 @@ def review_node(state: GraphState) -> GraphState:
                 rd_input = json.dumps(state["rdjson"])
                 res_rd = run_cmd(
                     ["reviewdog", "-f=rdjson", "-diff=git diff HEAD"],
-                    cwd=cwd, input_str=rd_input, timeout=120
+                    cwd=cwd,
+                    input_str=rd_input,
+                    timeout=120,
                 )
                 state["reviewdog_result"] = {
                     "returncode": res_rd.returncode,
@@ -1054,7 +1176,9 @@ def review_node(state: GraphState) -> GraphState:
                 if res_rd.returncode == 0:
                     logger.info("Reviewdog execution completed successfully.")
                 else:
-                    logger.warning(f"Reviewdog execution returned non-zero ({res_rd.returncode}): {res_rd.stderr}. Continuing LLM review workflow.")
+                    logger.warning(
+                        f"Reviewdog execution returned non-zero ({res_rd.returncode}): {res_rd.stderr}. Continuing LLM review workflow."
+                    )
             except Exception as rde:
                 logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
                 state["reviewdog_result"] = {"returncode": -1, "stdout": "", "stderr": str(rde)}
@@ -1064,20 +1188,27 @@ def review_node(state: GraphState) -> GraphState:
         else:
             state["error_category"] = "REVIEW_REJECTED"
             is_structural_violation = any(
-                str(c.get("severity", "")).lower() in ["major", "structural", "high", "error", "critical", "blocker"] for c in structured_comments
+                str(c.get("severity", "")).lower()
+                in ["major", "structural", "high", "error", "critical", "blocker"]
+                for c in structured_comments
             )
             # target_files が定義されている場合のみ無許可ファイル判定を実施（空リスト時の誤爆防止）
             active_targets = state.get("target_files", [])
             unauthorized_files = []
             if active_targets:
                 unauthorized_files = [
-                    c.get("file") for c in structured_comments
-                    if c.get("file") and c.get("file") not in active_targets and c.get("file") != "N/A"
+                    c.get("file")
+                    for c in structured_comments
+                    if c.get("file")
+                    and c.get("file") not in active_targets
+                    and c.get("file") != "N/A"
                 ]
             else:
                 logger.debug("target_files is empty; skipping unauthorized_files validation.")
 
-            feedback_msg = f"Review comments:\n{json.dumps(structured_comments, ensure_ascii=False)}"
+            feedback_msg = (
+                f"Review comments:\n{json.dumps(structured_comments, ensure_ascii=False)}"
+            )
 
             if unauthorized_files:
                 unique_unauth = list(set(unauthorized_files))
@@ -1132,7 +1263,9 @@ def done_node(state: GraphState) -> GraphState:
                 return state
 
             if diff_cached.stdout.strip():
-                logger.error("Existing staged changes detected in git index before commit. Aborting.")
+                logger.error(
+                    "Existing staged changes detected in git index before commit. Aborting."
+                )
                 state["status"] = "PR_FAILED"
                 state["error_category"] = "PR_ERROR"
                 state["error"] = "Existing staged changes detected in index before commit"
@@ -1149,16 +1282,26 @@ def done_node(state: GraphState) -> GraphState:
                     return state
 
                 # インデックス混入防止 2: add 後のステージ済みファイル集合を検証
-                staged_res = run_cmd(["git", "diff", "--cached", "--name-only"], cwd=cwd, timeout=60)
+                staged_res = run_cmd(
+                    ["git", "diff", "--cached", "--name-only"], cwd=cwd, timeout=60
+                )
                 if staged_res.returncode == 0:
-                    staged_files = [f.strip().replace("\\", "/") for f in staged_res.stdout.splitlines() if f.strip()]
+                    staged_files = [
+                        f.strip().replace("\\", "/")
+                        for f in staged_res.stdout.splitlines()
+                        if f.strip()
+                    ]
                     normalized_targets = [t.strip().replace("\\", "/") for t in target_files]
                     unauthorized = [sf for sf in staged_files if sf not in normalized_targets]
                     if unauthorized:
-                        logger.error(f"Unauthorized staged files detected after git add: {unauthorized}")
+                        logger.error(
+                            f"Unauthorized staged files detected after git add: {unauthorized}"
+                        )
                         state["status"] = "PR_FAILED"
                         state["error_category"] = "PR_ERROR"
-                        state["error"] = f"Unauthorized staged files detected after git add: {unauthorized}"
+                        state["error"] = (
+                            f"Unauthorized staged files detected after git add: {unauthorized}"
+                        )
                         return state
 
             # 2. 未コミット差分の存在確認とコミット
@@ -1173,7 +1316,8 @@ def done_node(state: GraphState) -> GraphState:
             if status_res.stdout.strip():
                 commit_res = run_cmd(
                     ["git", "commit", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
-                    cwd=cwd, timeout=120
+                    cwd=cwd,
+                    timeout=120,
                 )
                 if commit_res.returncode != 0:
                     logger.error(f"git commit failed: {commit_res.stderr}")
@@ -1186,13 +1330,18 @@ def done_node(state: GraphState) -> GraphState:
             run_cmd(["git", "fetch", "origin"], cwd=cwd, timeout=60)
             push_res = run_cmd(
                 ["git", "push", "--force-with-lease", "-u", "origin", head_branch],
-                cwd=cwd, timeout=180
+                cwd=cwd,
+                timeout=180,
             )
             if push_res.returncode != 0:
-                logger.warning(f"Git push failed (lease mismatch or remote error): {push_res.stderr}")
+                logger.warning(
+                    f"Git push failed (lease mismatch or remote error): {push_res.stderr}"
+                )
                 state["status"] = "PR_FAILED"
                 state["error_category"] = "PR_ERROR"
-                state["error"] = f"Git push failed (lease mismatch or remote error): {push_res.stderr}"
+                state["error"] = (
+                    f"Git push failed (lease mismatch or remote error): {push_res.stderr}"
+                )
                 return state
 
             # 4. PR の作成 (事前確認: gh pr list --json number で構造化確認)
@@ -1209,22 +1358,40 @@ def done_node(state: GraphState) -> GraphState:
 
             try:
                 # 既存 PR の構造化データのプレ確認 (言語・ロケール依存の完全排除)
-                pr_list_res = run_cmd([gh_bin, "pr", "list", "--head", head_branch, "--json", "number"], cwd=cwd, timeout=30)
+                pr_list_res = run_cmd(
+                    [gh_bin, "pr", "list", "--head", head_branch, "--json", "number"],
+                    cwd=cwd,
+                    timeout=30,
+                )
                 if pr_list_res.returncode == 0:
                     try:
                         prs = json.loads(pr_list_res.stdout)
                         if isinstance(prs, list) and len(prs) > 0:
                             pr_num = prs[0].get("number")
-                            logger.info(f"Existing PR #{pr_num} detected for branch '{head_branch}'. Setting status to COMPLETED.")
+                            logger.info(
+                                f"Existing PR #{pr_num} detected for branch '{head_branch}'. Setting status to COMPLETED."
+                            )
                             state["status"] = "COMPLETED"
                             return state
                     except Exception as pe:
                         logger.warning(f"Failed to parse gh pr list JSON output: {pe}")
 
                 pr_res = run_cmd(
-                    [gh_bin, "pr", "create", "--base", base_branch, "--head", head_branch,
-                     "--title", f"[{state['issue_id']}] 自動実装完了", "--body", "Agent生成PR"],
-                    cwd=cwd, timeout=180
+                    [
+                        gh_bin,
+                        "pr",
+                        "create",
+                        "--base",
+                        base_branch,
+                        "--head",
+                        head_branch,
+                        "--title",
+                        f"[{state['issue_id']}] 自動実装完了",
+                        "--body",
+                        "Agent生成PR",
+                    ],
+                    cwd=cwd,
+                    timeout=180,
                 )
                 if pr_res.returncode == 0:
                     state["status"] = "COMPLETED"
@@ -1259,15 +1426,18 @@ def escalate_node(state: GraphState) -> GraphState:
 
     # 最終的なエラーステータスの決定
     if state.get("status") not in ["FAILED_B7", "FAILED_SYSTEM"]:
-        state["status"] = "FAILED_B7" if state.get("error_category") in [
-            "LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED"
-        ] else "FAILED_SYSTEM"
+        state["status"] = (
+            "FAILED_B7"
+            if state.get("error_category") in ["LINT_ERROR", "TEST_ERROR", "REVIEW_REJECTED"]
+            else "FAILED_SYSTEM"
+        )
 
     # --- 敗因分析レポートの自動生成 (LLMによる自己分析) ---
     cwd = state.get("cwd")
     if cwd and state.get("error_category") in ["LINT_ERROR", "TEST_ERROR"]:
         try:
             from tools.llm_client import call_llm
+
             logger.info("Generating Failure Analysis Report...")
 
             # 失敗した直近のエラーログを取得
@@ -1287,13 +1457,11 @@ def escalate_node(state: GraphState) -> GraphState:
                 role="reviewer",
                 intent="failure_analysis",
                 system_prompt=system_prompt,
-                user_prompt=user_prompt
+                user_prompt=user_prompt,
             )
 
             analysis_text = (
-                res.get("raw", res.get("content", str(res)))
-                if isinstance(res, dict)
-                else str(res)
+                res.get("raw", res.get("content", str(res))) if isinstance(res, dict) else str(res)
             )
 
             # ワークスペース内にレポートを出力
@@ -1332,11 +1500,15 @@ def execute_issue(
     execution_id = uuid.uuid4().hex
     try:
         # 規約準拠の Issue ID 範囲およびプロジェクトキー整合検証
-        validate_project_consistency(issue_id, project_key, metadata_dir=metadata_dir, project_root=project_root)
+        validate_project_consistency(
+            issue_id, project_key, metadata_dir=metadata_dir, project_root=project_root
+        )
 
         logger.info(f"Starting execution for Issue: {issue_id}, Execution ID: {execution_id}")
 
-        ctx = resolve_project_context(project_key, metadata_dir=metadata_dir, project_root=project_root)
+        ctx = resolve_project_context(
+            project_key, metadata_dir=metadata_dir, project_root=project_root
+        )
         cwd = ctx.get("cwd")
         target_files = ctx.get("target_files", [])
         base_branch = ctx.get("base_branch", "develop")
@@ -1345,7 +1517,9 @@ def execute_issue(
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
         if not (is_valid and cwd and target_files):
-            logger.error(f"Failsafe triggered: Invalid satellite context for project {project_key}. Aborting.")
+            logger.error(
+                f"Failsafe triggered: Invalid satellite context for project {project_key}. Aborting."
+            )
             update_task_state(
                 project_key,
                 issue_id,
@@ -1379,8 +1553,14 @@ def execute_issue(
                     except Exception:
                         pass
 
-            is_resume_mode = resume if resume is not None else (
-                fresh is False and current_task_status in ["CHANGES_REQUESTED", "PR_FAILED", "FAILED_B7", "IN_REVIEW"]
+            is_resume_mode = (
+                resume
+                if resume is not None
+                else (
+                    fresh is False
+                    and current_task_status
+                    in ["CHANGES_REQUESTED", "PR_FAILED", "FAILED_B7", "IN_REVIEW"]
+                )
             )
 
             # 作業ツリーの事前チェック (Resumeモード時は自動コミット保存して継続、それ以外は拒否)
@@ -1388,99 +1568,165 @@ def execute_issue(
                 try:
                     init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
                     dirty_lines = [
-                        line for line in init_status.stdout.splitlines()
-                        if line.strip() and not any(ignored in line for ignored in [".aider", ".pytest_cache", "__pycache__"])
+                        line
+                        for line in init_status.stdout.splitlines()
+                        if line.strip()
+                        and not any(
+                            ignored in line
+                            for ignored in [".aider", ".pytest_cache", "__pycache__"]
+                        )
                     ]
                     if init_status.returncode != 0 or dirty_lines:
                         if is_resume_mode:
-                            logger.info(f"Resume Mode: Auto-committing uncommitted changes before resuming in {cwd}...")
+                            logger.info(
+                                f"Resume Mode: Auto-committing uncommitted changes before resuming in {cwd}..."
+                            )
                             run_cmd(["git", "add", "-A"], cwd=cwd, timeout=60)
-                            run_cmd(["git", "commit", "-m", f"wip: preserve uncommitted changes for {issue_id} before resume"], cwd=cwd, timeout=60)
+                            run_cmd(
+                                [
+                                    "git",
+                                    "commit",
+                                    "-m",
+                                    f"wip: preserve uncommitted changes for {issue_id} before resume",
+                                ],
+                                cwd=cwd,
+                                timeout=60,
+                            )
                         else:
-                            logger.error(f"Dirty working tree detected before execution in {cwd}. Aborting.")
+                            logger.error(
+                                f"Dirty working tree detected before execution in {cwd}. Aborting."
+                            )
                             update_task_state(
-                                project_key, issue_id, status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                                project_key,
+                                issue_id,
+                                status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR",
+                                metadata_dir=metadata_dir,
                             )
                             safe_record_execution_history(
                                 {
-                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "issue_id": issue_id,
+                                    "project_key": project_key,
+                                    "cwd": cwd,
                                     "error_category": "SYSTEM_ERROR",
                                     "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
                                 },
-                                final_status="FAILED_SYSTEM", history_file=history_file
+                                final_status="FAILED_SYSTEM",
+                                history_file=history_file,
                             )
                             return
 
                     head_branch = f"{work_branch_prefix}{issue_id}"
 
                     if is_resume_mode:
-                        logger.info(f"Resume Mode activated for {issue_id} (status: '{current_task_status}'). Preserving existing work branch '{head_branch}'.")
+                        logger.info(
+                            f"Resume Mode activated for {issue_id} (status: '{current_task_status}'). Preserving existing work branch '{head_branch}'."
+                        )
                         sw_head = run_cmd(["git", "switch", head_branch], cwd=cwd, timeout=60)
                         if sw_head.returncode != 0:
                             # ローカルに無い場合はリモート追跡ブランチをチェックアウト
-                            sw_head = run_cmd(["git", "checkout", "-b", head_branch, f"origin/{head_branch}"], cwd=cwd, timeout=60)
+                            sw_head = run_cmd(
+                                ["git", "checkout", "-b", head_branch, f"origin/{head_branch}"],
+                                cwd=cwd,
+                                timeout=60,
+                            )
 
                         if sw_head.returncode == 0:
                             # 既存ブランチのベース追従 (git rebase base_branch)
-                            rebase_res = run_cmd(["git", "rebase", base_branch], cwd=cwd, timeout=120)
+                            rebase_res = run_cmd(
+                                ["git", "rebase", base_branch], cwd=cwd, timeout=120
+                            )
                             if rebase_res.returncode != 0:
                                 run_cmd(["git", "rebase", "--abort"], cwd=cwd, timeout=60)
-                                logger.warning(f"git rebase {base_branch} failed during resume mode. Continuing on current head_branch commits.")
+                                logger.warning(
+                                    f"git rebase {base_branch} failed during resume mode. Continuing on current head_branch commits."
+                                )
                         else:
                             # リモートにも無かった場合は新規作成
-                            run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
+                            run_cmd(
+                                ["git", "switch", "-c", head_branch, base_branch],
+                                cwd=cwd,
+                                timeout=60,
+                            )
                     else:
-                        logger.info(f"Fresh Mode activated for {issue_id}. Creating clean work branch '{head_branch}' from {base_branch}.")
+                        logger.info(
+                            f"Fresh Mode activated for {issue_id}. Creating clean work branch '{head_branch}' from {base_branch}."
+                        )
                         sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
                         if sw_base.returncode != 0:
                             logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
                             update_task_state(
-                                project_key, issue_id, status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                                project_key,
+                                issue_id,
+                                status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR",
+                                metadata_dir=metadata_dir,
                             )
                             safe_record_execution_history(
                                 {
-                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "issue_id": issue_id,
+                                    "project_key": project_key,
+                                    "cwd": cwd,
                                     "error_category": "SYSTEM_ERROR",
                                     "error": f"git switch {base_branch} failed: {sw_base.stderr}",
                                 },
-                                final_status="FAILED_SYSTEM", history_file=history_file
+                                final_status="FAILED_SYSTEM",
+                                history_file=history_file,
                             )
                             return
 
-                        pull_res = run_cmd(["git", "pull", "--ff-only", "origin", base_branch], cwd=cwd, timeout=120)
+                        pull_res = run_cmd(
+                            ["git", "pull", "--ff-only", "origin", base_branch],
+                            cwd=cwd,
+                            timeout=120,
+                        )
                         if pull_res.returncode != 0 and not allow_offline_git:
                             logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
                             update_task_state(
-                                project_key, issue_id, status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                                project_key,
+                                issue_id,
+                                status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR",
+                                metadata_dir=metadata_dir,
                             )
                             safe_record_execution_history(
                                 {
-                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "issue_id": issue_id,
+                                    "project_key": project_key,
+                                    "cwd": cwd,
                                     "error_category": "SYSTEM_ERROR",
                                     "error": f"git pull --ff-only failed: {pull_res.stderr}",
                                 },
-                                final_status="FAILED_SYSTEM", history_file=history_file
+                                final_status="FAILED_SYSTEM",
+                                history_file=history_file,
                             )
                             return
 
                         run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
-                        sw_c = run_cmd(["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60)
+                        sw_c = run_cmd(
+                            ["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60
+                        )
                         if sw_c.returncode != 0:
-                            logger.error(f"git switch -c {head_branch} {base_branch} failed: {sw_c.stderr}")
+                            logger.error(
+                                f"git switch -c {head_branch} {base_branch} failed: {sw_c.stderr}"
+                            )
                             update_task_state(
-                                project_key, issue_id, status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR", metadata_dir=metadata_dir
+                                project_key,
+                                issue_id,
+                                status="FAILED_SYSTEM",
+                                error_category="SYSTEM_ERROR",
+                                metadata_dir=metadata_dir,
                             )
                             safe_record_execution_history(
                                 {
-                                    "issue_id": issue_id, "project_key": project_key, "cwd": cwd,
+                                    "issue_id": issue_id,
+                                    "project_key": project_key,
+                                    "cwd": cwd,
                                     "error_category": "SYSTEM_ERROR",
                                     "error": f"git switch -c failed: {sw_c.stderr}",
                                 },
-                                final_status="FAILED_SYSTEM", history_file=history_file
+                                final_status="FAILED_SYSTEM",
+                                history_file=history_file,
                             )
                             return
                 except Exception as ge:
@@ -1525,11 +1771,15 @@ def execute_issue(
                     return "spec_draft"
                 return "code_node"
 
-            workflow.add_conditional_edges("spec_draft", route_after_spec, {
-                "escalate_node": "escalate_node",
-                "spec_draft": "spec_draft",
-                "code_node": "code_node",
-            })
+            workflow.add_conditional_edges(
+                "spec_draft",
+                route_after_spec,
+                {
+                    "escalate_node": "escalate_node",
+                    "spec_draft": "spec_draft",
+                    "code_node": "code_node",
+                },
+            )
 
             def route_after_code(s: GraphState) -> str:
                 if s.get("status") == "FAILED_SYSTEM":
@@ -1538,11 +1788,15 @@ def execute_issue(
                     return "code_node"
                 return "lint_node"
 
-            workflow.add_conditional_edges("code_node", route_after_code, {
-                "escalate_node": "escalate_node",
-                "code_node": "code_node",
-                "lint_node": "lint_node",
-            })
+            workflow.add_conditional_edges(
+                "code_node",
+                route_after_code,
+                {
+                    "escalate_node": "escalate_node",
+                    "code_node": "code_node",
+                    "lint_node": "lint_node",
+                },
+            )
 
             def route_after_lint(s: GraphState) -> str:
                 if s.get("status") == "FAILED_SYSTEM":
@@ -1553,11 +1807,15 @@ def execute_issue(
                     return "escalate_node"
                 return "code_node"
 
-            workflow.add_conditional_edges("lint_node", route_after_lint, {
-                "test_node": "test_node",
-                "escalate_node": "escalate_node",
-                "code_node": "code_node",
-            })
+            workflow.add_conditional_edges(
+                "lint_node",
+                route_after_lint,
+                {
+                    "test_node": "test_node",
+                    "escalate_node": "escalate_node",
+                    "code_node": "code_node",
+                },
+            )
 
             def route_after_test(s: GraphState) -> str:
                 if s.get("status") == "FAILED_SYSTEM":
@@ -1568,21 +1826,29 @@ def execute_issue(
                     return "escalate_node"
                 return "test_feedback_node"
 
-            workflow.add_conditional_edges("test_node", route_after_test, {
-                "review_node": "review_node",
-                "escalate_node": "escalate_node",
-                "test_feedback_node": "test_feedback_node",
-            })
+            workflow.add_conditional_edges(
+                "test_node",
+                route_after_test,
+                {
+                    "review_node": "review_node",
+                    "escalate_node": "escalate_node",
+                    "test_feedback_node": "test_feedback_node",
+                },
+            )
 
             def route_after_test_feedback(s: GraphState) -> str:
                 if s.get("status") == "FAILED_SYSTEM":
                     return "escalate_node"
                 return "code_node"
 
-            workflow.add_conditional_edges("test_feedback_node", route_after_test_feedback, {
-                "code_node": "code_node",
-                "escalate_node": "escalate_node",
-            })
+            workflow.add_conditional_edges(
+                "test_feedback_node",
+                route_after_test_feedback,
+                {
+                    "code_node": "code_node",
+                    "escalate_node": "escalate_node",
+                },
+            )
 
             def route_after_review(s: GraphState) -> str:
                 if s.get("status") == "FAILED_SYSTEM":
@@ -1595,12 +1861,16 @@ def execute_issue(
                     return "escalate_node"
                 return "code_node"
 
-            workflow.add_conditional_edges("review_node", route_after_review, {
-                "done_node": "done_node",
-                "escalate_node": "escalate_node",
-                "review_node": "review_node",
-                "code_node": "code_node",
-            })
+            workflow.add_conditional_edges(
+                "review_node",
+                route_after_review,
+                {
+                    "done_node": "done_node",
+                    "escalate_node": "escalate_node",
+                    "review_node": "review_node",
+                    "code_node": "code_node",
+                },
+            )
 
             workflow.add_edge("done_node", END)
             workflow.add_edge("escalate_node", END)
@@ -1608,14 +1878,18 @@ def execute_issue(
             app = workflow.compile()
 
             # Issue 詳細記述ファイル (metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md) の探索および読み込み
-            issue_detail_file = metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
+            issue_detail_file = (
+                metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
+            )
             if issue_detail_file.exists():
                 logger.info(f"Loaded issue detail specification from {issue_detail_file}")
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
                 md_targets = extract_target_files_from_issue_text(instruction_text)
                 if md_targets:
                     resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
-                    logger.info(f"Dynamically resolved target_files from issue markdown: {resolved_targets}")
+                    logger.info(
+                        f"Dynamically resolved target_files from issue markdown: {resolved_targets}"
+                    )
                     target_files = resolved_targets
             else:
                 instruction_text = f"Implement issue {issue_id}"
@@ -1740,7 +2014,9 @@ def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path
     正本構造 {"issues": [{"id": "...", "score": ...}]} を最優先パースする。
     """
     if cache_file is None:
-        cache_file = Path(__file__).resolve().parent.parent / "tools" / ".cache" / "priority-cache.json"
+        cache_file = (
+            Path(__file__).resolve().parent.parent / "tools" / ".cache" / "priority-cache.json"
+        )
     logger.info(f"Orchestrating uncompleted issues (project_key: {project_key or 'ALL'})")
 
     if not cache_file.exists():
@@ -1773,10 +2049,14 @@ def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path
 
         logger.info("=== Top 3 Priority Issues ===")
         for idx, item in enumerate(top_items, 1):
-            logger.info(f"[{idx}] ID: {item.get('issue_id')} | Title: {item.get('title')} | Score: {item.get('score')}")
+            logger.info(
+                f"[{idx}] ID: {item.get('issue_id')} | Title: {item.get('title')} | Score: {item.get('score')}"
+            )
 
         top_issue = top_items[0].get("issue_id")
-        logger.info(f"Suggested Command: python tools/orchestrator_graph.py execute --issue-id {top_issue}")
+        logger.info(
+            f"Suggested Command: python tools/orchestrator_graph.py execute --issue-id {top_issue}"
+        )
     except Exception as e:
         logger.error(f"Failed to read priority cache: {e}")
 
@@ -1787,9 +2067,21 @@ def main() -> None:
 
     exec_parser = subparsers.add_parser("execute", help="Execute task for issue")
     exec_parser.add_argument("--issue-id", required=True, help="Target Issue ID (e.g. TFG-0004)")
-    exec_parser.add_argument("--project-key", help="Target Project Key (Resolved from Issue ID if omitted)")
-    exec_parser.add_argument("--resume", action="store_true", default=None, help="Resume existing work branch and continue work on top of previous commits")
-    exec_parser.add_argument("--fresh", action="store_true", default=False, help="Delete existing work branch and create clean branch from base_branch")
+    exec_parser.add_argument(
+        "--project-key", help="Target Project Key (Resolved from Issue ID if omitted)"
+    )
+    exec_parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=None,
+        help="Resume existing work branch and continue work on top of previous commits",
+    )
+    exec_parser.add_argument(
+        "--fresh",
+        action="store_true",
+        default=False,
+        help="Delete existing work branch and create clean branch from base_branch",
+    )
 
     orch_parser = subparsers.add_parser("orchestrate", help="Orchestrate uncompleted issues")
     orch_parser.add_argument("--project-key", help="Target Project Key (All if omitted)")

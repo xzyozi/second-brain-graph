@@ -22,7 +22,13 @@ def test_get_model_params():
 def test_call_llm_with_dynamic_params(mock_get_coordinator, mock_openai_class):
     mock_coordinator = MagicMock()
     from tools.config_loader import ProfileConfig
-    dummy_profile = ProfileConfig(backend="ollama", model="gemma-4-12B-it-qat-UD-Q4_K_XL", openai_endpoint="http://localhost:11434/v1", ollama_management_endpoint="http://localhost:11434")
+
+    dummy_profile = ProfileConfig(
+        backend="ollama",
+        model="gemma-4-12B-it-qat-UD-Q4_K_XL",
+        openai_endpoint="http://localhost:11434/v1",
+        ollama_management_endpoint="http://localhost:11434",
+    )
     mock_coordinator.execute.side_effect = lambda intent, req: req["action"](dummy_profile)
     mock_get_coordinator.return_value = mock_coordinator
 
@@ -49,7 +55,13 @@ def test_call_llm_with_dynamic_params(mock_get_coordinator, mock_openai_class):
 def test_call_llm_fallback_intent(mock_get_coordinator, mock_openai_class):
     mock_coordinator = MagicMock()
     from tools.config_loader import ProfileConfig
-    dummy_profile = ProfileConfig(backend="ollama", model="gemma-4-12B-it-qat-UD-Q4_K_XL", openai_endpoint="http://localhost:11434/v1", ollama_management_endpoint="http://localhost:11434")
+
+    dummy_profile = ProfileConfig(
+        backend="ollama",
+        model="gemma-4-12B-it-qat-UD-Q4_K_XL",
+        openai_endpoint="http://localhost:11434/v1",
+        ollama_management_endpoint="http://localhost:11434",
+    )
     mock_coordinator.execute.side_effect = lambda intent, req: req["action"](dummy_profile)
     mock_get_coordinator.return_value = mock_coordinator
 

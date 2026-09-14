@@ -40,9 +40,7 @@ class RegistrationResult:
 def _validate_model_name(model_name: str) -> str:
     normalized_name = model_name.strip()
     if not MODEL_NAME_PATTERN.fullmatch(normalized_name):
-        raise ValueError(
-            "model_name must contain only letters, digits, '.', '_', '-', '/', or ':'"
-        )
+        raise ValueError("model_name must contain only letters, digits, '.', '_', '-', '/', or ':'")
     return normalized_name
 
 
@@ -80,9 +78,7 @@ def _assert_model_is_not_registered(
         raise OllamaRegistrationError(f"Unable to list registered Ollama models: {detail}")
 
     registered_names = {
-        line.split(maxsplit=1)[0]
-        for line in result.stdout.splitlines()[1:]
-        if line.strip()
+        line.split(maxsplit=1)[0] for line in result.stdout.splitlines()[1:] if line.strip()
     }
     if model_name in registered_names:
         raise OllamaRegistrationError(

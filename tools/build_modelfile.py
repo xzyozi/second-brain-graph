@@ -119,8 +119,10 @@ def load_system_prompt(system_prompt_file: str | Path | None) -> str:
         raise ModelfileValidationError(f"system_prompt_file must be UTF-8: {path}") from exc
     if not prompt.strip():
         raise ModelfileValidationError("system_prompt_file must not be empty")
-    if "\x00" in prompt or '\"\"\"' in prompt:
-        raise ModelfileValidationError("system_prompt_file contains unsupported Modelfile delimiters")
+    if "\x00" in prompt or '"""' in prompt:
+        raise ModelfileValidationError(
+            "system_prompt_file contains unsupported Modelfile delimiters"
+        )
     return prompt
 
 
@@ -236,7 +238,9 @@ def _parse_num_gpu(value: str) -> int | None:
     try:
         parsed = int(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("num-gpu must be 'auto' or a non-negative integer") from exc
+        raise argparse.ArgumentTypeError(
+            "num-gpu must be 'auto' or a non-negative integer"
+        ) from exc
     if parsed < 0:
         raise argparse.ArgumentTypeError("num-gpu must be 'auto' or a non-negative integer")
     return parsed
@@ -244,7 +248,9 @@ def _parse_num_gpu(value: str) -> int | None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a validated Qwen Ollama Modelfile.")
-    parser.add_argument("--gguf-path", required=True, help="GGUF path, relative to the project root")
+    parser.add_argument(
+        "--gguf-path", required=True, help="GGUF path, relative to the project root"
+    )
     parser.add_argument("--model-name", required=True, help="Ollama model tag base name")
     parser.add_argument("--role", default="coder", help="Ollama model tag suffix")
     parser.add_argument("--template", required=True, choices=("qwen",), help="Chat template")

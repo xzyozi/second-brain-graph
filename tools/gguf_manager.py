@@ -10,6 +10,7 @@ logger = logging.getLogger("gguf_manager")
 
 class GgufFileNotFoundError(FileNotFoundError):
     """GGUFモデルファイルが見つからない場合に送出される例外."""
+
     pass
 
 
