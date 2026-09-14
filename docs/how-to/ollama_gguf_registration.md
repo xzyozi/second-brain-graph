@@ -6,6 +6,8 @@
 
 登録操作と実行設定は分離します。このツールは `config/models.json` を変更しません。登録済みモデルをオーケストレータで使う場合だけ、利用者がOllama profileとrouteを設定してください。
 
+ハードウェア・推論パラメータ、Qwenテンプレート、SYSTEMプロンプトを含む永続Modelfileを生成する場合は、[`ollama_modelfile_profile_management.md`](../features/ollama_modelfile_profile_management.md) と `tools/build_modelfile.py` を使用します。
+
 ## 前提条件
 
 - Ollamaがインストール済みで、`ollama` コマンドを実行できること
