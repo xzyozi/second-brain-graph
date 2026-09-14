@@ -74,9 +74,8 @@ class GpuLeaseAdapter:
         if os.name == "nt":
             import msvcrt
 
-            locking = getattr(msvcrt, "locking")
-            nonblocking_lock = getattr(msvcrt, "LK_NBLCK")
-            locking(self._handle.fileno(), nonblocking_lock, 1)
+            msvcrt_vars = vars(msvcrt)
+            msvcrt_vars["locking"](self._handle.fileno(), msvcrt_vars["LK_NBLCK"], 1)
         else:
             import fcntl
 
@@ -88,9 +87,8 @@ class GpuLeaseAdapter:
         if os.name == "nt":
             import msvcrt
 
-            locking = getattr(msvcrt, "locking")
-            unlock = getattr(msvcrt, "LK_UNLCK")
-            locking(self._handle.fileno(), unlock, 1)
+            msvcrt_vars = vars(msvcrt)
+            msvcrt_vars["locking"](self._handle.fileno(), msvcrt_vars["LK_UNLCK"], 1)
         else:
             import fcntl
 
