@@ -114,6 +114,49 @@ export class ConfigManager {
     assert not res_missing.is_valid
 
 
+def test_ts_verifier_string_braces_and_keywords(tmp_path):
+    ts_code = """const template = `unmatched ${1} brace ( [ {`;
+const strVal = "{ } [ (";
+// line comment with {
+/* block comment
+   with ( [
+*/
+export function process(): void {
+    console.log(template);
+}
+"""
+    file_path = tmp_path / "valid_ts.ts"
+    file_path.write_text(ts_code, encoding="utf-8")
+
+    verifier = TypeScriptLanguageVerifier()
+    res = verifier.verify_syntax(file_path)
+    assert res.is_valid
+    assert "process" in res.identifiers
+    assert "function" not in res.identifiers
+    assert "const" not in res.identifiers
+    assert "export" not in res.identifiers
+
+
+def test_ts_verifier_unbalanced_braces(tmp_path):
+    broken_code = """function test() {
+    console.log("missing closing");
+"""
+    file_path = tmp_path / "broken.ts"
+    file_path.write_text(broken_code, encoding="utf-8")
+
+    verifier = TypeScriptLanguageVerifier()
+    res = verifier.verify_syntax(file_path)
+    assert not res.is_valid
+    assert any("Unclosed bracket" in err for err in res.errors)
+
+
+def test_ts_verifier_check_build(tmp_path):
+    verifier = TypeScriptLanguageVerifier()
+    res = verifier.check_build(tmp_path)
+    assert not res.is_valid
+    assert "tsconfig.json not found" in res.errors[0]
+
+
 def test_js_verifier_factory():
     verifier = get_verifier("js")
     assert isinstance(verifier, TypeScriptLanguageVerifier)
