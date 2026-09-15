@@ -1,0 +1,91 @@
+"""Unit tests for RustLanguageVerifier and TypeScriptLanguageVerifier in tools.lang."""
+
+from tools.lang import RustLanguageVerifier, TypeScriptLanguageVerifier, get_verifier
+
+
+def test_rust_verifier_syntax_and_identifiers(tmp_path):
+    rust_code = """use std::sync::Arc;
+
+pub struct OrderProcessor {
+    pub id: u64,
+}
+
+impl OrderProcessor {
+    pub fn new(id: u64) -> Self {
+        Self { id }
+    }
+
+    pub fn process(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+"""
+    file_path = tmp_path / "main.rs"
+    file_path.write_text(rust_code, encoding="utf-8")
+
+    verifier = get_verifier("rust")
+    assert isinstance(verifier, RustLanguageVerifier)
+
+    res_syntax = verifier.verify_syntax(file_path)
+    assert res_syntax.is_valid
+
+    res_ident = verifier.verify_identifiers(file_path, ["OrderProcessor", "new", "process", "Arc"])
+    assert res_ident.is_valid
+
+    res_missing = verifier.verify_identifiers(file_path, ["OrderProcessor", "non_existent_fn"])
+    assert not res_missing.is_valid
+
+
+def test_rust_verifier_unbalanced_braces(tmp_path):
+    broken_code = """fn main() {
+    println!("Hello, Rust");
+// missing closing brace
+"""
+    file_path = tmp_path / "broken.rs"
+    file_path.write_text(broken_code, encoding="utf-8")
+
+    verifier = RustLanguageVerifier()
+    res = verifier.verify_syntax(file_path)
+    assert not res.is_valid
+    assert any("Unclosed brace" in err for err in res.errors)
+
+
+def test_ts_verifier_syntax_and_identifiers(tmp_path):
+    ts_code = """import { useState } from 'react';
+
+export interface UserConfig {
+    host: string;
+    port: number;
+}
+
+export class ConfigManager {
+    private config: UserConfig;
+
+    constructor(config: UserConfig) {
+        this.config = config;
+    }
+
+    public save(): void {
+        console.log("Saving config to host:", this.config.host);
+    }
+}
+"""
+    file_path = tmp_path / "config.ts"
+    file_path.write_text(ts_code, encoding="utf-8")
+
+    verifier = get_verifier("typescript")
+    assert isinstance(verifier, TypeScriptLanguageVerifier)
+
+    res_syntax = verifier.verify_syntax(file_path)
+    assert res_syntax.is_valid
+
+    res_ident = verifier.verify_identifiers(file_path, ["UserConfig", "ConfigManager", "save"])
+    assert res_ident.is_valid
+
+    res_missing = verifier.verify_identifiers(file_path, ["MissingInterface"])
+    assert not res_missing.is_valid
+
+
+def test_js_verifier_factory():
+    verifier = get_verifier("js")
+    assert isinstance(verifier, TypeScriptLanguageVerifier)
