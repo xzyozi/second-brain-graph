@@ -72,3 +72,31 @@ def process_order():
     res_missing = verifier.verify_identifiers(file_path, ["threading", "NonExistentClass"])
     assert not res_missing.is_valid
     assert any("NonExistentClass" in err for err in res_missing.errors)
+
+
+def test_python_verifier_has_try_except_block_negative(tmp_path):
+    code = "def no_try():\n    print('hello')\n"
+    file_path = tmp_path / "no_try.py"
+    file_path.write_text(code, encoding="utf-8")
+
+    verifier = PythonLanguageVerifier()
+    assert not verifier.has_try_except_block(file_path)
+
+
+def test_python_verifier_check_build(tmp_path):
+    verifier = PythonLanguageVerifier()
+
+    # Empty dir check
+    empty_res = verifier.check_build(tmp_path)
+    assert not empty_res.is_valid
+    assert "No Python files found" in empty_res.errors[0]
+
+    # Valid build check
+    (tmp_path / "app.py").write_text("print('ok')", encoding="utf-8")
+    valid_res = verifier.check_build(tmp_path)
+    assert valid_res.is_valid
+
+    # Invalid build check
+    (tmp_path / "bad.py").write_text("def broken(:", encoding="utf-8")
+    invalid_res = verifier.check_build(tmp_path)
+    assert not invalid_res.is_valid

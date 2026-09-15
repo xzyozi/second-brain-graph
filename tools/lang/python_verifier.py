@@ -3,6 +3,7 @@
 import ast
 import py_compile
 import subprocess
+import sys
 from pathlib import Path
 
 from tools.lang.base import BaseLanguageVerifier, VerificationResult, register_verifier
@@ -64,9 +65,13 @@ class PythonLanguageVerifier(BaseLanguageVerifier):
         return any(isinstance(node, ast.Try) for node in ast.walk(syntax_res.ast_tree))
 
     def check_build(self, project_dir: Path) -> VerificationResult:
-        """Run ruff / pytest syntax and lint check on project directory."""
+        """Run py_compile on python files in project directory."""
+        py_files = list(project_dir.rglob("*.py"))
+        if not py_files:
+            return VerificationResult(is_valid=False, errors=[f"No Python files found to check in {project_dir}"])
+
         res = subprocess.run(
-            ["python", "-m", "py_compile"] + [str(p) for p in project_dir.glob("*.py")],
+            [sys.executable, "-m", "py_compile"] + [str(p) for p in py_files],
             cwd=str(project_dir),
             capture_output=True,
             text=True,
