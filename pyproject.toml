@@ -75,6 +75,10 @@ exclude = "(projects|tmp|bunri)/"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "integration: Live E2E tests using external models/tools (e.g. Aider, Ollama)",
+]
+
 
 # ==========================================
 # Package Discovery

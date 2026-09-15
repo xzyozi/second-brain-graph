@@ -1,13 +1,13 @@
 """Practical GUI Coder Test Suite for Aider & Ollama Coder Models.
 
-Tests practical, enterprise-grade GUI implementation capabilities:
+Tests practical, enterprise-grade GUI implementation capabilities with AST validation & isolated git environments:
 1. Form Validation & Error Dialog Handling + Async Threading + Progress Bar
 2. GUI Data Visualization & Matplotlib/Canvas Component Integration
 3. GUI Config Persistence, Binding & File Exception Dialog Handling
 """
 
-import os
-import shutil
+import ast
+import py_compile
 import subprocess
 import pytest
 from pathlib import Path
@@ -111,10 +111,55 @@ class SettingsDialog(tk.Toplevel):
 """
 
 
+def init_git_repo(repo_dir: Path) -> None:
+    """Initialize temporary directory as an isolated git repository for Aider."""
+    subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "TestUser"], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "initial commit"], cwd=str(repo_dir), check=True, capture_output=True)
+
+
+def verify_code_syntax_and_get_ast(file_path: Path) -> ast.AST:
+    """Verify that generated code is valid Python syntax and return its AST tree."""
+    code_text = file_path.read_text(encoding="utf-8")
+    tree = ast.parse(code_text, filename=str(file_path))
+    py_compile.compile(file_path, doraise=True)
+    return tree
+
+
+def get_ast_identifiers(tree: ast.AST) -> set[str]:
+    """Collect all Name and Attribute identifiers from AST nodes."""
+    identifiers = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            identifiers.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            identifiers.add(node.attr)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                identifiers.add(alias.name)
+                if alias.asname:
+                    identifiers.add(alias.asname)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                identifiers.add(node.module)
+            for alias in node.names:
+                identifiers.add(alias.name)
+    return identifiers
+
+
+def has_ast_try_statement(tree: ast.AST) -> bool:
+    """Check if AST tree contains a try-except block."""
+    return any(isinstance(node, ast.Try) for node in ast.walk(tree))
+
+
+@pytest.mark.integration
 def test_coder_practical_gui_async_and_validation(tmp_path):
     """Test 1: Validation, Async Threading, Progress Bar & Error Dialogs."""
     gui_file = tmp_path / "order_app.py"
     gui_file.write_text(INITIAL_ORDER_APP_CODE, encoding="utf-8")
+    init_git_repo(tmp_path)
     
     msg_file = tmp_path / "instruction.txt"
     instruction = (
@@ -136,17 +181,22 @@ def test_coder_practical_gui_async_and_validation(tmp_path):
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, f"Aider failed: {res.stderr}"
     
-    modified_code = gui_file.read_text(encoding="utf-8")
-    assert "threading" in modified_code
-    assert "messagebox" in modified_code
-    assert "Progressbar" in modified_code or "progressbar" in modified_code.lower()
-    assert "try" in modified_code and "except" in modified_code
+    # AST Structural and Syntax Verification
+    tree = verify_code_syntax_and_get_ast(gui_file)
+    identifiers = get_ast_identifiers(tree)
+    
+    assert "threading" in identifiers or "Thread" in identifiers, "Missing threading/Thread identifier in AST"
+    assert "messagebox" in identifiers or "showerror" in identifiers, "Missing messagebox/showerror in AST"
+    assert "Progressbar" in identifiers, "Missing Progressbar identifier in AST"
+    assert has_ast_try_statement(tree), "Missing try-except statement in AST"
 
 
+@pytest.mark.integration
 def test_coder_practical_gui_data_visualization(tmp_path):
     """Test 2: Embed Matplotlib FigureCanvasTkAgg and add clear/re-render logic."""
     gui_file = tmp_path / "dashboard.py"
     gui_file.write_text(INITIAL_DASHBOARD_CODE, encoding="utf-8")
+    init_git_repo(tmp_path)
     
     msg_file = tmp_path / "instruction.txt"
     instruction = (
@@ -168,16 +218,21 @@ def test_coder_practical_gui_data_visualization(tmp_path):
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, f"Aider failed: {res.stderr}"
     
-    modified_code = gui_file.read_text(encoding="utf-8")
-    assert "FigureCanvasTkAgg" in modified_code
-    assert "clear" in modified_code.lower()
-    assert "draw" in modified_code.lower()
+    # AST Structural and Syntax Verification
+    tree = verify_code_syntax_and_get_ast(gui_file)
+    identifiers = get_ast_identifiers(tree)
+    
+    assert "FigureCanvasTkAgg" in identifiers, "Missing FigureCanvasTkAgg identifier in AST"
+    assert "clear" in identifiers, "Missing clear method call in AST"
+    assert "draw" in identifiers, "Missing draw method call in AST"
 
 
+@pytest.mark.integration
 def test_coder_practical_gui_config_persistence(tmp_path):
     """Test 3: JSON Config Persistence, Binding to Entry fields & Exception Dialogs."""
     gui_file = tmp_path / "settings_gui.py"
     gui_file.write_text(INITIAL_CONFIG_GUI_CODE, encoding="utf-8")
+    init_git_repo(tmp_path)
     
     msg_file = tmp_path / "instruction.txt"
     instruction = (
@@ -198,7 +253,11 @@ def test_coder_practical_gui_config_persistence(tmp_path):
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, f"Aider failed: {res.stderr}"
     
-    modified_code = gui_file.read_text(encoding="utf-8")
-    assert "json.dump" in modified_code or "json.dump" in modified_code.lower()
-    assert "json.load" in modified_code or "json.load" in modified_code.lower()
-    assert "messagebox" in modified_code
+    # AST Structural and Syntax Verification
+    tree = verify_code_syntax_and_get_ast(gui_file)
+    identifiers = get_ast_identifiers(tree)
+    
+    assert "dump" in identifiers or "dumps" in identifiers, "Missing json.dump/dumps identifier in AST"
+    assert "load" in identifiers or "loads" in identifiers, "Missing json.load/loads identifier in AST"
+    assert "messagebox" in identifiers or "showerror" in identifiers, "Missing messagebox/showerror in AST"
+    assert has_ast_try_statement(tree), "Missing try-except error handling block in AST"
