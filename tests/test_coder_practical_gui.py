@@ -1,16 +1,15 @@
 """Practical GUI Coder Test Suite for Aider & Ollama Coder Models.
 
-Tests practical, enterprise-grade GUI implementation capabilities with AST validation & isolated git environments:
+Tests practical, enterprise-grade GUI implementation capabilities with tools.lang validation & isolated git environments:
 1. Form Validation & Error Dialog Handling + Async Threading + Progress Bar
 2. GUI Data Visualization & Matplotlib/Canvas Component Integration
 3. GUI Config Persistence, Binding & File Exception Dialog Handling
 """
 
-import ast
-import py_compile
 import subprocess
 import pytest
 from pathlib import Path
+from tools.lang import PythonLanguageVerifier
 
 # --- Production Scenario 1: Async Order Processing App ---
 INITIAL_ORDER_APP_CODE = """import tkinter as tk
@@ -120,40 +119,6 @@ def init_git_repo(repo_dir: Path) -> None:
     subprocess.run(["git", "commit", "-m", "initial commit"], cwd=str(repo_dir), check=True, capture_output=True)
 
 
-def verify_code_syntax_and_get_ast(file_path: Path) -> ast.AST:
-    """Verify that generated code is valid Python syntax and return its AST tree."""
-    code_text = file_path.read_text(encoding="utf-8")
-    tree = ast.parse(code_text, filename=str(file_path))
-    py_compile.compile(file_path, doraise=True)
-    return tree
-
-
-def get_ast_identifiers(tree: ast.AST) -> set[str]:
-    """Collect all Name and Attribute identifiers from AST nodes."""
-    identifiers = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            identifiers.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            identifiers.add(node.attr)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                identifiers.add(alias.name)
-                if alias.asname:
-                    identifiers.add(alias.asname)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                identifiers.add(node.module)
-            for alias in node.names:
-                identifiers.add(alias.name)
-    return identifiers
-
-
-def has_ast_try_statement(tree: ast.AST) -> bool:
-    """Check if AST tree contains a try-except block."""
-    return any(isinstance(node, ast.Try) for node in ast.walk(tree))
-
-
 @pytest.mark.integration
 def test_coder_practical_gui_async_and_validation(tmp_path):
     """Test 1: Validation, Async Threading, Progress Bar & Error Dialogs."""
@@ -181,14 +146,16 @@ def test_coder_practical_gui_async_and_validation(tmp_path):
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, f"Aider failed: {res.stderr}"
     
-    # AST Structural and Syntax Verification
-    tree = verify_code_syntax_and_get_ast(gui_file)
-    identifiers = get_ast_identifiers(tree)
-    
-    assert "threading" in identifiers or "Thread" in identifiers, "Missing threading/Thread identifier in AST"
-    assert "messagebox" in identifiers or "showerror" in identifiers, "Missing messagebox/showerror in AST"
-    assert "Progressbar" in identifiers, "Missing Progressbar identifier in AST"
-    assert has_ast_try_statement(tree), "Missing try-except statement in AST"
+    # Verification using tools.lang.PythonLanguageVerifier
+    verifier = PythonLanguageVerifier()
+    syntax_res = verifier.verify_syntax(gui_file)
+    assert syntax_res.is_valid, f"Syntax error: {syntax_res.errors}"
+
+    idents_res = verifier.verify_identifiers(
+        gui_file, ["threading", "Progressbar", "messagebox"]
+    )
+    assert idents_res.is_valid, f"Missing identifiers: {idents_res.errors}"
+    assert verifier.has_try_except_block(gui_file), "Missing try-except statement"
 
 
 @pytest.mark.integration
@@ -218,13 +185,15 @@ def test_coder_practical_gui_data_visualization(tmp_path):
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, f"Aider failed: {res.stderr}"
     
-    # AST Structural and Syntax Verification
-    tree = verify_code_syntax_and_get_ast(gui_file)
-    identifiers = get_ast_identifiers(tree)
-    
-    assert "FigureCanvasTkAgg" in identifiers, "Missing FigureCanvasTkAgg identifier in AST"
-    assert "clear" in identifiers, "Missing clear method call in AST"
-    assert "draw" in identifiers, "Missing draw method call in AST"
+    # Verification using tools.lang.PythonLanguageVerifier
+    verifier = PythonLanguageVerifier()
+    syntax_res = verifier.verify_syntax(gui_file)
+    assert syntax_res.is_valid, f"Syntax error: {syntax_res.errors}"
+
+    idents_res = verifier.verify_identifiers(
+        gui_file, ["FigureCanvasTkAgg", "clear", "draw"]
+    )
+    assert idents_res.is_valid, f"Missing identifiers: {idents_res.errors}"
 
 
 @pytest.mark.integration
@@ -253,11 +222,13 @@ def test_coder_practical_gui_config_persistence(tmp_path):
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
     assert res.returncode == 0, f"Aider failed: {res.stderr}"
     
-    # AST Structural and Syntax Verification
-    tree = verify_code_syntax_and_get_ast(gui_file)
-    identifiers = get_ast_identifiers(tree)
-    
-    assert "dump" in identifiers or "dumps" in identifiers, "Missing json.dump/dumps identifier in AST"
-    assert "load" in identifiers or "loads" in identifiers, "Missing json.load/loads identifier in AST"
-    assert "messagebox" in identifiers or "showerror" in identifiers, "Missing messagebox/showerror in AST"
-    assert has_ast_try_statement(tree), "Missing try-except error handling block in AST"
+    # Verification using tools.lang.PythonLanguageVerifier
+    verifier = PythonLanguageVerifier()
+    syntax_res = verifier.verify_syntax(gui_file)
+    assert syntax_res.is_valid, f"Syntax error: {syntax_res.errors}"
+
+    idents_res = verifier.verify_identifiers(
+        gui_file, ["dump", "load", "messagebox"]
+    )
+    assert idents_res.is_valid, f"Missing identifiers: {idents_res.errors}"
+    assert verifier.has_try_except_block(gui_file), "Missing try-except error handling block"
