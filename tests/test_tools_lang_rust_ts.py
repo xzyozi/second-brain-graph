@@ -50,6 +50,34 @@ def test_rust_verifier_unbalanced_braces(tmp_path):
     assert any("Unclosed brace" in err for err in res.errors)
 
 
+def test_rust_verifier_string_braces_and_keywords(tmp_path):
+    code = """pub fn process_data() {
+    let msg = "{ unmatched brace in string ( } ]";
+    // single line comment with } bracket
+    /* multi line
+       comment with { }
+    */
+}
+"""
+    file_path = tmp_path / "valid_braces.rs"
+    file_path.write_text(code, encoding="utf-8")
+
+    verifier = RustLanguageVerifier()
+    res = verifier.verify_syntax(file_path)
+    assert res.is_valid
+    assert "process_data" in res.identifiers
+    assert "fn" not in res.identifiers
+    assert "let" not in res.identifiers
+    assert "pub" not in res.identifiers
+
+
+def test_rust_verifier_check_build(tmp_path):
+    verifier = RustLanguageVerifier()
+    res = verifier.check_build(tmp_path)
+    assert not res.is_valid
+    assert "Cargo.toml not found" in res.errors[0]
+
+
 def test_ts_verifier_syntax_and_identifiers(tmp_path):
     ts_code = """import { useState } from 'react';
 
