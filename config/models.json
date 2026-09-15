@@ -52,7 +52,7 @@
       },
       "coding_ollama": {
         "backend": "ollama",
-        "model": "gemma-4-py_coder:latest",
+        "model": "ornith-1.5-9b:latest",
         "openai_endpoint": "http://localhost:11434/v1",
         "ollama_management_endpoint": "http://localhost:11434"
       }
