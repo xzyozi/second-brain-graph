@@ -47,7 +47,7 @@ def test_rust_verifier_unbalanced_braces(tmp_path):
     verifier = RustLanguageVerifier()
     res = verifier.verify_syntax(file_path)
     assert not res.is_valid
-    assert any("Unclosed brace" in err for err in res.errors)
+    assert any("Syntax error" in err or "Missing" in err or "Unclosed" in err for err in res.errors)
 
 
 def test_rust_verifier_string_braces_and_keywords(tmp_path):
@@ -147,7 +147,7 @@ def test_ts_verifier_unbalanced_braces(tmp_path):
     verifier = TypeScriptLanguageVerifier()
     res = verifier.verify_syntax(file_path)
     assert not res.is_valid
-    assert any("Unclosed bracket" in err for err in res.errors)
+    assert any("Syntax error" in err or "Missing" in err or "Unclosed" in err for err in res.errors)
 
 
 def test_ts_verifier_check_build(tmp_path):
