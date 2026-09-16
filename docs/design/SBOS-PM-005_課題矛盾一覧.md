@@ -1,8 +1,8 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.16
+# 課題・矛盾点一覧 (Problem Management) Rev.2.18
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.16（詳細設計書のSSOT分割・再構成および不整合修正の反映）
-改訂日: 2026年8月8日  
+版数: Rev.2.18（PM-040 の AST スコープ確定・PM-039 解決反映、重複したサマリ表ブロックの除去、MULTI-001 の add_project.py 実装済み整合）
+改訂日: 2026年9月16日  
 作成日: 2026年6月25日  
 対象読者: 全開発・運用メンバー  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-DD-004, SBOS-DD-005, SBOS-DD-006, SBOS-DD-007, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
@@ -10,6 +10,8 @@
 ---
 
 ## 更新履歴
+- **2026/09/16 (Rev.2.18)**: 実装実体（`tools/score_issues.py`, `tools/add_project.py`）と突き合わせて課題ステータスを整合。PM-039（ブロッカー除外ハードリミット）を実装完了として解決済みへ更新。PM-004 に対応する `tools/add_project.py` が実装済みであることを踏まえ SBOS-MULTI-001 §5 の「未実装・対象範囲外」記述を実装済みへ修正し、Step 5 の `score-issues.py` 表記を実体の `score_issues.py` に統一。サマリ表が二重化し PM-025〜PM-039 が重複・PM-024 行が破損していた不整合を除去し、単一の表に正規化。
+- **2026/09/16 (Rev.2.17)**: PM-040 の対策スコープを AST 解析（Tree-sitter, `tools/lang/`）による Context Fetching に限定して確定し、ベクトル検索（RAG）を本課題のスコープ外（将来課題）として切り離したうえでステータスを解決済みへ更新。あわせて §1 概要末尾から続いていたサマリ表のヘッダー行が欠落していた不整合を修正し「## 2. 課題・矛盾点サマリ」の表ヘッダーを補完。
 - **2026/08/08 (Rev.2.16)**: 詳細設計書のSSOT原則に基づく再構成（SBOS-DD-005, 006, 007 の新設、DD-003 のスリム化、ORCH-001 の削除）および `run_task.py` のロック保護と作業ブランチ prefix の動的適用を反映。
 - **2026/07/30 (Rev.2.15)**: 課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) に対する3つの改善推奨ポイントを適用し、ステータスを解決済みに更新。
 - **2026/07/30 (Rev.2.14)**: 新規課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) を追加登録。
@@ -19,69 +21,59 @@
 ---
 
 ## 1. 概要
-本ドキュメントは、Second Brain OS (SBOS) の各設計仕様書間および実際のツール実装における**矛盾点、非整合事項、および未解決課題の一覧と対応ステータス**を管理| **PM-004** | MULTI-001 §5 | 🟡 中 | 新規衛星を `.project-registry.json` へ手動登録する手順はあるが、CLIツール化されていない | `tools/add_project.py` CLIスクリプトを実装し自動登録化を完了 | 🟢 解決済み |
-| **PM-005** | ORCH-001 / DD-003 | 🟢 | 旧 ORCH-001 のエラー分類器・再試行上限ロジックと LangGraph ノード遷移のマッピングが未定義 | `OrchestratorState` に `error_category` を持たせ、DD-003 §2.1 / §4 に条件エッジ判定とマッピングを規定完了 | 🟢 解決済み |
-| **PM-006** | MULTI-001 / DD-003 | — | Issue ID フォーマット（カッコ記法 `[EC-001]` vs カッコなし `EC-001`）の表記が全仕様書で不一致 | 内部処理キーおよび正本表記としてはカッコなし `EC-001` に確定・統一 | 🟢 解決済み |
-| **PM-007** | DD-003 §3.1 / models.json | 🟢 | `config/models.json` の `temperature`, `max_tokens` (35000) を LiteLLM 呼び出しへ動的結合 | `tools/llm_client.py` 経由で `get_model_params` を呼び出し `litellm.completion` へ完全結合・検証完了 | 🟢 解決済み |
-| **PM-008** | OP-001 §5.1 | 🟢 | OS別 (Windows Native vs Linux/WSL2) 自動バッチスクリプト (.ps1 vs .sh) の配置手順が混在 | `scripts/windows/` と `scripts/linux/` にスクリプト配置構造を明確に分離 | 🟢 解決済み |
-| **PM-009** | MULTI-001 §2② | 🟢 | Issue ID プレフィックス決定ルール、連番4桁化 (`0001`〜`9999`)、およびサブタスク階層化の設計 | SBOS-MULTI-001 §2② に連番4桁、サブタスク ID (A〜Z) 表記およびオーバーフロー時のタスク分解運用原則を規定・確定 | 🟢 解決済み |
-| **PM-010** | ENV-001 §2.1 / config/models.json | 🟢 | ENV-001 §2.1 のモデル記載 (`qwen` 系) が現行 `config/models.json` と乖離していた | モデル定義を `config/models.json` に一元管理し、仕様書内の特定モデル名直書きを排除・参照統一 | 🟢 解決済み |
-| **PM-011** | DD-003 §3.1 / ENV-001 §2.2 / config/models.json | 🟢 | `llm_client.py` の `MODEL_MAP` ハードコードによる二重管理 (SSOT 崩壊) | `tools/llm_client.py` 内で `config_loader` を参照しモデル名を動的取得（PM-007 と同時統合完了） | 🟢 解決済み |
-| **PM-012** | BD-002 §5 / scripts/ | 🟢 | `git config core.autocrlf input` の強制設定が環境構築スクリプトに未組み込みであった | `scripts/windows/setup_reviewdog.ps1` の冒頭に `git config --global core.autocrlf input` 組み込み完了 | 🟢 解決済み |
-| **PM-013** | DD-003 §4.1 | 🟢 | `escalate_node` から呼ぶ `update_task_state()` / `record_execution_history()` のシグネチャ・仕様が未定義 | DD-003 §4.1.1 を新設し、関数契約・`history_path` スキーマを `state.json` 対応で正式追記定義 | 🟢 解決済み |
-| **PM-014** | DD-003 §4.1 / OP-001 §3.5 | 🟢 | `tasks.md` 内の B7 ブロッカー判定メタデータ書式が未定義であった | B7状態管理を `state.json` へ一本化し、`tasks.md` のメタデータ埋め込みを廃止するよう設計変更 | 🟢 解決済み |
-| **PM-015** | BD-002 §5 / ENV-001 §5.1 / scripts/windows/ | 🟢 | PowerShell UTF-8 設定 (`$OutputEncoding`) の適用タイミングおよび対象スコープが未規定であった | ENV-001 §5.1 で `$PROFILE` 永続設定手順を正本化。`setup_reviewdog.ps1` を非変更確認モードに改修 | 🟢 解決済み |
-| **PM-016** | README / ENV-001 / OP-001 | 🔴 高 | オーケストレーター／スコアリング関連コード (`orchestrator_graph.py`, `score-issues.py` 等) が `tools/` に未存在 | `tools/score_issues.py` を実装し日次バッチ・スコアリング処理を完成 | 🟢 解決済み |
-| **PM-017** | README / DD-003 / OP-001 | 🟢 | README の CLI 例文 (`--auto`) が詳細・運用設計書 (`orchestrate` / `execute`) と不一致 | README.md の CLI 案内コマンドを `orchestrate` / `execute --issue-id` に修整完了 | 🟢 解決済み |
-| **PM-018** | docs/setup/ | 🟢 | 依存管理方式のドキュメント記述が 3 系統に分裂 (`dependency_management.md` / `toml_project_setup.md`) | ドキュメントを現行の `pyproject.toml` + `uv` 仕様に完全統一・修整完了 | 🟢 解決済み |
-| **PM-019** | pyproject.toml / docs/ | 🟢 | `uv sync` 後の品質確認・開発依存関係 (`ruff`, `pytest`, `pip-licenses` 等) が不足 | `pyproject.toml` に開発用依存パッケージを追加し `uv sync --extra dev` で一括正常化完了 | 🟢 解決済み |
-| **PM-020** | reviewdog_setup_guide.md / ENV-001 | 🟢 | Reviewdog セットアップおよび検証手順コマンドが OS 別実スクリプト動作と不一致 | ガイドおよび ENV-001 の検証コマンドを Linux/Windows それぞれの実体へ修整完了 | 🟢 解決済み |
-| **PM-021** | ENV-001 §2.2 / config/models.json | 🟢 | ENV-001 の `models.json` 構成サンプルが `config_loader.py` の実キー (`model_name` 等) と非互換 | ENV-001 §2.2 の JSON 構成例を `model_name`, `temperature`, `max_tokens` の実スキーマに修整完了 | 🟢 解決済み |
-| **PM-022** | DD-003 §3.2 / tools/aider_runner.py | 🟢 | DD-003 の `run_aider` API 引数契約・戻り値型が実物 `tools/aider_runner.py` と非互換 | DD-003 §3.2 のコードサンプルを実物 `run_aider(instruction, target_files, model, cwd)` 仕様に修整完了 | 🟢 解決済み |
-| **PM-023** | README / docs/ | 🟢 | 絶対 `file:///` リンクが特定環境パス (`c:/Users/xzyoi/...`) を指しリンク切れリスク | ドキュメント内の絶対 `file:///` リンクを標準的な相対パスリンク `[text](relative/path)` へ変換完了 | 🟢 解決済み |
-| **PM-024** | oss_license_policy.md / models.json | 🟢 | ライセンスポリシー文書 (`oss_license_policy.md`) の利用中モデル表記が旧 Qwen 系のまま不一致 | `oss_license_policy.md` のモデル記載を現行の Gemma 4 系 (Gemma 4 12B IT, Gemma 4 Py Coder) へ修整完了 | 🟢 解決済み |
-| **PM-025** | 全設計書 (BD/ORCH/ENV/OP/MULTI) | 🟢 | 設計書間の関連文書欄および本文中の他ドキュメント Rev バージョン表記の乖離 | 全設計書のヘッダー・関連文書欄の Rev 表記を最新確定バージョンへ一括整合修整完了 | 🟢 解決済み |
-| **PM-026** | MULTI-001 / DD-003 | 🟢 | 衛星リポジトリ内への `project.json` / `tasks.md` 配置による衛星コードベース汚染 | 母艦側 `metadata/projects/<project-key>/` 階層へメタデータを引き上げ管理する構成へ移行完了 | 🟢 解決済み |
-| **PM-027** | MULTI-001 / .gitignore | 🟢 | `projects/` ディレクトリ内部の安全かつ完全な Git 除外・遮断ルールの確立 | 台帳を `metadata/.project-registry.json` に配置転換し `.gitignore` で `projects/*` を完全除外設定完了 | 🟢 解決済み |
-| **PM-028** | MULTI-001 §2④ / §4 | 🔴 高 | 台帳 `metadata/.project-registry.json` のネスト構造 (`projects`) と `score-issues.py` 概念パースコードの不一致 | `SBOS-MULTI-001 §2④` の概念コードを `registry.get("projects", {})` でネスト解釈する実装へ統一修整完了 | 🟢 解決済み |
-| **PM-029** | BD-002 §4.1 | 🟠 中 | BD-002 §4.1 に旧 `.gitignore` 記述 (`!/projects/.project-registry.json`) が残存 | BD-002 §4.1 の記述を PM-027 確定後の完全遮断ルール (`/projects/*`, `/projects/.*`, `!.gitignore`) へ更新修整完了 | 🟢 解決済み |
-| **PM-030** | ENV-001 Step 2 / §7 | 🟠 中 | ENV-001 の Step 2 (`.gitignore` ヒアドキュメント / 台帳作成) および §7 診断スクリプト内台帳パスが旧仕様のまま残存 | ENV-001 Step 2 の `.gitignore` 生成スクリプト、台帳初期化コード、および §7 診断スクリプトのパスを正本ルールへ完全追従修整完了 | 🟢 解決済み |
-| **PM-031** | 全設計書 (BD/DD/ORCH/ENV/OP/MULTI/PM) | 🟡 低 | 関連文書ヘッダーの Rev 表記が過去版数のまま一部未追従 | 全 7 設計書の関連文書ヘッダー版数表記を最新確定 Rev (BD Rev.4.6, DD Rev.4.8, ORCH Rev.3.5, ENV Rev.4.6, OP Rev.4.5, MULTI Rev.2.6, PM Rev.2.7) に完全整合統一完了 | 🟢 解決済み |
-| **PM-032** | DD-003 §2, §3.2, §4.1.1 / tools/ | 🟡 低 | DD-003 の `Optional` インポート漏れ、`tools/aider_runner.py` 内 `get_git_diff()` 未存在、マッピング未明記 | Typing 修正、`aider_runner.py` へ `get_git_diff()` 本実装 & テスト追加、`round` → `review_round` マッピング注記を追記完了 | 🟢 解決済み |
-| **PM-033** | MULTI-001 §5 Step 4 | 🟠 中 | MULTI-001 §5 Step 4 の登録確認コマンドが旧台帳パス (`projects/.project-registry.json`) のまま残存 | Step 4 の確認コマンドパスを `metadata/.project-registry.json` に修整完了 | 🟢 解決済み |
-| **PM-034** | BD-002 ヘッダー | 🟡 低 | BD-002 ヘッダーの関連文書表記で `SBOS-MULTI-001 Rev.2.4）` と開き括弧が欠落していたタイポ | `SBOS-MULTI-001（差分設計書 Rev.2.6）` へ正確に修整完了 | 🟢 解決済み |
-| **PM-035** | DD-003 §4.1.1 / OP-001 §2.1, §3.5 | 🟠 中 | `execution_history.json` 内レビュー指摘履歴構造の記述 (OP-001 §2.1) と正本 JSON スキーマ例 (DD-003 §4.1.1) の不一致 | `DD-003 §4.1.1` の正本 JSON スキーマ例に `review_rounds: [{round, verdict, comments}]` 履歴配列構造を追加定義し `OP-001 §2.1` および §3.5 の全記述と三者完全統合完了 | 🟢 解決済み |
-| **PM-036** | BD-002 / DD-003 / ORCH-001 / MULTI-001 | 🟢 | 手動コミットから `develop` 基準の自動ブランチ作成および PR 自動作成運用への方針転換と Git 操作の厳格化 | 1. 派生元 `develop` / ターゲット `develop` の固定 (`gh pr create`) <br> 2. `escalate_node` での安全停止と差分保持 <br> 3. メタデータへの `base_branch` 追加 | 🟢 解決済み |
-| **PM-037** | DD-003 / OP-001 | 🟢 | 衛星リポジトリの「排他制御（ロック機構）」の欠如。複数タスク同時実行時のワーキングツリー競合リスク | `plan_node` 前に `.lock` 機構を導入。取得失敗時は待機せず即時スキップ (`SKIPPED_LOCKED`) するようルール化 | 🟢 解決済み |
-| **PM-038** | DD-003 / OP-001 / MULTI-001 | 🟢 | `tasks.md` へのシステム状態埋め込み（HTMLコメント）による脆弱性とB7管理の煩雑さ | システム状態を `metadata/projects/<PROJECT_KEY>/state.json` へ分離・SSOT化し、tasks.mdのHTMLコメントを廃止 | 🟢 解決済み |
-| **PM-039** | DD-003 / OP-001 | 🟠 中 | 依存解決度（D）のスコア計算における先行タスク未完了（ブロッカーあり）Issueの「実行除外漏れ」リスク | `score_issues.py` 内でブロッカーを持つIssueはスコア計算前に除外（Drop）するハードリミットを実装完了 | 🟢 解決済み |
- oss_license_policy.md / models.json | 🟢 | ライセンスポリシー文書 (`oss_license_policy.md`) の利用中モデル表記が旧 Qwen 系のまま不一致 | `oss_license_policy.md` のモデル記載を現行の Gemma 4 系 (Gemma 4 12B IT, Gemma 4 Py Coder) へ修整完了 | 🟢 解決済み |
-| **PM-025** | 全設計書 (BD/ORCH/ENV/OP/MULTI) | 🟢 | 設計書間の関連文書欄および本文中の他ドキュメント Rev バージョン表記の乖離 | 全設計書のヘッダー・関連文書欄の Rev 表記を最新確定バージョンへ一括整合修整完了 | 🟢 解決済み |
-| **PM-026** | MULTI-001 / DD-003 | 🟢 | 衛星リポジトリ内への `project.json` / `tasks.md` 配置による衛星コードベース汚染 | 母艦側 `metadata/projects/<project-key>/` 階層へメタデータを引き上げ管理する構成へ移行完了 | 🟢 解決済み |
-| **PM-027** | MULTI-001 / .gitignore | 🟢 | `projects/` ディレクトリ内部の安全かつ完全な Git 除外・遮断ルールの確立 | 台帳を `metadata/.project-registry.json` に配置転換し `.gitignore` で `projects/*` を完全除外設定完了 | 🟢 解決済み |
-| **PM-028** | MULTI-001 §2④ / §4 | 🔴 高 | 台帳 `metadata/.project-registry.json` のネスト構造 (`projects`) と `score-issues.py` 概念パースコードの不一致 | `SBOS-MULTI-001 §2④` の概念コードを `registry.get("projects", {})` でネスト解釈する実装へ統一修整完了 | 🟢 解決済み |
-| **PM-029** | BD-002 §4.1 | 🟠 中 | BD-002 §4.1 に旧 `.gitignore` 記述 (`!/projects/.project-registry.json`) が残存 | BD-002 §4.1 の記述を PM-027 確定後の完全遮断ルール (`/projects/*`, `/projects/.*`, `!.gitignore`) へ更新修整完了 | 🟢 解決済み |
-| **PM-030** | ENV-001 Step 2 / §7 | 🟠 中 | ENV-001 の Step 2 (`.gitignore` ヒアドキュメント / 台帳作成) および §7 診断スクリプト内台帳パスが旧仕様のまま残存 | ENV-001 Step 2 の `.gitignore` 生成スクリプト、台帳初期化コード、および §7 診断スクリプトのパスを正本ルールへ完全追従修整完了 | 🟢 解決済み |
-| **PM-031** | 全設計書 (BD/DD/ORCH/ENV/OP/MULTI/PM) | 🟡 低 | 関連文書ヘッダーの Rev 表記が過去版数のまま一部未追従 | 全 7 設計書の関連文書ヘッダー版数表記を最新確定 Rev (BD Rev.4.6, DD Rev.4.8, ORCH Rev.3.5, ENV Rev.4.6, OP Rev.4.5, MULTI Rev.2.6, PM Rev.2.7) に完全整合統一完了 | 🟢 解決済み |
-| **PM-032** | DD-003 §2, §3.2, §4.1.1 / tools/ | 🟡 低 | DD-003 の `Optional` インポート漏れ、`tools/aider_runner.py` 内 `get_git_diff()` 未存在、マッピング未明記 | Typing 修正、`aider_runner.py` へ `get_git_diff()` 本実装 & テスト追加、`round` → `review_round` マッピング注記を追記完了 | 🟢 解決済み |
-| **PM-033** | MULTI-001 §5 Step 4 | 🟠 中 | MULTI-001 §5 Step 4 の登録確認コマンドが旧台帳パス (`projects/.project-registry.json`) のまま残存 | Step 4 の確認コマンドパスを `metadata/.project-registry.json` に修整完了 | 🟢 解決済み |
-| **PM-034** | BD-002 ヘッダー | 🟡 低 | BD-002 ヘッダーの関連文書表記で `SBOS-MULTI-001 Rev.2.4）` と開き括弧が欠落していたタイポ | `SBOS-MULTI-001（差分設計書 Rev.2.6）` へ正確に修整完了 | 🟢 解決済み |
-| **PM-035** | DD-003 §4.1.1 / OP-001 §2.1, §3.5 | 🟠 中 | `execution_history.json` 内レビュー指摘履歴構造の記述 (OP-001 §2.1) と正本 JSON スキーマ例 (DD-003 §4.1.1) の不一致 | `DD-003 §4.1.1` の正本 JSON スキーマ例に `review_rounds: [{round, verdict, comments}]` 履歴配列構造を追加定義し `OP-001 §2.1` および §3.5 の全記述と三者完全統合完了 | 🟢 解決済み |
-| **PM-036** | BD-002 / DD-003 / ORCH-001 / MULTI-001 | 🟢 | 手動コミットから `develop` 基準の自動ブランチ作成および PR 自動作成運用への方針転換と Git 操作の厳格化 | 1. 派生元 `develop` / ターゲット `develop` の固定 (`gh pr create`) <br> 2. `escalate_node` での安全停止と差分保持 <br> 3. メタデータへの `base_branch` 追加 | 🟢 解決済み |
-| **PM-037** | DD-003 / OP-001 | 🟢 | 衛星リポジトリの「排他制御（ロック機構）」の欠如。複数タスク同時実行時のワーキングツリー競合リスク | `plan_node` 前に `.lock` 機構を導入。取得失敗時は待機せず即時スキップ (`SKIPPED_LOCKED`) するようルール化 | 🟢 解決済み |
-| **PM-038** | DD-003 / OP-001 / MULTI-001 | 🟢 | `tasks.md` へのシステム状態埋め込み（HTMLコメント）による脆弱性とB7管理の煩雑さ | システム状態を `metadata/projects/<PROJECT_KEY>/state.json` へ分離・SSOT化し、tasks.mdのHTMLコメントを廃止 | 🟢 解決済み |
-| **PM-039** | DD-003 / OP-001 | 🟠 中 | 依存解決度（D）のスコア計算における先行タスク未完了（ブロッカーあり）Issueの「実行除外漏れ」リスク | `score-issues.py` 内でブロッカーを持つIssueはスコア計算前に除外（Drop）するハードリミットを実装 | 🟡 未解決・タスク化 |
-| **PM-040** | DD-003 / ORCH-001 | 🔴 高 | 完全ローカル環境（max_tokens: 35000）におけるコンテキストウィンドウ枯渇および既存コード文脈の欠落リスク | `plan_node` 前にベクトル検索（RAG）やAST解析を用いた Context Fetching ノードを追加し関連ファイルを動的抽出 | 🟡 未解決・タスク化 |
-| **PM-041** | 複数設計書横断 | 🟢 | 台帳・メタデータの正本パスが二重定義（`metadata/` vs 衛星直下） | `metadata/` を唯一の正本として文書体系全体で統一し、README等の旧配置情報を更新 | 🟢 解決済み |
-| **PM-042** | DD-003 / ORCH | 🟢 | B7ブロッカー判定の履歴スキーマが新旧設計書間で非互換（安全回路不成立） | B7判定を `state.json` の `status == "FAILED_B7"` に完全一本化し、DD-003のスキーマ定義を更新 | 🟢 解決済み |
-| **PM-043** | ORCH / DD | 🟢 | LLMタイムアウト・システム例外時の状態遷移契約の不足 | LLMタイムアウトは1回再試行後 `FAILED_SYSTEM`、他例外は即時 `FAILED_SYSTEM` となるようDD-003状態遷移表に追加 | 🟢 解決済み |
-| **PM-044** | OP-001 / ORCH | 🟢 | 破壊的なGit復旧に対する保全・復元方針の欠如 | `git clean -fd` 等の破壊的操作をドキュメントから削除し、B7・例外時は差分保持・停止・人間確認運用へ変更 | 🟢 解決済み |
-| **PM-045** | ORCH / BD | 🟢 | 自動ブランチ・PR運用が正常系のみで異常系状態の定義不足 | PR失敗時は作業ブランチ・差分を保持して停止 (`PR_FAILED`) するようDD-003の状態遷移ルールへ追加 | 🟢 解決済み |
-| **PM-046** | DD / ORCH | 🟢 | 同一衛星への並行実行を扱う排他制御の契約未完成（PM-037関連） | ロック取得失敗時は待機せず即時スキップし `SKIPPED_LOCKED` となるようDD-003にルール明記 | 🟢 解決済み |
-| **PM-047** | ENV-001 / DD | 🟢 | モデル設定SSOTとフォールバック方針の矛盾 | DD-003に残存していた直書きモデル名を廃止し、`models.json` フォールバック先例示へと一元化 | 🟢 解決済み |
-| **PM-048** | 全文書横断 | 🟢 | 文書間の版数参照が現行版と不一致 | 本文・関連文書欄の他文書固定版数参照を削除し文書番号のみの参照へ統一 | 🟢 解決済み |
-| **PM-049** | ORCH | 🟢 | 旧ORCH文書の位置付けが不明瞭（現行仕様との混同リスク） | `SBOS-ORCH-001.md` 各節に「非規範・参考資料」のアラートを追記し、正本は DD-003 である旨を明記 | 🟢 解決済み |
-| **PM-050** | DD / ORCH | 🟠 中 | Ollama (localhost:11434) と llama-server (localhost:8080) のLLMバックエンド接続経路・起動方針が混在している | `BackendExecutionCoordinator` を導入し、推論目的（intent）に応じた排他併用（Exclusive Co-usage）アーキテクチャへ移行 | 🟢 解決済み |
+本ドキュメントは、Second Brain OS (SBOS) の各設計仕様書間および実際のツール実装における**矛盾点、非整合事項、および未解決課題の一覧と対応ステータス**を管理する。
+
+## 2. 課題・矛盾点サマリ
+
+| 課題ID     | 関連仕様                                        | 重要度 | 課題・矛盾の内容                                                                                                    | 対応内容                                                                                                                                                             | ステータス                             |
+| :--------- | :---------------------------------------------- | :----- | :------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------- |
+| **PM-004** | MULTI-001 §5                                    | 🟡 中   | 新規衛星を `.project-registry.json` へ手動登録する手順はあるが、CLIツール化されていない                             | `tools/add_project.py` CLIスクリプトを実装し自動登録化を完了                                                                                                         | 🟢 解決済み                             |
+| **PM-005** | ORCH-001 / DD-003                               | 🟢      | 旧 ORCH-001 のエラー分類器・再試行上限ロジックと LangGraph ノード遷移のマッピングが未定義                           | `OrchestratorState` に `error_category` を持たせ、DD-003 §2.1 / §4 に条件エッジ判定とマッピングを規定完了                                                            | 🟢 解決済み                             |
+| **PM-006** | MULTI-001 / DD-003                              | —      | Issue ID フォーマット（カッコ記法 `[EC-001]` vs カッコなし `EC-001`）の表記が全仕様書で不一致                       | 内部処理キーおよび正本表記としてはカッコなし `EC-001` に確定・統一                                                                                                   | 🟢 解決済み                             |
+| **PM-007** | DD-003 §3.1 / models.json                       | 🟢      | `config/models.json` の `temperature`, `max_tokens` (35000) を LiteLLM 呼び出しへ動的結合                           | `tools/llm_client.py` 経由で `get_model_params` を呼び出し `litellm.completion` へ完全結合・検証完了                                                                 | 🟢 解決済み                             |
+| **PM-008** | OP-001 §5.1                                     | 🟢      | OS別 (Windows Native vs Linux/WSL2) 自動バッチスクリプト (.ps1 vs .sh) の配置手順が混在                             | `scripts/windows/` と `scripts/linux/` にスクリプト配置構造を明確に分離                                                                                              | 🟢 解決済み                             |
+| **PM-009** | MULTI-001 §2②                                   | 🟢      | Issue ID プレフィックス決定ルール、連番4桁化 (`0001`〜`9999`)、およびサブタスク階層化の設計                         | SBOS-MULTI-001 §2② に連番4桁、サブタスク ID (A〜Z) 表記およびオーバーフロー時のタスク分解運用原則を規定・確定                                                        | 🟢 解決済み                             |
+| **PM-010** | ENV-001 §2.1 / config/models.json               | 🟢      | ENV-001 §2.1 のモデル記載 (`qwen` 系) が現行 `config/models.json` と乖離していた                                    | モデル定義を `config/models.json` に一元管理し、仕様書内の特定モデル名直書きを排除・参照統一                                                                         | 🟢 解決済み                             |
+| **PM-011** | DD-003 §3.1 / ENV-001 §2.2 / config/models.json | 🟢      | `llm_client.py` の `MODEL_MAP` ハードコードによる二重管理 (SSOT 崩壊)                                               | `tools/llm_client.py` 内で `config_loader` を参照しモデル名を動的取得（PM-007 と同時統合完了）                                                                       | 🟢 解決済み                             |
+| **PM-012** | BD-002 §5 / scripts/                            | 🟢      | `git config core.autocrlf input` の強制設定が環境構築スクリプトに未組み込みであった                                 | `scripts/windows/setup_reviewdog.ps1` の冒頭に `git config --global core.autocrlf input` 組み込み完了                                                                | 🟢 解決済み                             |
+| **PM-013** | DD-003 §4.1                                     | 🟢      | `escalate_node` から呼ぶ `update_task_state()` / `record_execution_history()` のシグネチャ・仕様が未定義            | DD-003 §4.1.1 を新設し、関数契約・`history_path` スキーマを `state.json` 対応で正式追記定義                                                                          | 🟢 解決済み                             |
+| **PM-014** | DD-003 §4.1 / OP-001 §3.5                       | 🟢      | `tasks.md` 内の B7 ブロッカー判定メタデータ書式が未定義であった                                                     | B7状態管理を `state.json` へ一本化し、`tasks.md` のメタデータ埋め込みを廃止するよう設計変更                                                                          | 🟢 解決済み                             |
+| **PM-015** | BD-002 §5 / ENV-001 §5.1 / scripts/windows/     | 🟢      | PowerShell UTF-8 設定 (`$OutputEncoding`) の適用タイミングおよび対象スコープが未規定であった                        | ENV-001 §5.1 で `$PROFILE` 永続設定手順を正本化。`setup_reviewdog.ps1` を非変更確認モードに改修                                                                      | 🟢 解決済み                             |
+| **PM-016** | README / ENV-001 / OP-001                       | 🔴 高   | オーケストレーター／スコアリング関連コード (`orchestrator_graph.py`, `score-issues.py` 等) が `tools/` に未存在     | `tools/score_issues.py` を実装し日次バッチ・スコアリング処理を完成                                                                                                   | 🟢 解決済み                             |
+| **PM-017** | README / DD-003 / OP-001                        | 🟢      | README の CLI 例文 (`--auto`) が詳細・運用設計書 (`orchestrate` / `execute`) と不一致                               | README.md の CLI 案内コマンドを `orchestrate` / `execute --issue-id` に修整完了                                                                                      | 🟢 解決済み                             |
+| **PM-018** | docs/setup/                                     | 🟢      | 依存管理方式のドキュメント記述が 3 系統に分裂 (`dependency_management.md` / `toml_project_setup.md`)                | ドキュメントを現行の `pyproject.toml` + `uv` 仕様に完全統一・修整完了                                                                                                | 🟢 解決済み                             |
+| **PM-019** | pyproject.toml / docs/                          | 🟢      | `uv sync` 後の品質確認・開発依存関係 (`ruff`, `pytest`, `pip-licenses` 等) が不足                                   | `pyproject.toml` に開発用依存パッケージを追加し `uv sync --extra dev` で一括正常化完了                                                                               | 🟢 解決済み                             |
+| **PM-020** | reviewdog_setup_guide.md / ENV-001              | 🟢      | Reviewdog セットアップおよび検証手順コマンドが OS 別実スクリプト動作と不一致                                        | ガイドおよび ENV-001 の検証コマンドを Linux/Windows それぞれの実体へ修整完了                                                                                         | 🟢 解決済み                             |
+| **PM-021** | ENV-001 §2.2 / config/models.json               | 🟢      | ENV-001 の `models.json` 構成サンプルが `config_loader.py` の実キー (`model_name` 等) と非互換                      | ENV-001 §2.2 の JSON 構成例を `model_name`, `temperature`, `max_tokens` の実スキーマに修整完了                                                                       | 🟢 解決済み                             |
+| **PM-022** | DD-003 §3.2 / tools/aider_runner.py             | 🟢      | DD-003 の `run_aider` API 引数契約・戻り値型が実物 `tools/aider_runner.py` と非互換                                 | DD-003 §3.2 のコードサンプルを実物 `run_aider(instruction, target_files, model, cwd)` 仕様に修整完了                                                                 | 🟢 解決済み                             |
+| **PM-023** | README / docs/                                  | 🟢      | 絶対 `file:///` リンクが特定環境パス (`c:/Users/xzyoi/...`) を指しリンク切れリスク                                  | ドキュメント内の絶対 `file:///` リンクを標準的な相対パスリンク `[text](relative/path)` へ変換完了                                                                    | 🟢 解決済み                             |
+| **PM-024** | oss_license_policy.md / models.json             | 🟢      | ライセンスポリシー文書 (`oss_license_policy.md`) の利用中モデル表記が旧 Qwen 系のまま不一致                         | `oss_license_policy.md` のモデル記載を現行の Gemma 4 系 (Gemma 4 12B IT, Gemma 4 Py Coder) へ修整完了                                                                | 🟢 解決済み                             |
+| **PM-025** | 全設計書 (BD/ORCH/ENV/OP/MULTI)                 | 🟢      | 設計書間の関連文書欄および本文中の他ドキュメント Rev バージョン表記の乖離                                           | 全設計書のヘッダー・関連文書欄の Rev 表記を最新確定バージョンへ一括整合修整完了                                                                                      | 🟢 解決済み                             |
+| **PM-026** | MULTI-001 / DD-003                              | 🟢      | 衛星リポジトリ内への `project.json` / `tasks.md` 配置による衛星コードベース汚染                                     | 母艦側 `metadata/projects/<project-key>/` 階層へメタデータを引き上げ管理する構成へ移行完了                                                                           | 🟢 解決済み                             |
+| **PM-027** | MULTI-001 / .gitignore                          | 🟢      | `projects/` ディレクトリ内部の安全かつ完全な Git 除外・遮断ルールの確立                                             | 台帳を `metadata/.project-registry.json` に配置転換し `.gitignore` で `projects/*` を完全除外設定完了                                                                | 🟢 解決済み                             |
+| **PM-028** | MULTI-001 §2④ / §4                              | 🔴 高   | 台帳 `metadata/.project-registry.json` のネスト構造 (`projects`) と `score-issues.py` 概念パースコードの不一致      | `SBOS-MULTI-001 §2④` の概念コードを `registry.get("projects", {})` でネスト解釈する実装へ統一修整完了                                                                | 🟢 解決済み                             |
+| **PM-029** | BD-002 §4.1                                     | 🟠 中   | BD-002 §4.1 に旧 `.gitignore` 記述 (`!/projects/.project-registry.json`) が残存                                     | BD-002 §4.1 の記述を PM-027 確定後の完全遮断ルール (`/projects/*`, `/projects/.*`, `!.gitignore`) へ更新修整完了                                                     | 🟢 解決済み                             |
+| **PM-030** | ENV-001 Step 2 / §7                             | 🟠 中   | ENV-001 の Step 2 (`.gitignore` ヒアドキュメント / 台帳作成) および §7 診断スクリプト内台帳パスが旧仕様のまま残存   | ENV-001 Step 2 の `.gitignore` 生成スクリプト、台帳初期化コード、および §7 診断スクリプトのパスを正本ルールへ完全追従修整完了                                        | 🟢 解決済み                             |
+| **PM-031** | 全設計書 (BD/DD/ORCH/ENV/OP/MULTI/PM)           | 🟡 低   | 関連文書ヘッダーの Rev 表記が過去版数のまま一部未追従                                                               | 全 7 設計書の関連文書ヘッダー版数表記を最新確定 Rev (BD Rev.4.6, DD Rev.4.8, ORCH Rev.3.5, ENV Rev.4.6, OP Rev.4.5, MULTI Rev.2.6, PM Rev.2.7) に完全整合統一完了    | 🟢 解決済み                             |
+| **PM-032** | DD-003 §2, §3.2, §4.1.1 / tools/                | 🟡 低   | DD-003 の `Optional` インポート漏れ、`tools/aider_runner.py` 内 `get_git_diff()` 未存在、マッピング未明記           | Typing 修正、`aider_runner.py` へ `get_git_diff()` 本実装 & テスト追加、`round` → `review_round` マッピング注記を追記完了                                            | 🟢 解決済み                             |
+| **PM-033** | MULTI-001 §5 Step 4                             | 🟠 中   | MULTI-001 §5 Step 4 の登録確認コマンドが旧台帳パス (`projects/.project-registry.json`) のまま残存                   | Step 4 の確認コマンドパスを `metadata/.project-registry.json` に修整完了                                                                                             | 🟢 解決済み                             |
+| **PM-034** | BD-002 ヘッダー                                 | 🟡 低   | BD-002 ヘッダーの関連文書表記で `SBOS-MULTI-001 Rev.2.4）` と開き括弧が欠落していたタイポ                           | `SBOS-MULTI-001（差分設計書 Rev.2.6）` へ正確に修整完了                                                                                                              | 🟢 解決済み                             |
+| **PM-035** | DD-003 §4.1.1 / OP-001 §2.1, §3.5               | 🟠 中   | `execution_history.json` 内レビュー指摘履歴構造の記述 (OP-001 §2.1) と正本 JSON スキーマ例 (DD-003 §4.1.1) の不一致 | `DD-003 §4.1.1` の正本 JSON スキーマ例に `review_rounds: [{round, verdict, comments}]` 履歴配列構造を追加定義し `OP-001 §2.1` および §3.5 の全記述と三者完全統合完了 | 🟢 解決済み                             |
+| **PM-036** | BD-002 / DD-003 / ORCH-001 / MULTI-001          | 🟢      | 手動コミットから `develop` 基準の自動ブランチ作成および PR 自動作成運用への方針転換と Git 操作の厳格化              | 1. 派生元 `develop` / ターゲット `develop` の固定 (`gh pr create`) <br> 2. `escalate_node` での安全停止と差分保持 <br> 3. メタデータへの `base_branch` 追加          | 🟢 解決済み                             |
+| **PM-037** | DD-003 / OP-001                                 | 🟢      | 衛星リポジトリの「排他制御（ロック機構）」の欠如。複数タスク同時実行時のワーキングツリー競合リスク                  | `plan_node` 前に `.lock` 機構を導入。取得失敗時は待機せず即時スキップ (`SKIPPED_LOCKED`) するようルール化                                                            | 🟢 解決済み                             |
+| **PM-038** | DD-003 / OP-001 / MULTI-001                     | 🟢      | `tasks.md` へのシステム状態埋め込み（HTMLコメント）による脆弱性とB7管理の煩雑さ                                     | システム状態を `metadata/projects/<PROJECT_KEY>/state.json` へ分離・SSOT化し、tasks.mdのHTMLコメントを廃止                                                           | 🟢 解決済み                             |
+| **PM-039** | DD-003 / OP-001                                 | 🟠 中   | 依存解決度（D）のスコア計算における先行タスク未完了（ブロッカーあり）Issueの「実行除外漏れ」リスク                  | `tools/score_issues.py` にて未完了ブロッカーを持つIssueをスコア計算前に除外（Drop）し `[SKIPPED]` ログを出力するハードリミットを実装完了                             | 🟢 解決済み                             |
+| **PM-040** | DD-003 / ORCH-001                               | 🔴 高   | 完全ローカル環境（max_tokens: 35000）におけるコンテキストウィンドウ枯渇および既存コード文脈の欠落リスク             | AST 解析（Tree-sitter, `tools/lang/`）を用いた Context Fetching 基盤を導入し関連ファイル・識別子を抽出。ベクトル検索（RAG）は本課題のスコープ外とする                | 🟢 解決済み（AST スコープ／RAG 対象外） |
+| **PM-041** | 複数設計書横断                                  | 🟢      | 台帳・メタデータの正本パスが二重定義（`metadata/` vs 衛星直下）                                                     | `metadata/` を唯一の正本として文書体系全体で統一し、README等の旧配置情報を更新                                                                                       | 🟢 解決済み                             |
+| **PM-042** | DD-003 / ORCH                                   | 🟢      | B7ブロッカー判定の履歴スキーマが新旧設計書間で非互換（安全回路不成立）                                              | B7判定を `state.json` の `status == "FAILED_B7"` に完全一本化し、DD-003のスキーマ定義を更新                                                                          | 🟢 解決済み                             |
+| **PM-043** | ORCH / DD                                       | 🟢      | LLMタイムアウト・システム例外時の状態遷移契約の不足                                                                 | LLMタイムアウトは1回再試行後 `FAILED_SYSTEM`、他例外は即時 `FAILED_SYSTEM` となるようDD-003状態遷移表に追加                                                          | 🟢 解決済み                             |
+| **PM-044** | OP-001 / ORCH                                   | 🟢      | 破壊的なGit復旧に対する保全・復元方針の欠如                                                                         | `git clean -fd` 等の破壊的操作をドキュメントから削除し、B7・例外時は差分保持・停止・人間確認運用へ変更                                                               | 🟢 解決済み                             |
+| **PM-045** | ORCH / BD                                       | 🟢      | 自動ブランチ・PR運用が正常系のみで異常系状態の定義不足                                                              | PR失敗時は作業ブランチ・差分を保持して停止 (`PR_FAILED`) するようDD-003の状態遷移ルールへ追加                                                                        | 🟢 解決済み                             |
+| **PM-046** | DD / ORCH                                       | 🟢      | 同一衛星への並行実行を扱う排他制御の契約未完成（PM-037関連）                                                        | ロック取得失敗時は待機せず即時スキップし `SKIPPED_LOCKED` となるようDD-003にルール明記                                                                               | 🟢 解決済み                             |
+| **PM-047** | ENV-001 / DD                                    | 🟢      | モデル設定SSOTとフォールバック方針の矛盾                                                                            | DD-003に残存していた直書きモデル名を廃止し、`models.json` フォールバック先例示へと一元化                                                                             | 🟢 解決済み                             |
+| **PM-048** | 全文書横断                                      | 🟢      | 文書間の版数参照が現行版と不一致                                                                                    | 本文・関連文書欄の他文書固定版数参照を削除し文書番号のみの参照へ統一                                                                                                 | 🟢 解決済み                             |
+| **PM-049** | ORCH                                            | 🟢      | 旧ORCH文書の位置付けが不明瞭（現行仕様との混同リスク）                                                              | `SBOS-ORCH-001.md` 各節に「非規範・参考資料」のアラートを追記し、正本は DD-003 である旨を明記                                                                        | 🟢 解決済み                             |
+| **PM-050** | DD / ORCH                                       | 🟠 中   | Ollama (localhost:11434) と llama-server (localhost:8080) のLLMバックエンド接続経路・起動方針が混在している         | `BackendExecutionCoordinator` を導入し、推論目的（intent）に応じた排他併用（Exclusive Co-usage）アーキテクチャへ移行                                                 | 🟢 解決済み                             |
 
 ---
 
@@ -184,13 +176,17 @@
 
 ### PM-039: 依存解決度（D）のスコア計算における「実行除外漏れ」リスク
 * **課題**: 日次バッチのスコアリングによる実行タスク選定ロジックにおいて、先行タスクが未完了（ブロッカーが存在）の状態で依存解決度が 0 ($D=0$) となっても、優先度 ($P$) が最高値であれば上位にランクインしてしまう可能性がある。
-* **解決案**: ブロッカーを持つIssueは「順位を低下させる」のではなく、スコア計算の前にフィルタリングし、実行候補リストから完全に「除外（Drop）」するハードリミット処理を `score-issues.py` に組み込む。
+* **対応内容（実装完了）**: `tools/score_issues.py` にスコアリング前のフィルタリングフェーズを実装。`blockedby` に未完了タスクを含む Issue は評価用リストへ追加せず「除外（Drop）」し、除外理由を `[SKIPPED] Issue ... is blocked by uncompleted tasks: ...` としてログ出力する。推奨実装1（前処理フィルタの分離）と推奨実装2（除外理由の可視化）の双方を満たす。テストは `tests/test_score_issues.py` を参照。
   * **推奨実装 1（フィルタリングフェーズの分離）**: `score-issues.py` において、スコアリング関数にリストを渡す前に前処理（Pre-filtering）フェーズを設け、未完了のIssueに依存している場合は評価用の配列に追加しない設計とする。
   * **推奨実装 2（除外理由の可視化）**: 運用者が日次サイクルの透明性を担保できるよう、「依存未解決のためスキップしたIssue」を標準出力やデバッグログに `[SKIPPED]` として残し、なぜ高優先度タスクが選定されなかったのかを可視化する。
 
 ### PM-040: コンテキストウィンドウ（35,000トークン）枯渇への対策不足
 * **課題**: ローカルモデルのコンテキスト窓（`max_tokens: 35000`）の制約により、中規模以上の開発でコードツリー全体をプロンプトに流し込むことができない。現在の `plan_node` は `tasks.md` と `project.json` のみを読み込むため、既存コードのコンテキストを持たずに実装計画を立てることになり精度の低下や不整合が生じる。
-* **解決案**: `plan_node` の前に、ベクトル検索（RAG）やAST解析を用いた「Context Fetching（関連ファイル抽出）ノード」を追加し、対象タスクに関連する最小限のファイル群を動的抽出してコンテキストに流し込むアーキテクチャへの拡張を行う。
+* **解決方針（スコープ確定）**: 本課題の対策は **AST 解析（Tree-sitter）による Context Fetching に限定**し、ベクトル検索（RAG）は本課題のスコープ外とする。RAG はインデックス基盤・埋め込みモデル・鮮度管理などの追加運用コストが大きく、完全ローカル前提の現行フェーズでは費用対効果が見合わないため、将来の別課題として切り離す。
+* **対応内容（AST スコープ）**:
+  1. **Tree-sitter パーサー基盤の導入**: `tools/lang/`（`base.py`／`python_verifier.py`／`rust_verifier.py`／`ts_verifier.py`）に Tree-sitter (CST/AST) パーサー基盤を実装し、正規表現に依存しない正確な構文解析・識別子抽出（関数名・クラス名・インポート名）を実現。依存は `pyproject.toml` に `tree-sitter`, `tree-sitter-python`, `tree-sitter-rust`, `tree-sitter-typescript` を追加。詳細は `docs/features/multi_language_verifiers.md` を参照。
+  2. **関連ファイル・識別子の抽出**: AST から抽出した識別子集合を用いて、対象タスクに関連する最小限のコード断片を特定・抽出する土台を整備。これによりコードツリー全体を投入せずに必要文脈を絞り込む方針を確立。
+* **残スコープ外（将来課題）**: ベクトル検索（RAG）による意味的類似度ベースの関連ファイル抽出は本課題では扱わない。必要となった時点で新規課題として登録する。
 
 ### PM-041: 台帳・メタデータ正本パスの二重定義
 * **課題**: `06_複数リポジトリ_差分設計書` などは `metadata/projects/<KEY>/` を正本としているが、README等の構成説明には衛星直下のメタデータ配置が残っている。
