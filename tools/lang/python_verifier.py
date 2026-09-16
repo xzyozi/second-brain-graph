@@ -1,4 +1,4 @@
-"""Python-specific language verifier using ast and py_compile."""
+"""Python-specific language verifier using ast, py_compile, and Tree-sitter."""
 
 import ast
 import py_compile
@@ -6,20 +6,28 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools.lang.base import BaseLanguageVerifier, VerificationResult, register_verifier
+from tools.lang.base import (
+    BaseLanguageVerifier,
+    VerificationResult,
+    extract_tree_sitter_identifiers,
+    find_tree_sitter_errors,
+    get_tree_sitter_parser,
+    register_verifier,
+)
 
 
 @register_verifier("python")
 @register_verifier("py")
 class PythonLanguageVerifier(BaseLanguageVerifier):
-    """Verifier implementation for Python language files."""
+    """Verifier implementation for Python language files using ast, py_compile, and Tree-sitter."""
 
     def verify_syntax(self, file_path: Path) -> VerificationResult:
-        """Verify Python syntax via ast.parse and py_compile."""
+        """Verify Python syntax via ast.parse, py_compile, and Tree-sitter parser."""
         if not file_path.exists():
             return VerificationResult(is_valid=False, errors=[f"File not found: {file_path}"])
 
         code_text = file_path.read_text(encoding="utf-8")
+        code_bytes = code_text.encode("utf-8")
         errors = []
         tree = None
 
@@ -34,6 +42,17 @@ class PythonLanguageVerifier(BaseLanguageVerifier):
             errors.append(f"py_compile error: {e}")
 
         identifiers = self._extract_identifiers(tree) if tree else set()
+
+        parser = get_tree_sitter_parser("python")
+        if parser:
+            ts_tree = parser.parse(code_bytes)
+            ts_errors = find_tree_sitter_errors(ts_tree.root_node)
+            for err in ts_errors:
+                if not any("SyntaxError" in existing for existing in errors):
+                    errors.append(f"Tree-sitter {err}")
+            ts_identifiers = extract_tree_sitter_identifiers(ts_tree.root_node, code_bytes)
+            identifiers.update(ts_identifiers)
+
         return VerificationResult(
             is_valid=len(errors) == 0,
             errors=errors,
@@ -101,3 +120,4 @@ class PythonLanguageVerifier(BaseLanguageVerifier):
                 for alias in node.names:
                     identifiers.add(alias.name)
         return identifiers
+
