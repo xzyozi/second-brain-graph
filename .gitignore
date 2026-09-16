@@ -232,6 +232,9 @@ __marimo__/
 /models/*
 !/models/.gitkeep
 
+# Kiro IDE local state (steering / lessons / hooks etc.)
+/.kiro/
+
 
 
 

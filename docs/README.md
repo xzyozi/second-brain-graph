@@ -13,6 +13,7 @@
   * `README.md`: 設計ドキュメントの命名規則・執筆・更新運用ルール
 * **`docs/features/`**: 機能別の利用契約と運用手順
   * [`ollama_modelfile_profile_management.md`](features/ollama_modelfile_profile_management.md): GGUF向けQwen ModelfileのCLI入力契約・生成手順
+  * [`coder_test_and_github_ci_pr_fixer.md`](features/coder_test_and_github_ci_pr_fixer.md): Coderモデル動作検証仕様・実績および GitHub CI PR Fixer 設計書
 
 ---
 
