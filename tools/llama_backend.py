@@ -109,7 +109,12 @@ def managed_llama_server(
         time.sleep(2)
 
     if not ready:
-        process.terminate()
+        # #25: readiness timeout 時も terminate() 直後に例外を投げず、
+        # wait()/kill() とポート解放監査を必ず通して子プロセスの残留（GPU/ポート占有）を防ぐ。
+        logger.error(
+            f"llama-server did not become healthy within {max_retries * 2} seconds. Cleaning up child process..."
+        )
+        _terminate_and_audit(process, port)
         raise TimeoutError(f"llama-server did not become healthy within {max_retries * 2} seconds.")
 
     try:
@@ -118,26 +123,36 @@ def managed_llama_server(
     finally:
         # 処理完了後、または例外発生時に確実にプロセスを終了してVRAMを解放する
         logger.info("Terminating llama-server and freeing VRAM...")
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            logger.warning("llama-server did not terminate gracefully, forcing kill...")
-            process.kill()
-            process.wait()
-
-        # ポート解放を監査 (VRAM解放の確実な担保)
-        logger.info("Auditing port release...")
-        port_freed = False
-        for _ in range(10):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                result = s.connect_ex(("127.0.0.1", port))
-                if result != 0:
-                    port_freed = True
-                    break
-            time.sleep(1)
-
-        if not port_freed:
-            raise RuntimeError(f"llama-server failed to free port {port} after termination.")
-
+        _terminate_and_audit(process, port)
         logger.info("VRAM has been completely freed.")
+
+
+def _terminate_and_audit(process: subprocess.Popen, port: int) -> None:
+    """llama-server 子プロセスを確実に終了し、ポート解放を監査する。
+
+    terminate → wait(timeout) → kill(timeout超過時) の順で確実に停止させ、
+    その後にポートが解放されたことを確認する。readiness timeout・正常終了・
+    例外発生のいずれの経路でも本関数を通すことで、GPU/ポートを占有したままの
+    ゾンビプロセス残留を防ぐ（#25）。
+    """
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        logger.warning("llama-server did not terminate gracefully, forcing kill...")
+        process.kill()
+        process.wait()
+
+    # ポート解放を監査 (VRAM解放の確実な担保)
+    logger.info("Auditing port release...")
+    port_freed = False
+    for _ in range(10):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            result = s.connect_ex(("127.0.0.1", port))
+            if result != 0:
+                port_freed = True
+                break
+        time.sleep(1)
+
+    if not port_freed:
+        raise RuntimeError(f"llama-server failed to free port {port} after termination.")

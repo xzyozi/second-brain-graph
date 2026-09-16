@@ -15,10 +15,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from filelock import FileLock, Timeout
 from langgraph.graph import END, StateGraph
@@ -377,10 +378,31 @@ def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
     return target_files
 
 
+def is_within_directory(candidate: Path, root: Path) -> bool:
+    """candidate を解決した実パスが root ディレクトリ配下にあるかを検証する（パストラバーサル防止）。
+
+    シンボリックリンクや ``..`` を含むパスも ``resolve()`` で正規化してから
+    比較するため、``../../other.py`` のようなリポジトリ外への参照を拒否できる。
+    """
+    try:
+        root_resolved = root.resolve()
+        candidate_resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return False
+    if candidate_resolved == root_resolved:
+        return True
+    return root_resolved in candidate_resolved.parents
+
+
 def resolve_target_files_against_cwd(
     target_files: List[str], cwd: Optional[Path] = None
 ) -> List[str]:
-    """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。"""
+    """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。
+
+    セキュリティ: 各 target_file は ``resolve()`` で正規化し、``cwd``（衛星リポジトリ
+    ルート）配下にあることを検証する。配下でないパス（``../../other.py`` 等）は
+    パストラバーサルとして拒否し、Aider の編集対象へは渡さない。
+    """
     if not cwd or not Path(cwd).exists():
         return target_files
 
@@ -397,6 +419,12 @@ def resolve_target_files_against_cwd(
 
     for tf in target_files:
         full_p = cwd_path / tf
+        # パストラバーサル防止: 衛星リポジトリルート配下でない参照は拒否する
+        if not is_within_directory(full_p, cwd_path):
+            logger.warning(
+                f"Target file '{tf}' resolves outside the satellite repository and is rejected (path traversal guard)."
+            )
+            continue
         if full_p.exists():
             if tf not in resolved:
                 resolved.append(tf)
@@ -543,14 +571,48 @@ def resolve_project_context(
         }
 
 
+# #22: status / error_category を Literal で型安全化する。
+# 文字列値は従来と同一（実行時挙動は不変）で、タイポや未定義状態を型チェックで検出可能にする。
+# 中間（遷移途中）状態と終端状態の両方を列挙する。
+StatusLiteral = Literal[
+    # 中間・遷移状態
+    "running",
+    "code_completed",
+    "lint_passed",
+    "test_passed",
+    "review_lgtm",
+    "retry_spec_draft",
+    "retry_code",
+    "retry_review",
+    # 終端状態
+    "COMPLETED",
+    "FAILED_SYSTEM",
+    "FAILED_B7",
+    "PR_FAILED",
+    "SKIPPED_LOCKED",
+    "ESCALATED_NEEDS_REVISION",
+]
+
+# DD-003 §2.1 のエラー分類（7分類）
+ErrorCategoryLiteral = Literal[
+    "LINT_ERROR",
+    "TEST_ERROR",
+    "REVIEW_REJECTED",
+    "LLM_TIMEOUT",
+    "SYSTEM_ERROR",
+    "LOCKED",
+    "PR_ERROR",
+]
+
+
 class GraphState(TypedDict, total=False):
     issue_id: str
     project_key: str
     execution_id: str
     generation: int
-    status: str
+    status: StatusLiteral
     error: Optional[str]
-    error_category: Optional[str]
+    error_category: Optional[ErrorCategoryLiteral]
     llm_timeout_count: int
     review_round: int
     lint_round: int
@@ -559,6 +621,8 @@ class GraphState(TypedDict, total=False):
     target_files: List[str]
     instruction: str
     cwd: Optional[str]
+    # #26: FAILURE_REPORT 等を衛星ワークツリー外（母艦メタデータ）へ隔離するための出力先
+    metadata_dir: Optional[str]
     base_branch: str
     aider_message: str
     test_feedback_instruction: Optional[str]
@@ -646,11 +710,42 @@ def code_node(state: GraphState) -> GraphState:
     if state.get("aider_message"):
         instruction += f"\n\nFeedback:\n{state['aider_message']}"
 
+    # #26: .gitignore の巻き戻しは Aider 由来の変更に限定する。Aider 実行前の内容を
+    # スナップショットし、実行後に変化した場合のみ戻す。無条件の checkout は人手変更や
+    # 必要な ignore 設定を失わせるため行わない。
+    gitignore_before: Optional[str] = None
+    if cwd:
+        gitignore_path = Path(cwd) / ".gitignore"
+        if gitignore_path.exists():
+            try:
+                gitignore_before = gitignore_path.read_text(encoding="utf-8")
+            except Exception:
+                gitignore_before = None
+
     try:
-        run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
-        # Aider が自動追記した .gitignore の変更を元に戻し、規約違反・レビュー拒否を防止
-        if cwd and is_in_git_workspace(cwd):
-            run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
+        # #25: Aider も GPU リース配下で実行し、planner/reviewer の LLM 呼出しと
+        # GPU/VRAM を奪い合わないようにする。従来は run_aider を直接 subprocess 起動して
+        # GpuLeaseAdapter を迂回していた。Coordinator 経由に統一する。
+        from tools.backend_coordinator import get_coordinator
+
+        def _do_aider(_profile: Any) -> bool:
+            return run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
+
+        coordinator = get_coordinator()
+        coordinator.execute("aider_edit", {"action": _do_aider})
+        # #26: Aider が .gitignore を変更した場合のみ元に戻す（規約違反・レビュー拒否を防止）。
+        # 実行前後で内容が変わっていなければ何もしない。
+        if cwd and gitignore_before is not None and is_in_git_workspace(cwd):
+            gitignore_path = Path(cwd) / ".gitignore"
+            try:
+                gitignore_after = (
+                    gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else None
+                )
+            except Exception:
+                gitignore_after = None
+            if gitignore_after != gitignore_before:
+                logger.info("Aider modified .gitignore; reverting to pre-Aider state.")
+                run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
 
         state["status"] = "code_completed"
         # Aider が編集・新規作成したファイルを動的に target_files へ追加
@@ -806,33 +901,43 @@ def run_pytest_node(state: GraphState) -> GraphState:
     例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
     logger.info("Executing test_node (Pytest)")
-    cwd = state.get("cwd")
-    target_files = state.get("target_files", [])
-    report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
-
-    # 対象タスクに関連するテストファイルを特定
-    test_files = [tf for tf in target_files if "test" in Path(tf).name.lower()]
-    if not test_files and cwd:
-        for tf in target_files:
-            stem = Path(tf).stem
-            candidate = f"tests/test_{stem}.py"
-            if candidate not in test_files:
-                test_files.append(candidate)
-
-    # ディスク上に実際に存在するテストファイルのみに絞り込み
-    existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
-
-    # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
-    if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
-        for p in (Path(cwd) / "tests").glob("test_*.py"):
-            if "ui" not in p.name.lower() and "gui" not in p.name.lower():
-                rel_test = str(p.relative_to(cwd)).replace("\\", "/")
-                if rel_test not in existing_test_files:
-                    existing_test_files.append(rel_test)
-
-    cmd_test_files = existing_test_files if existing_test_files else test_files
+    report_file: Optional[Path] = None
 
     try:
+        cwd = state.get("cwd")
+        target_files = state.get("target_files", [])
+        # #26: 固定名 .report.json を cwd 直下へ出力し finally で無条件削除すると、
+        # 既存ファイルや並行実行のレポートを上書き・削除してしまう。実行ごとに一意名の
+        # 一時ファイルを用い、他プロセス・利用者のファイルを侵さないようにする。
+        report_dir = Path(cwd) if (cwd and Path(cwd).exists()) else Path(".")
+        report_fd, report_file_str = tempfile.mkstemp(
+            prefix=f".pytest-report-{os.getpid()}-", suffix=".json", dir=str(report_dir)
+        )
+        os.close(report_fd)
+        report_file = Path(report_file_str)
+
+        # 対象タスクに関連するテストファイルを特定
+        test_files = [tf for tf in target_files if "test" in Path(tf).name.lower()]
+        if not test_files and cwd:
+            for tf in target_files:
+                stem = Path(tf).stem
+                candidate = f"tests/test_{stem}.py"
+                if candidate not in test_files:
+                    test_files.append(candidate)
+
+        # ディスク上に実際に存在するテストファイルのみに絞り込み
+        existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
+
+        # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
+        if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
+            for p in (Path(cwd) / "tests").glob("test_*.py"):
+                if "ui" not in p.name.lower() and "gui" not in p.name.lower():
+                    rel_test = str(p.relative_to(cwd)).replace("\\", "/")
+                    if rel_test not in existing_test_files:
+                        existing_test_files.append(rel_test)
+
+        cmd_test_files = existing_test_files if existing_test_files else test_files
+
         # pytest-json-report オプションを付加して対象テストファイルを実行
         cmd = (
             [sys.executable, "-m", "pytest"]
@@ -965,7 +1070,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
         state["error_category"] = "SYSTEM_ERROR"
         state["error"] = str(e)
     finally:
-        if report_file.exists():
+        if report_file and report_file.exists():
             try:
                 report_file.unlink()
             except Exception:
@@ -1466,8 +1571,18 @@ def escalate_node(state: GraphState) -> GraphState:
                 else str(res)
             )
 
-            # ワークスペース内にレポートを出力
-            report_path = Path(cwd) / f"FAILURE_REPORT_{state['issue_id']}.md"
+            # #26: FAILURE_REPORT を衛星ワークツリー（cwd）へ書くと target 外ファイルで
+            # 作業ツリーを汚染し、既存同名を上書きし、次回の dirty tree 判定を阻害する。
+            # 母艦メタデータ領域 metadata/projects/<PROJECT_KEY>/ へ隔離出力する。
+            metadata_dir = state.get("metadata_dir")
+            project_key = state.get("project_key")
+            if metadata_dir and project_key:
+                report_dir = Path(metadata_dir) / "projects" / project_key
+            else:
+                # フォールバックでも衛星ワークツリー外へ隔離する
+                report_dir = Path(tempfile.gettempdir()) / "sbos_failure_reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_path = report_dir / f"FAILURE_REPORT_{state['issue_id']}.md"
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(f"# Failure Analysis Report for {state['issue_id']}\n\n")
                 f.write(analysis_text)
@@ -1922,6 +2037,7 @@ def execute_issue(
                 target_files=target_files,
                 instruction=instruction_text,
                 cwd=cwd,
+                metadata_dir=str(metadata_dir),
                 base_branch=base_branch,
                 aider_message="",
                 impl_plan=None,

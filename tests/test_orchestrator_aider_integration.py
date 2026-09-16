@@ -810,18 +810,31 @@ def test_run_pytest_node_json_report_parsing(tmp_path: Path) -> None:
             }
         ],
     }
-    report_file = tmp_path / ".report.json"
+    # #26: run_pytest_node は一意名の一時レポートファイルを使う。mkstemp をモックして
+    # 既知のパスを返し、そこへ擬似レポートを配置してパース経路を検証する。
+    report_file = tmp_path / ".pytest-report-fixed.json"
     report_file.write_text(json.dumps(report_content), encoding="utf-8")
+    import os as _os
 
-    with patch(
-        "tools.orchestrator_graph.run_cmd",
-        return_value=MagicMock(returncode=1, stdout="Failed", stderr=""),
+    fd = _os.open(str(tmp_path / ".mkstemp-fd-placeholder"), _os.O_CREAT | _os.O_WRONLY)
+
+    with (
+        patch(
+            "tools.orchestrator_graph.tempfile.mkstemp",
+            return_value=(fd, str(report_file)),
+        ),
+        patch(
+            "tools.orchestrator_graph.run_cmd",
+            return_value=MagicMock(returncode=1, stdout="Failed", stderr=""),
+        ),
     ):
         res = run_pytest_node(state)
         assert res["status"] == "retry_code"
         assert res["error_category"] == "TEST_ERROR"
         assert "AssertionError: expected True got False" in res["aider_message"]
         assert "tests/test_foo.py::test_bar" in res["aider_message"]
+    # 一意名レポートは finally で削除されること
+    assert not report_file.exists()
 
 
 def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
@@ -971,6 +984,36 @@ def test_escalate_node_defensive_classification_fallback() -> None:
     }
     res5 = escalate_node(state5)
     assert res5["status"] == "FAILED_B7"
+
+
+def test_escalate_node_writes_failure_report_outside_worktree(tmp_path: Path) -> None:
+    """#26: FAILURE_REPORT を衛星ワークツリー(cwd)ではなく metadata 配下へ隔離出力することを検証する。"""
+    cwd = tmp_path / "satellite"
+    cwd.mkdir(parents=True, exist_ok=True)
+    metadata_dir = tmp_path / "metadata"
+
+    state: GraphState = {
+        "issue_id": "TFG-0030",
+        "project_key": "TFG",
+        "status": "running",
+        "error_category": "TEST_ERROR",
+        "cwd": str(cwd),
+        "metadata_dir": str(metadata_dir),
+        "test_result": {"stdout": "AssertionError"},
+    }
+
+    with patch(
+        "tools.llm_client.call_llm",
+        return_value={"content": "root cause analysis"},
+    ):
+        res = escalate_node(state)
+
+    # 衛星ワークツリーには FAILURE_REPORT が作られない
+    assert not (cwd / "FAILURE_REPORT_TFG-0030.md").exists()
+    # metadata 配下へ隔離出力される
+    report = metadata_dir / "projects" / "TFG" / "FAILURE_REPORT_TFG-0030.md"
+    assert report.exists()
+    assert res["status"] == "ESCALATED_NEEDS_REVISION"
 
 
 def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
@@ -1276,6 +1319,42 @@ def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
     assert "src/grep/office_parser.py" in resolved
     assert "tests/test_grep_engine.py" in resolved
     assert "tests/test_engine.py" not in resolved
+
+
+def test_resolve_target_files_rejects_path_traversal(tmp_path: Path) -> None:
+    """衛星リポジトリ外を指す target_files（../ 等）が拒否されることを検証する（#23 path traversal）。"""
+    from tools.orchestrator_graph import resolve_target_files_against_cwd
+
+    repo = tmp_path / "satellite"
+    (repo / "src").mkdir(parents=True, exist_ok=True)
+    (repo / "src" / "inside.py").touch()
+    # リポジトリ外に実在ファイルを置く（../../ で到達可能かを検証）
+    (tmp_path / "outside.py").touch()
+
+    raw_targets = [
+        "src/inside.py",  # 配下: 許可
+        "../outside.py",  # 範囲外: 拒否
+        "../../etc/passwd.py",  # 範囲外: 拒否
+    ]
+    resolved = resolve_target_files_against_cwd(raw_targets, cwd=repo)
+
+    assert "src/inside.py" in resolved
+    assert not any(".." in tf for tf in resolved)
+    assert "../outside.py" not in resolved
+    assert "../../etc/passwd.py" not in resolved
+
+
+def test_is_within_directory(tmp_path: Path) -> None:
+    """is_within_directory が配下判定と範囲外拒否を正しく行うことを検証する（#23）。"""
+    from tools.orchestrator_graph import is_within_directory
+
+    root = tmp_path / "repo"
+    (root / "pkg").mkdir(parents=True, exist_ok=True)
+
+    assert is_within_directory(root / "pkg" / "mod.py", root) is True
+    assert is_within_directory(root, root) is True
+    assert is_within_directory(root / ".." / "other.py", root) is False
+    assert is_within_directory(tmp_path / "sibling.py", root) is False
 
 
 def test_test_feedback_node_generates_categorized_instructions(
