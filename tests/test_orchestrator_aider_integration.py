@@ -1451,15 +1451,17 @@ def test_done_node_option_b_boundary_warning() -> None:
         boundary_warning=None,
     )
 
+    cmd_history: list[str] = []
+
     def mock_run_cmd(cmd: list[str], cwd: str | None = None, timeout: int = 60) -> MagicMock:
         cmd_str = " ".join(cmd)
         if "diff --cached" in cmd_str:
-            if "git add" in mock_run_cmd.history:
+            if "git add" in cmd_history:
                 # Return allowed and unauthorized staged file
                 return MagicMock(returncode=0, stdout="src/allowed.py\nsrc/extra_unauthorized.py\n")
             return MagicMock(returncode=0, stdout="")
         if "add" in cmd_str:
-            mock_run_cmd.history.append("git add")
+            cmd_history.append("git add")
             return MagicMock(returncode=0, stdout="")
         if "status" in cmd_str:
             return MagicMock(returncode=0, stdout="M src/allowed.py")
@@ -1467,14 +1469,13 @@ def test_done_node_option_b_boundary_warning() -> None:
             return MagicMock(returncode=0, stdout="Success")
         return MagicMock(returncode=0, stdout="")
 
-    mock_run_cmd.history = []
-
     with (
         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
         patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
         patch("shutil.which", return_value="/usr/bin/gh"),
     ):
         res = done_node(state)
-        assert res.get("boundary_warning") is not None
-        assert "extra_unauthorized.py" in res["boundary_warning"]
+        bw = res.get("boundary_warning")
+        assert bw is not None
+        assert "extra_unauthorized.py" in bw
         assert res.get("status") == "COMPLETED"
