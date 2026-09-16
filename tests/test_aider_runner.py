@@ -135,3 +135,85 @@ def test_run_aider_tmp_file_cleaned_up_on_error(mock_run: MagicMock, tmp_path: P
     # 一時ファイル (.aider.instruction_*.tmp) が削除されていることを確認
     tmp_files = list(tmp_path.glob(".aider.instruction_*.tmp"))
     assert len(tmp_files) == 0
+
+
+# ---------------------------------------------------------------------------
+# get_default_aider_model の ollama/ プレフィックス付与ロジック
+# ---------------------------------------------------------------------------
+def _backend_config_with_coding_model(backend: str, model: str):
+    """code_edit ルートに指定 backend/model を持つ設定を組み立てるヘルパー。"""
+    from tools.config_loader import BackendExecutionConfig, ProfileConfig
+
+    if backend == "ollama":
+        profile = ProfileConfig(
+            backend="ollama",
+            model=model,
+            openai_endpoint="http://localhost:11434/v1",
+            ollama_management_endpoint="http://localhost:11434",
+        )
+    else:
+        profile = ProfileConfig(
+            backend="llama_server",
+            model=model,
+            openai_endpoint="http://localhost:8080/v1",
+            port=8080,
+            model_path="./models/test.gguf",
+        )
+    return BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        routes={"code_edit": "coding"},
+        profiles={"coding": profile},
+    )
+
+
+def test_get_default_aider_model_adds_ollama_prefix() -> None:
+    """ollama バックエンドでモデル名に接頭辞が無い場合、ollama/ が付与されることを確認する。"""
+    from tools.aider_runner import get_default_aider_model
+
+    with patch(
+        "tools.config_loader.get_backend_execution_config",
+        return_value=_backend_config_with_coding_model("ollama", "qwen2.5-coder:7b"),
+    ):
+        model = get_default_aider_model()
+
+    assert model == "ollama/qwen2.5-coder:7b"
+
+
+def test_get_default_aider_model_does_not_double_prefix() -> None:
+    """既に ollama/ 接頭辞を持つモデル名には二重付与しないことを確認する。"""
+    from tools.aider_runner import get_default_aider_model
+
+    with patch(
+        "tools.config_loader.get_backend_execution_config",
+        return_value=_backend_config_with_coding_model("ollama", "ollama/qwen2.5-coder:7b"),
+    ):
+        model = get_default_aider_model()
+
+    assert model == "ollama/qwen2.5-coder:7b"
+
+
+def test_get_default_aider_model_llama_server_no_prefix() -> None:
+    """llama_server バックエンドでは ollama/ を付与しないことを確認する。"""
+    from tools.aider_runner import get_default_aider_model
+
+    with patch(
+        "tools.config_loader.get_backend_execution_config",
+        return_value=_backend_config_with_coding_model("llama_server", "gemma-4-12B"),
+    ):
+        model = get_default_aider_model()
+
+    assert model == "gemma-4-12B"
+
+
+def test_get_default_aider_model_falls_back_on_config_error() -> None:
+    """設定取得が例外を投げた場合、フォールバックモデル名を返すことを確認する (fail-safe)。"""
+    from tools.aider_runner import get_default_aider_model
+
+    with patch(
+        "tools.config_loader.get_backend_execution_config",
+        side_effect=RuntimeError("config broken"),
+    ):
+        model = get_default_aider_model()
+
+    assert model == "ollama/qwen2.5-coder:7b-instruct"
