@@ -4,6 +4,8 @@
 
 `tools/lang/` は、LLM Coder (Aider 等) が生成または編集したソースコードの品質・構文・構造・ビルド整合性を言語横断で検証するための共通解析モジュール群です。
 
+パーサー基盤として **Tree-sitter** (CST / AST 構文解析エンジン) を導入しており、正規表現やトークンスキャンに頼らない 100% 正確な構文エラー検出・識別子抽出を実現しています。
+
 単体の pytest 用テスト検証にとどまらず、自律エージェント基盤 (`tools/orchestrator_graph.py`) の `review_node` や `code_node` から呼び出すことで、コード生成直後の自動フィードバックループを実現します。
 
 ---
@@ -13,10 +15,10 @@
 ```
 tools/lang/
 ├── __init__.py           # パッケージパブリックAPIエクスポート
-├── base.py               # 抽象基底クラス (BaseLanguageVerifier), 結果モデル (VerificationResult)
-├── python_verifier.py    # Python用 (ast解析, py_compile, 識別子検査)
-├── rust_verifier.py      # Rust用 (cargo check, cargo test, 語彙/構造解析)
-└── ts_verifier.py        # TypeScript/JS用 (tsc --noEmit, node --check, 語彙解析)
+├── base.py               # 抽象基底クラス, Tree-sitter パーサー・エラー・識別子抽出コア
+├── python_verifier.py    # Python用 (ast解析, py_compile, Tree-sitter Python AST)
+├── rust_verifier.py      # Rust用 (cargo check, Tree-sitter Rust AST)
+└── ts_verifier.py        # TypeScript/JS用 (tsc --noEmit, Tree-sitter TS/JS AST)
 ```
 
 ---
@@ -30,7 +32,7 @@ tools/lang/
 class VerificationResult:
     is_valid: bool                # 検証に合格したか
     errors: list[str]             # 検出されたエラーメッセージリスト
-    ast_tree: Optional[Any]       # 解析されたASTオブジェクト (対応言語のみ)
+    ast_tree: Optional[Any]       # 解析された Tree-sitter / Python AST オブジェクト
     identifiers: set[str]         # 抽出された識別子 (関数名, クラス名, インポート名)
 ```
 
@@ -43,18 +45,30 @@ class VerificationResult:
 ## 各言語の実装仕様
 
 ### 1. Python (`PythonLanguageVerifier`)
-- **構文検証**: `ast.parse` および `py_compile.compile` で文法チェック
-- **構造検証**: AST を巡回して Name, Attribute, FunctionDef, ClassDef, Import ノードを抽出
+- **構文検証**: `ast.parse` / `py_compile.compile` および `tree-sitter-python` パーサーによる構文エラーノード (`ERROR`, `MISSING`) の二重検出
+- **構造検証**: Python AST および Tree-sitter AST ノードを巡回して関数・クラス・モジュール識別子を自動抽出
 - **追加機能**: `has_try_except_block()` でエラーハンドリングの存在を確認
 
 ### 2. Rust (`RustLanguageVerifier`)
-- **構文検証**: Cargo プロジェクト存在時は `cargo check` を実行。単体ファイル時は括弧（`{}`, `()`, `[]`）の対応・ネスト深さをチェック
-- **構造検証**: 正規表現パターンによる `fn`, `struct`, `enum`, `trait`, `use` トークン抽出
+- **構文検証**: Cargo プロジェクト存在時は `cargo check` を実行。単体ファイル時は `tree-sitter-rust` による正確な構文木エラー評価
+- **構造検証**: Tree-sitter CST から `function_item`, `struct_item`, `enum_item`, `trait_item`, `identifier` 等を抽出し、Rust キーワードを除外
 - **ビルド検証**: `cargo check --message-format=short` によるネイティブコンパイル判定
 
 ### 3. TypeScript / JavaScript (`TypeScriptLanguageVerifier`)
-- **構文検証**: JSファイルは `node --check`、TSプロジェクトは `tsc --noEmit`
-- **構造検証**: `function`, `class`, `interface`, `type`, `enum`, `export` 識別子の抽出
+- **構文検証**: `tree-sitter-typescript` (TS/TSX) および `tree-sitter-javascript` (JS/JSX) による全アノテーション・ネスト構造・型定義のパーサー評価。JSファイルは `node --check` と併用
+- **構造検証**: Tree-sitter CST から `function_declaration`, `class_declaration`, `interface_declaration`, `type_alias_declaration` 等の識別子を抽出
+- **ビルド検証**: `tsc --noEmit` による型チェック
+
+---
+
+## ライセンス・依存関係
+
+本基盤で使用している Tree-sitter パーサーパッケージは、商用およびオープンソース利用に極めて親和性の高いライセンスです。
+
+- **`tree-sitter`**: MIT License
+- **`tree-sitter-python`**: MIT License
+- **`tree-sitter-rust`**: MIT License
+- **`tree-sitter-typescript`**: MIT License
 
 ---
 
@@ -82,5 +96,7 @@ def test_code_output(tmp_path: Path):
 
 1. `tools/lang/` 配下に `<language>_verifier.py` を作成
 2. `BaseLanguageVerifier` を継承し、`@register_verifier("言語名")` デコレータを付与
-3. `verify_syntax`, `verify_identifiers`, `check_build` を実装
-4. `tools/lang/__init__.py` でインポート・再エクスポート
+3. `tools/lang/base.py` の `get_tree_sitter_parser` に対応する Tree-sitter パッケージバインディングを追加
+4. `verify_syntax`, `verify_identifiers`, `check_build` を実装
+5. `tools/lang/__init__.py` でインポート・再エクスポート
+
