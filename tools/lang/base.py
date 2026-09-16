@@ -38,10 +38,28 @@ _VERIFIER_REGISTRY: dict[str, type[BaseLanguageVerifier]] = {}
 
 
 def get_tree_sitter_parser(language: str) -> Optional[Any]:
-    """Retrieve Tree-sitter parser for given language using tree_sitter_languages."""
+    """Retrieve Tree-sitter parser for given language using modern official bindings."""
     try:
-        from tree_sitter_languages import get_parser
-        return get_parser(language)
+        from tree_sitter import Language, Parser
+        lang_key = language.lower()
+
+        if lang_key in ["python", "py"]:
+            import tree_sitter_python as tspython
+            return Parser(Language(tspython.language()))
+
+        if lang_key in ["rust", "rs"]:
+            import tree_sitter_rust as tsrust
+            return Parser(Language(tsrust.language()))
+
+        if lang_key in ["typescript", "ts"]:
+            import tree_sitter_typescript as tstypescript
+            return Parser(Language(tstypescript.language_typescript()))
+
+        if lang_key in ["javascript", "js"]:
+            import tree_sitter_typescript as tstypescript
+            return Parser(Language(tstypescript.language_javascript()))
+
+        return None
     except Exception:
         return None
 
