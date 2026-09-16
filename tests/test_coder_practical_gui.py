@@ -136,13 +136,6 @@ def init_git_repo(repo_dir: Path) -> None:
     )
 
 
-from pathlib import Path
-
-import pytest
-
-from tools.lang import PythonLanguageVerifier
-
-
 @pytest.mark.integration
 def test_coder_practical_gui_async_and_validation(tmp_path: Path) -> None:
     """Test 1: Validation, Async Threading, Progress Bar & Error Dialogs."""

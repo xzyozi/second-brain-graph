@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.config_loader import AppConfig
 
 
 def test_get_git_diff_success() -> None:
