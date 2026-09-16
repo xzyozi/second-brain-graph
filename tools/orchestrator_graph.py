@@ -377,10 +377,31 @@ def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
     return target_files
 
 
+def is_within_directory(candidate: Path, root: Path) -> bool:
+    """candidate を解決した実パスが root ディレクトリ配下にあるかを検証する（パストラバーサル防止）。
+
+    シンボリックリンクや ``..`` を含むパスも ``resolve()`` で正規化してから
+    比較するため、``../../other.py`` のようなリポジトリ外への参照を拒否できる。
+    """
+    try:
+        root_resolved = root.resolve()
+        candidate_resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return False
+    if candidate_resolved == root_resolved:
+        return True
+    return root_resolved in candidate_resolved.parents
+
+
 def resolve_target_files_against_cwd(
     target_files: List[str], cwd: Optional[Path] = None
 ) -> List[str]:
-    """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。"""
+    """抽出された target_files を衛星リポジトリの実在ファイル構造と照合し、存在しない場合は実在ファイルへ補正マッピングする。
+
+    セキュリティ: 各 target_file は ``resolve()`` で正規化し、``cwd``（衛星リポジトリ
+    ルート）配下にあることを検証する。配下でないパス（``../../other.py`` 等）は
+    パストラバーサルとして拒否し、Aider の編集対象へは渡さない。
+    """
     if not cwd or not Path(cwd).exists():
         return target_files
 
@@ -397,6 +418,12 @@ def resolve_target_files_against_cwd(
 
     for tf in target_files:
         full_p = cwd_path / tf
+        # パストラバーサル防止: 衛星リポジトリルート配下でない参照は拒否する
+        if not is_within_directory(full_p, cwd_path):
+            logger.warning(
+                f"Target file '{tf}' resolves outside the satellite repository and is rejected (path traversal guard)."
+            )
+            continue
         if full_p.exists():
             if tf not in resolved:
                 resolved.append(tf)
