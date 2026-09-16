@@ -818,12 +818,15 @@ def test_run_pytest_node_json_report_parsing(tmp_path: Path) -> None:
 
     fd = _os.open(str(tmp_path / ".mkstemp-fd-placeholder"), _os.O_CREAT | _os.O_WRONLY)
 
-    with patch(
-        "tools.orchestrator_graph.tempfile.mkstemp",
-        return_value=(fd, str(report_file)),
-    ), patch(
-        "tools.orchestrator_graph.run_cmd",
-        return_value=MagicMock(returncode=1, stdout="Failed", stderr=""),
+    with (
+        patch(
+            "tools.orchestrator_graph.tempfile.mkstemp",
+            return_value=(fd, str(report_file)),
+        ),
+        patch(
+            "tools.orchestrator_graph.run_cmd",
+            return_value=MagicMock(returncode=1, stdout="Failed", stderr=""),
+        ),
     ):
         res = run_pytest_node(state)
         assert res["status"] == "retry_code"

@@ -739,9 +739,7 @@ def code_node(state: GraphState) -> GraphState:
             gitignore_path = Path(cwd) / ".gitignore"
             try:
                 gitignore_after = (
-                    gitignore_path.read_text(encoding="utf-8")
-                    if gitignore_path.exists()
-                    else None
+                    gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else None
                 )
             except Exception:
                 gitignore_after = None
