@@ -78,7 +78,7 @@ exclude = "(projects|tmp|bunri)/"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not integration'"
 markers = [
     "integration: Live E2E tests using external models/tools (e.g. Aider, Ollama)",
 ]

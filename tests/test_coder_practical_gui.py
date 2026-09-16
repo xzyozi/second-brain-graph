@@ -13,6 +13,8 @@ import pytest
 
 from tools.lang import PythonLanguageVerifier
 
+pytestmark = pytest.mark.integration
+
 # --- Production Scenario 1: Async Order Processing App ---
 INITIAL_ORDER_APP_CODE = """import tkinter as tk
 from tkinter import ttk, messagebox
