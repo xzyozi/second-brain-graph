@@ -37,6 +37,49 @@ class BaseLanguageVerifier(ABC):
 _VERIFIER_REGISTRY: dict[str, type[BaseLanguageVerifier]] = {}
 
 
+def get_tree_sitter_parser(language: str) -> Optional[Any]:
+    """Retrieve Tree-sitter parser for given language using tree_sitter_languages."""
+    try:
+        from tree_sitter_languages import get_parser
+        return get_parser(language)
+    except Exception:
+        return None
+
+
+def find_tree_sitter_errors(node: Any) -> list[str]:
+    """Recursively collect error messages from Tree-sitter AST nodes."""
+    errors = []
+    if node.is_missing:
+        errors.append(f"Missing syntax element '{node.type}' around line {node.start_point[0] + 1}")
+    elif node.type == "ERROR":
+        errors.append(f"Syntax error around line {node.start_point[0] + 1}, column {node.start_point[1] + 1}")
+
+    for child in node.children:
+        errors.extend(find_tree_sitter_errors(child))
+    return errors
+
+
+def extract_tree_sitter_identifiers(node: Any, code_bytes: bytes) -> set[str]:
+    """Recursively extract identifiers and name tokens from Tree-sitter AST nodes."""
+    identifiers = set()
+    identifier_types = {
+        "identifier",
+        "type_identifier",
+        "field_identifier",
+        "property_identifier",
+        "scoped_identifier",
+        "word",
+    }
+    if node.type in identifier_types and not node.is_missing:
+        text = code_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+        if text and text.isidentifier():
+            identifiers.add(text)
+
+    for child in node.children:
+        identifiers.update(extract_tree_sitter_identifiers(child, code_bytes))
+    return identifiers
+
+
 def register_verifier(name: str):
     """Decorator to register a language verifier class."""
     def decorator(cls: type[BaseLanguageVerifier]):
