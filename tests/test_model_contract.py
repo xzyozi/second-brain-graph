@@ -95,6 +95,8 @@ def test_reviewer_verdict_is_within_contract(live_backend_available: None) -> No
     )
 
     assert isinstance(result, dict)
+    # フォールバック補完 (JSON抽出失敗) ではなく、モデルが直接有効な JSON を出力したことを保証
+    assert "comment" not in result, f"JSON fallback was triggered due to malformed LLM response: {result}"
     assert "verdict" in result, f"verdict key missing in response: {result}"
     assert result["verdict"] in {"LGTM", "changes_requested"}, (
         f"verdict out of contract: {result['verdict']}"
