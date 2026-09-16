@@ -1,0 +1,49 @@
+name: Branch Cleanup
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+jobs:
+  cleanup-branches:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete branches merged into devlop
+        shell: bash
+        env:
+          BASE_BRANCH: devlop
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"
+
+          if ! git show-ref --verify --quiet "refs/remotes/origin/${BASE_BRANCH}"; then
+            echo "Base branch '${BASE_BRANCH}' does not exist; skipping cleanup."
+            exit 0
+          fi
+
+          git for-each-ref \
+            --format='%(refname:short)' \
+            --merged="origin/${BASE_BRANCH}" \
+            refs/remotes/origin | while IFS= read -r remote_branch; do
+            branch="${remote_branch#origin/}"
+            case "$branch" in
+              "" | HEAD | main | "${BASE_BRANCH}")
+                echo "Skipping protected ref: ${remote_branch}"
+                ;;
+              *)
+                echo "Deleting merged remote branch: ${branch}"
+                git push origin --delete -- "$branch" || \
+                  echo "Failed to delete '${branch}' (it may already be deleted or protected)."
+                ;;
+            esac
+          done

@@ -1,0 +1,52 @@
+name: Validate Mermaid diagrams
+
+on:
+  push:
+    branches: [main, devlop]
+    paths: ["docs/**/*.md"]
+  pull_request:
+    branches: [main, devlop]
+    paths: ["docs/**/*.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-mermaid:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Restore Mermaid CLI cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-mermaid-cli-11.4.2
+
+      - name: Validate changed Mermaid diagrams
+        shell: bash
+        env:
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            node .github/scripts/validateMermaidMarkdown.mjs --all
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+          else
+            base_sha="${{ github.event.before }}"
+            head_sha="${{ github.sha }}"
+          fi
+          node .github/scripts/validateMermaidMarkdown.mjs --base "$base_sha" --head "$head_sha"

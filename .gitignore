@@ -49,6 +49,7 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.pytest-report-*.json
 cover/
 
 # Translations
@@ -227,6 +228,14 @@ __marimo__/
 /tools/.cache/*
 /tmp/
 .aider*
+
+# GGUF models directory
+/models/*
+!/models/.gitkeep
+
+# Kiro IDE local state (steering / lessons / hooks etc.)
+/.kiro/
+
 
 
 
