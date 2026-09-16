@@ -123,8 +123,17 @@ def _wait_until_unloaded(base_url: str, timeout: float = 10.0) -> None:
     raise RuntimeError("Failed to unload Ollama models within timeout. VRAM might not be freed.")
 
 
-def unload_ollama_models(management_endpoint: str) -> None:
-    """Ollamaにロードされているモデルを解放する"""
+def unload_ollama_models(management_endpoint: str) -> bool:
+    """Ollamaにロードされているモデルを解放する。
+
+    Returns:
+        bool: Ollama 管理 API と通信できたか（True=到達・処理完了、
+        False=到達不能で VRAM 状態を確認できなかった）。
+
+    #25: 到達不能時に「VRAM は空き」と断定して処理を続行すると、Ollama が実際には
+    GPU を使用中でも llama-server を起動して GPU 競合を招く。ここでは断定せず、
+    到達可否を戻り値で呼び出し側へ伝え、判断を委ねる。
+    """
     base_url = _normalize_management_url(management_endpoint)
     ps_url = f"{base_url}/api/ps"
 
@@ -135,13 +144,14 @@ def unload_ollama_models(management_endpoint: str) -> None:
 
         if loaded_models:
             _wait_until_unloaded(base_url)
+        return True
 
     except urllib.error.URLError as e:
         logger.warning(
             f"Ollama management API unreachable at {ps_url}: {e}. "
-            "Assuming Ollama is not running and VRAM is free. Continuing."
+            "VRAM state is UNKNOWN (not assumed free)."
         )
-        return
+        return False
 
 
 class OllamaBackendAdapter:
@@ -207,7 +217,23 @@ class LlamaServerBackendAdapter:
                 break
 
         if ollama_management_endpoint:
-            unload_ollama_models(management_endpoint=ollama_management_endpoint)
+            reachable = unload_ollama_models(management_endpoint=ollama_management_endpoint)
+            if not reachable:
+                # #25: Ollama 到達不能時は VRAM 状態が不明。安全側（起動抑止）を既定とし、
+                # 運用者が明示許可した場合のみ従来どおり起動を続行する。
+                allow_on_unknown = os.environ.get(
+                    "SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM", ""
+                ).strip().lower() in ("1", "true", "yes")
+                if not allow_on_unknown:
+                    raise RuntimeError(
+                        "Ollama management API is unreachable and VRAM state is unknown. "
+                        "Refusing to start llama-server to avoid GPU contention. "
+                        "Set SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM=1 to override."
+                    )
+                logger.warning(
+                    "VRAM state unknown but SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM is set. "
+                    "Proceeding to start llama-server at operator's risk."
+                )
         else:
             logger.info("No Ollama backend configured in profiles. Skipping Ollama model unload.")
 

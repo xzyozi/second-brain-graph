@@ -674,7 +674,16 @@ def code_node(state: GraphState) -> GraphState:
         instruction += f"\n\nFeedback:\n{state['aider_message']}"
 
     try:
-        run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
+        # #25: Aider も GPU リース配下で実行し、planner/reviewer の LLM 呼出しと
+        # GPU/VRAM を奪い合わないようにする。従来は run_aider を直接 subprocess 起動して
+        # GpuLeaseAdapter を迂回していた。Coordinator 経由に統一する。
+        from tools.backend_coordinator import get_coordinator
+
+        def _do_aider(_profile: Any) -> bool:
+            return run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
+
+        coordinator = get_coordinator()
+        coordinator.execute("aider_edit", {"action": _do_aider})
         # Aider が自動追記した .gitignore の変更を元に戻し、規約違反・レビュー拒否を防止
         if cwd and is_in_git_workspace(cwd):
             run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)

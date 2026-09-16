@@ -234,12 +234,66 @@ def test_llama_server_adapter_ollama_unreachable_fallback(
     profile = config.profiles["reasoning_economy"]
     adapter = LlamaServerBackendAdapter(profile, config)
 
-    # Execute should continue normally even when unload_ollama_models logs warning on URLError
-    result = adapter.execute({"action": lambda p: "ok"})
+    # #25: Ollama 到達不能で VRAM 状態が不明のとき、既定では GPU 競合回避のため
+    # llama-server の起動を抑止して RuntimeError を送出する（安全側）。
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.delenv("SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM", raising=False)
+    with pytest.raises(RuntimeError, match="VRAM state is unknown"):
+        adapter.execute({"action": lambda p: "ok"})
+    mock_urlopen.assert_called()  # Ollama への到達を試みたこと
+    mock_managed_llama.assert_not_called()  # 起動抑止されたこと
+    monkeypatch.undo()
+
+
+@patch("tools.backend_coordinator.urllib.request.urlopen")
+@patch("tools.backend_coordinator.managed_llama_server")
+@patch("tools.backend_coordinator.patch_env")
+def test_llama_server_adapter_starts_when_override_set(
+    mock_patch_env: MagicMock, mock_managed_llama: MagicMock, mock_urlopen: MagicMock
+) -> None:
+    """#25: SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM 設定時は到達不能でも起動を続行する（明示オーバーライド）。"""
+    import urllib.error
+
+    mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+    mock_managed_llama.return_value.__enter__ = MagicMock()
+    mock_managed_llama.return_value.__exit__ = MagicMock()
+    mock_patch_env.return_value.__enter__ = MagicMock()
+    mock_patch_env.return_value.__exit__ = MagicMock()
+
+    config = BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        gpu_lease_timeout=120,
+        routes={"spec_draft": "reasoning_economy"},
+        profiles={
+            "reasoning_economy": ProfileConfig(
+                backend="llama_server",
+                model="test-model",
+                openai_endpoint="http://localhost:8080/v1",
+                port=8080,
+                model_path="./models/test.gguf",
+            ),
+            "coding_ollama": ProfileConfig(
+                backend="ollama",
+                model="test-ollama",
+                openai_endpoint="http://localhost:11434/v1",
+                ollama_management_endpoint="http://localhost:11434",
+            ),
+        },
+    )
+    profile = config.profiles["reasoning_economy"]
+    adapter = LlamaServerBackendAdapter(profile, config)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM", "1")
+    try:
+        result = adapter.execute({"action": lambda p: "ok"})
+    finally:
+        monkeypatch.undo()
 
     assert result == "ok"
-    mock_urlopen.assert_called()  # verifying it tried to contact Ollama
-    mock_managed_llama.assert_called_once()  # verifying it continued to llama-server startup
+    mock_urlopen.assert_called()
+    mock_managed_llama.assert_called_once()
 
 
 @patch("tools.backend_coordinator.get_backend_execution_config")
