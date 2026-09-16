@@ -901,41 +901,43 @@ def run_pytest_node(state: GraphState) -> GraphState:
     例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
     logger.info("Executing test_node (Pytest)")
-    cwd = state.get("cwd")
-    target_files = state.get("target_files", [])
-    # #26: 固定名 .report.json を cwd 直下へ出力し finally で無条件削除すると、
-    # 既存ファイルや並行実行のレポートを上書き・削除してしまう。実行ごとに一意名の
-    # 一時ファイルを用い、他プロセス・利用者のファイルを侵さないようにする。
-    report_dir = Path(cwd) if cwd else Path(".")
-    report_fd, report_file_str = tempfile.mkstemp(
-        prefix=f".pytest-report-{os.getpid()}-", suffix=".json", dir=str(report_dir)
-    )
-    os.close(report_fd)
-    report_file = Path(report_file_str)
-
-    # 対象タスクに関連するテストファイルを特定
-    test_files = [tf for tf in target_files if "test" in Path(tf).name.lower()]
-    if not test_files and cwd:
-        for tf in target_files:
-            stem = Path(tf).stem
-            candidate = f"tests/test_{stem}.py"
-            if candidate not in test_files:
-                test_files.append(candidate)
-
-    # ディスク上に実際に存在するテストファイルのみに絞り込み
-    existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
-
-    # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
-    if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
-        for p in (Path(cwd) / "tests").glob("test_*.py"):
-            if "ui" not in p.name.lower() and "gui" not in p.name.lower():
-                rel_test = str(p.relative_to(cwd)).replace("\\", "/")
-                if rel_test not in existing_test_files:
-                    existing_test_files.append(rel_test)
-
-    cmd_test_files = existing_test_files if existing_test_files else test_files
+    report_file: Optional[Path] = None
 
     try:
+        cwd = state.get("cwd")
+        target_files = state.get("target_files", [])
+        # #26: 固定名 .report.json を cwd 直下へ出力し finally で無条件削除すると、
+        # 既存ファイルや並行実行のレポートを上書き・削除してしまう。実行ごとに一意名の
+        # 一時ファイルを用い、他プロセス・利用者のファイルを侵さないようにする。
+        report_dir = Path(cwd) if (cwd and Path(cwd).exists()) else Path(".")
+        report_fd, report_file_str = tempfile.mkstemp(
+            prefix=f".pytest-report-{os.getpid()}-", suffix=".json", dir=str(report_dir)
+        )
+        os.close(report_fd)
+        report_file = Path(report_file_str)
+
+        # 対象タスクに関連するテストファイルを特定
+        test_files = [tf for tf in target_files if "test" in Path(tf).name.lower()]
+        if not test_files and cwd:
+            for tf in target_files:
+                stem = Path(tf).stem
+                candidate = f"tests/test_{stem}.py"
+                if candidate not in test_files:
+                    test_files.append(candidate)
+
+        # ディスク上に実際に存在するテストファイルのみに絞り込み
+        existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
+
+        # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
+        if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
+            for p in (Path(cwd) / "tests").glob("test_*.py"):
+                if "ui" not in p.name.lower() and "gui" not in p.name.lower():
+                    rel_test = str(p.relative_to(cwd)).replace("\\", "/")
+                    if rel_test not in existing_test_files:
+                        existing_test_files.append(rel_test)
+
+        cmd_test_files = existing_test_files if existing_test_files else test_files
+
         # pytest-json-report オプションを付加して対象テストファイルを実行
         cmd = (
             [sys.executable, "-m", "pytest"]
@@ -1068,7 +1070,7 @@ def run_pytest_node(state: GraphState) -> GraphState:
         state["error_category"] = "SYSTEM_ERROR"
         state["error"] = str(e)
     finally:
-        if report_file.exists():
+        if report_file and report_file.exists():
             try:
                 report_file.unlink()
             except Exception:
