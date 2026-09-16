@@ -23,10 +23,11 @@ def test_clean_satellite_repository_executes_git_commands() -> None:
     with patch("subprocess.run", side_effect=mock_run):
         clean_satellite_repository("/path/to/sat", base_branch="develop")
 
-    assert len(executed_cmds) == 3
-    assert executed_cmds[0] == "git checkout -f develop"
-    assert executed_cmds[1] == "git reset --hard origin/develop"
-    assert executed_cmds[2] == "git clean -fd"
+    assert len(executed_cmds) == 4
+    assert executed_cmds[0] == "git status --porcelain"
+    assert executed_cmds[1] == "git checkout -f develop"
+    assert executed_cmds[2] == "git reset --hard origin/develop"
+    assert executed_cmds[3] == "git clean -fd"
 
 
 def test_run_task_resume_skips_cleanup(tmp_path: Path) -> None:
