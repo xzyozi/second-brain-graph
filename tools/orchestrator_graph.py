@@ -19,7 +19,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from filelock import FileLock, Timeout
 from langgraph.graph import END, StateGraph
@@ -571,14 +571,48 @@ def resolve_project_context(
         }
 
 
+# #22: status / error_category を Literal で型安全化する。
+# 文字列値は従来と同一（実行時挙動は不変）で、タイポや未定義状態を型チェックで検出可能にする。
+# 中間（遷移途中）状態と終端状態の両方を列挙する。
+StatusLiteral = Literal[
+    # 中間・遷移状態
+    "running",
+    "code_completed",
+    "lint_passed",
+    "test_passed",
+    "review_lgtm",
+    "retry_spec_draft",
+    "retry_code",
+    "retry_review",
+    # 終端状態
+    "COMPLETED",
+    "FAILED_SYSTEM",
+    "FAILED_B7",
+    "PR_FAILED",
+    "SKIPPED_LOCKED",
+    "ESCALATED_NEEDS_REVISION",
+]
+
+# DD-003 §2.1 のエラー分類（7分類）
+ErrorCategoryLiteral = Literal[
+    "LINT_ERROR",
+    "TEST_ERROR",
+    "REVIEW_REJECTED",
+    "LLM_TIMEOUT",
+    "SYSTEM_ERROR",
+    "LOCKED",
+    "PR_ERROR",
+]
+
+
 class GraphState(TypedDict, total=False):
     issue_id: str
     project_key: str
     execution_id: str
     generation: int
-    status: str
+    status: StatusLiteral
     error: Optional[str]
-    error_category: Optional[str]
+    error_category: Optional[ErrorCategoryLiteral]
     llm_timeout_count: int
     review_round: int
     lint_round: int
