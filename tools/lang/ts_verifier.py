@@ -1,10 +1,16 @@
-"""TypeScript / JavaScript language verifier using tsc, node -c, or lexical parsing."""
+"""TypeScript / JavaScript language verifier using Tree-sitter and tsc / node -c."""
 
-import re
 import subprocess
 from pathlib import Path
 
-from tools.lang.base import BaseLanguageVerifier, VerificationResult, register_verifier
+from tools.lang.base import (
+    BaseLanguageVerifier,
+    VerificationResult,
+    extract_tree_sitter_identifiers,
+    find_tree_sitter_errors,
+    get_tree_sitter_parser,
+    register_verifier,
+)
 
 TS_KEYWORDS = {
     "abstract", "any", "as", "asserts", "async", "await", "bigint", "boolean", "break",
@@ -24,27 +30,42 @@ TS_KEYWORDS = {
 @register_verifier("javascript")
 @register_verifier("js")
 class TypeScriptLanguageVerifier(BaseLanguageVerifier):
-    """Verifier implementation for TypeScript and JavaScript files."""
+    """Verifier implementation for TypeScript and JavaScript files using Tree-sitter."""
 
     def verify_syntax(self, file_path: Path) -> VerificationResult:
-        """Verify TS/JS syntax using node --check for JS files or lexical bracket/identifier checks."""
+        """Verify TS/JS syntax using Tree-sitter AST validation or node --check for JS files."""
         if not file_path.exists():
             return VerificationResult(is_valid=False, errors=[f"File not found: {file_path}"])
 
         code_text = file_path.read_text(encoding="utf-8")
+        code_bytes = code_text.encode("utf-8")
         errors = []
 
-        # For JavaScript files, leverage node --check if node runtime is available
+        # For JavaScript files, optionally run node --check if available
         if file_path.suffix in [".js", ".cjs", ".mjs"]:
             res = subprocess.run(["node", "--check", str(file_path)], capture_output=True, text=True)
             if res.returncode != 0:
                 errors.append(f"Node syntax error: {res.stderr}")
-        # Note: TypeScript files (.ts, .tsx) are verified lexically standalone or via check_build (tsc --noEmit)
 
+        lang = "typescript" if file_path.suffix in [".ts", ".tsx"] else "javascript"
+        parser = get_tree_sitter_parser(lang)
+
+        if parser:
+            tree = parser.parse(code_bytes)
+            ts_errors = find_tree_sitter_errors(tree.root_node)
+            errors.extend(ts_errors)
+            identifiers = extract_tree_sitter_identifiers(tree.root_node, code_bytes) - TS_KEYWORDS
+            return VerificationResult(
+                is_valid=len(errors) == 0,
+                errors=errors,
+                ast_tree=tree,
+                identifiers=identifiers,
+            )
+
+        # Fallback if tree-sitter parser is unavailable
         if not errors:
             errors.extend(self._check_standalone_ts(code_text))
-
-        identifiers = self._extract_identifiers(code_text)
+        identifiers = self._extract_identifiers_fallback(code_text)
         return VerificationResult(
             is_valid=len(errors) == 0,
             errors=errors,
@@ -58,7 +79,17 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
             return syntax_res
 
         code_text = file_path.read_text(encoding="utf-8") if file_path.exists() else ""
-        identifiers = syntax_res.identifiers if syntax_res.identifiers is not None else self._extract_identifiers(code_text)
+        if syntax_res.identifiers is not None and len(syntax_res.identifiers) > 0:
+            identifiers = syntax_res.identifiers
+        else:
+            code_bytes = code_text.encode("utf-8")
+            lang = "typescript" if file_path.suffix in [".ts", ".tsx"] else "javascript"
+            parser = get_tree_sitter_parser(lang)
+            if parser:
+                tree = parser.parse(code_bytes)
+                identifiers = extract_tree_sitter_identifiers(tree.root_node, code_bytes) - TS_KEYWORDS
+            else:
+                identifiers = self._extract_identifiers_fallback(code_text)
 
         missing = [ident for ident in required_identifiers if ident not in identifiers]
         errors = [f"Missing required TS/JS identifier: '{ident}'" for ident in missing]
@@ -85,71 +116,11 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
             return VerificationResult(is_valid=False, errors=[res.stdout or res.stderr])
         return VerificationResult(is_valid=True)
 
-    def _strip_comments_and_strings(self, code: str) -> str:
-        """Replace TS/JS string literals, template literals, and comments with spaces."""
-        chars = list(code)
-        n = len(chars)
-        i = 0
-        in_single_comment = False
-        in_multi_comment = False
-        in_quote = None  # '"', "'", or '`'
-        escaped = False
-
-        while i < n:
-            ch = chars[i]
-            next_ch = chars[i + 1] if i + 1 < n else ""
-
-            if in_single_comment:
-                if ch == "\n":
-                    in_single_comment = False
-                else:
-                    chars[i] = " "
-            elif in_multi_comment:
-                if ch == "*" and next_ch == "/":
-                    chars[i] = " "
-                    chars[i + 1] = " "
-                    in_multi_comment = False
-                    i += 1
-                else:
-                    if ch != "\n":
-                        chars[i] = " "
-            elif in_quote:
-                if escaped:
-                    chars[i] = " "
-                    escaped = False
-                elif ch == "\\":
-                    chars[i] = " "
-                    escaped = True
-                elif ch == in_quote:
-                    chars[i] = " "
-                    in_quote = None
-                else:
-                    if ch != "\n":
-                        chars[i] = " "
-            else:
-                if ch == "/" and next_ch == "/":
-                    chars[i] = " "
-                    chars[i + 1] = " "
-                    in_single_comment = True
-                    i += 1
-                elif ch == "/" and next_ch == "*":
-                    chars[i] = " "
-                    chars[i + 1] = " "
-                    in_multi_comment = True
-                    i += 1
-                elif ch in ('"', "'", "`"):
-                    chars[i] = " "
-                    in_quote = ch
-            i += 1
-        return "".join(chars)
-
     def _check_standalone_ts(self, code: str) -> list[str]:
-        cleaned_code = self._strip_comments_and_strings(code)
         errors = []
         stack = []
         pairs = {"{": "}", "(": ")", "[": "]"}
-
-        for line_idx, line in enumerate(cleaned_code.splitlines(), start=1):
+        for line_idx, line in enumerate(code.splitlines(), start=1):
             for char in line:
                 if char in pairs:
                     stack.append((char, line_idx))
@@ -166,16 +137,11 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
             errors.append(f"Unclosed bracket '{unclosed}' opened at line {line_idx}")
         return errors
 
-    def _extract_identifiers(self, code: str) -> set[str]:
+    def _extract_identifiers_fallback(self, code: str) -> set[str]:
+        import re
         identifiers = set()
-        # Functions / Methods / Classes / Interfaces / Types
-        for match in re.finditer(
-            r"\b(function|class|interface|type|enum|const|let|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)",
-            code,
-        ):
-            identifiers.add(match.group(2))
-        # General identifiers
         for match in re.finditer(r"\b[a-zA-Z_$][a-zA-Z0-9_$]*\b", code):
             identifiers.add(match.group(0))
         return identifiers - TS_KEYWORDS
+
 
