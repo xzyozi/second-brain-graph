@@ -30,10 +30,10 @@ tools/lang/
 ```python
 @dataclass
 class VerificationResult:
-    is_valid: bool                # 検証に合格したか
-    errors: list[str]             # 検出されたエラーメッセージリスト
-    ast_tree: Optional[Any]       # 解析された Tree-sitter / Python AST オブジェクト
-    identifiers: set[str]         # 抽出された識別子 (関数名, クラス名, インポート名)
+    is_valid: bool  # 検証に合格したか
+    errors: list[str]  # 検出されたエラーメッセージリスト
+    ast_tree: Optional[Any]  # 解析された Tree-sitter / Python AST オブジェクト
+    identifiers: set[str]  # 抽出された識別子 (関数名, クラス名, インポート名)
 ```
 
 ### `get_verifier(language: str) -> BaseLanguageVerifier`
@@ -78,10 +78,11 @@ class VerificationResult:
 from pathlib import Path
 from tools.lang import get_verifier
 
+
 def test_code_output(tmp_path: Path):
     file_path = tmp_path / "app.rs"
     # LLMがコードを生成...
-    
+
     verifier = get_verifier("rust")
     syntax_res = verifier.verify_syntax(file_path)
     assert syntax_res.is_valid, f"Syntax errors: {syntax_res.errors}"

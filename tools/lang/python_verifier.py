@@ -60,7 +60,9 @@ class PythonLanguageVerifier(BaseLanguageVerifier):
             identifiers=identifiers,
         )
 
-    def verify_identifiers(self, file_path: Path, required_identifiers: list[str]) -> VerificationResult:
+    def verify_identifiers(
+        self, file_path: Path, required_identifiers: list[str]
+    ) -> VerificationResult:
         """Verify presence of specific identifiers in Python AST."""
         syntax_res = self.verify_syntax(file_path)
         if not syntax_res.is_valid:
@@ -87,7 +89,9 @@ class PythonLanguageVerifier(BaseLanguageVerifier):
         """Run py_compile on python files in project directory."""
         py_files = list(project_dir.rglob("*.py"))
         if not py_files:
-            return VerificationResult(is_valid=False, errors=[f"No Python files found to check in {project_dir}"])
+            return VerificationResult(
+                is_valid=False, errors=[f"No Python files found to check in {project_dir}"]
+            )
 
         res = subprocess.run(
             [sys.executable, "-m", "py_compile"] + [str(p) for p in py_files],
@@ -120,4 +124,3 @@ class PythonLanguageVerifier(BaseLanguageVerifier):
                 for alias in node.names:
                     identifiers.add(alias.name)
         return identifiers
-

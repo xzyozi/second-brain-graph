@@ -78,11 +78,7 @@ def test_reviewer_verdict_is_within_contract(live_backend_available: None) -> No
     call_llm は JSON 抽出に失敗した場合も changes_requested を返すため、
     いずれにせよ verdict は既知の集合に収まるはずである。
     """
-    diff_sample = (
-        "diff --git a/sample.py b/sample.py\n"
-        "+def add(a, b):\n"
-        "+    return a + b\n"
-    )
+    diff_sample = "diff --git a/sample.py b/sample.py\n+def add(a, b):\n+    return a + b\n"
     result = call_llm(
         role="reviewer",
         system_prompt=(
@@ -96,7 +92,9 @@ def test_reviewer_verdict_is_within_contract(live_backend_available: None) -> No
 
     assert isinstance(result, dict)
     # フォールバック補完 (JSON抽出失敗) ではなく、モデルが直接有効な JSON を出力したことを保証
-    assert "comment" not in result, f"JSON fallback was triggered due to malformed LLM response: {result}"
+    assert "comment" not in result, (
+        f"JSON fallback was triggered due to malformed LLM response: {result}"
+    )
     assert "verdict" in result, f"verdict key missing in response: {result}"
     assert result["verdict"] in {"LGTM", "changes_requested"}, (
         f"verdict out of contract: {result['verdict']}"

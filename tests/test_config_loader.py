@@ -153,6 +153,4 @@ def test_get_backend_execution_config_routes_are_consistent() -> None:
     """実 config のルートがすべて定義済みプロファイルを指すことを確認する。"""
     config = get_backend_execution_config()
     for intent, profile_name in config.routes.items():
-        assert profile_name in config.profiles, (
-            f"Route '{intent}' -> '{profile_name}' is undefined"
-        )
+        assert profile_name in config.profiles, f"Route '{intent}' -> '{profile_name}' is undefined"

@@ -9,6 +9,7 @@ from typing import Any, Optional
 @dataclass
 class VerificationResult:
     """Standard container for code verification results."""
+
     is_valid: bool
     errors: list[str] = field(default_factory=list)
     ast_tree: Optional[Any] = None
@@ -24,7 +25,9 @@ class BaseLanguageVerifier(ABC):
         pass
 
     @abstractmethod
-    def verify_identifiers(self, file_path: Path, required_identifiers: list[str]) -> VerificationResult:
+    def verify_identifiers(
+        self, file_path: Path, required_identifiers: list[str]
+    ) -> VerificationResult:
         """Verify presence of specific identifiers, methods, or imports."""
         pass
 
@@ -41,22 +44,27 @@ def get_tree_sitter_parser(language: str) -> Optional[Any]:
     """Retrieve Tree-sitter parser for given language using modern official bindings."""
     try:
         from tree_sitter import Language, Parser
+
         lang_key = language.lower()
 
         if lang_key in ["python", "py"]:
             import tree_sitter_python as tspython
+
             return Parser(Language(tspython.language()))
 
         if lang_key in ["rust", "rs"]:
             import tree_sitter_rust as tsrust
+
             return Parser(Language(tsrust.language()))
 
         if lang_key in ["typescript", "ts"]:
             import tree_sitter_typescript as tstypescript
+
             return Parser(Language(tstypescript.language_typescript()))
 
         if lang_key in ["javascript", "js"]:
             import tree_sitter_typescript as tstypescript
+
             return Parser(Language(tstypescript.language_javascript()))
 
         return None
@@ -70,7 +78,9 @@ def find_tree_sitter_errors(node: Any) -> list[str]:
     if node.is_missing:
         errors.append(f"Missing syntax element '{node.type}' around line {node.start_point[0] + 1}")
     elif node.type == "ERROR":
-        errors.append(f"Syntax error around line {node.start_point[0] + 1}, column {node.start_point[1] + 1}")
+        errors.append(
+            f"Syntax error around line {node.start_point[0] + 1}, column {node.start_point[1] + 1}"
+        )
 
     for child in node.children:
         errors.extend(find_tree_sitter_errors(child))
@@ -89,7 +99,7 @@ def extract_tree_sitter_identifiers(node: Any, code_bytes: bytes) -> set[str]:
         "word",
     }
     if node.type in identifier_types and not node.is_missing:
-        text = code_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+        text = code_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
         if text and text.isidentifier():
             identifiers.add(text)
 
@@ -100,9 +110,11 @@ def extract_tree_sitter_identifiers(node: Any, code_bytes: bytes) -> set[str]:
 
 def register_verifier(name: str):
     """Decorator to register a language verifier class."""
+
     def decorator(cls: type[BaseLanguageVerifier]):
         _VERIFIER_REGISTRY[name.lower()] = cls
         return cls
+
     return decorator
 
 

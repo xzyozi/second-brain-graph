@@ -89,9 +89,7 @@ def test_call_llm_fallback_intent(
 # ローカル LLM は前後にテキストが混ざる/整形されない出力を返しがちなため、
 # call_llm 側の抽出・フォールバックロジックを個別に検証する。
 # ---------------------------------------------------------------------------
-def _run_call_llm_with_content(
-    raw_content: str, expect_json: bool = True
-) -> dict:
+def _run_call_llm_with_content(raw_content: str, expect_json: bool = True) -> dict:
     """指定した生出力を返す OpenAI をモックし、call_llm の戻り値を得るヘルパー。"""
     with (
         patch("tools.llm_client.OpenAI") as mock_openai_class,
@@ -114,9 +112,7 @@ def _run_call_llm_with_content(
         response.choices = [MagicMock(message=MagicMock(content=raw_content))]
         client.chat.completions.create.return_value = response
 
-        return call_llm(
-            "reviewer", "system", "user", expect_json=expect_json, intent="code_review"
-        )
+        return call_llm("reviewer", "system", "user", expect_json=expect_json, intent="code_review")
 
 
 def test_call_llm_extracts_json_embedded_in_text() -> None:

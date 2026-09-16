@@ -66,23 +66,27 @@ def parse_tasks_md(tasks_path: str, project_key: str) -> List[Dict[str, Any]]:
 
             meta = parse_metadata_comment(comment)
 
-            is_completed = (raw_status == "x")
-            is_in_progress = (raw_status == "/")
+            is_completed = raw_status == "x"
+            is_in_progress = raw_status == "/"
 
             blockedby_raw = meta.get("blockedby", "")
-            blockedby_list = [b.strip() for b in blockedby_raw.split(",") if b.strip()] if blockedby_raw else []
+            blockedby_list = (
+                [b.strip() for b in blockedby_raw.split(",") if b.strip()] if blockedby_raw else []
+            )
 
-            issues.append({
-                "id": issue_id,
-                "project_key": project_key,
-                "title": title,
-                "completed": is_completed,
-                "in_progress": is_in_progress,
-                "priority": meta.get("priority", "medium"),
-                "added": meta.get("added"),
-                "estimate": meta.get("estimate"),
-                "blockedby": blockedby_list,
-            })
+            issues.append(
+                {
+                    "id": issue_id,
+                    "project_key": project_key,
+                    "title": title,
+                    "completed": is_completed,
+                    "in_progress": is_in_progress,
+                    "priority": meta.get("priority", "medium"),
+                    "added": meta.get("added"),
+                    "estimate": meta.get("estimate"),
+                    "blockedby": blockedby_list,
+                }
+            )
 
     return issues
 
@@ -199,9 +203,7 @@ def process_scoring(root_dir: str = ".") -> List[Dict[str, Any]]:
 
             # PM-039: Check for incomplete blockers
             blockers = issue.get("blockedby", [])
-            uncompleted_blockers = [
-                b for b in blockers if not completed_map.get(b, False)
-            ]
+            uncompleted_blockers = [b for b in blockers if not completed_map.get(b, False)]
 
             if uncompleted_blockers:
                 logger.info(
@@ -210,15 +212,17 @@ def process_scoring(root_dir: str = ".") -> List[Dict[str, Any]]:
                 continue
 
             score = calculate_issue_score(issue)
-            candidate_issues.append({
-                "id": issue["id"],
-                "project_key": issue["project_key"],
-                "project_dir": issue["project_dir"],
-                "score": score,
-                "title": issue["title"],
-                "priority": issue["priority"],
-                "blockedby": issue["blockedby"],
-            })
+            candidate_issues.append(
+                {
+                    "id": issue["id"],
+                    "project_key": issue["project_key"],
+                    "project_dir": issue["project_dir"],
+                    "score": score,
+                    "title": issue["title"],
+                    "priority": issue["priority"],
+                    "blockedby": issue["blockedby"],
+                }
+            )
 
     candidate_issues.sort(key=lambda x: x["score"], reverse=True)
     return candidate_issues

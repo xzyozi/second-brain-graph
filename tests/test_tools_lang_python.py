@@ -1,6 +1,5 @@
 """Unit tests for PythonLanguageVerifier in tools.lang."""
 
-
 import pytest
 
 from tools.lang import PythonLanguageVerifier, get_verifier
@@ -66,7 +65,9 @@ def process_order():
     file_path.write_text(code, encoding="utf-8")
 
     verifier = PythonLanguageVerifier()
-    res = verifier.verify_identifiers(file_path, ["threading", "Thread", "messagebox", "process_order"])
+    res = verifier.verify_identifiers(
+        file_path, ["threading", "Thread", "messagebox", "process_order"]
+    )
     assert res.is_valid
 
     res_missing = verifier.verify_identifiers(file_path, ["threading", "NonExistentClass"])

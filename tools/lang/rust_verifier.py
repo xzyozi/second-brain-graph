@@ -13,12 +13,56 @@ from tools.lang.base import (
 )
 
 RUST_KEYWORDS = {
-    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
-    "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for",
-    "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut",
-    "override", "priv", "pub", "ref", "return", "self", "Self", "static", "struct",
-    "super", "trait", "true", "type", "typeof", "unsafe", "unsized", "use", "virtual",
-    "where", "while", "yield",
+    "abstract",
+    "as",
+    "async",
+    "await",
+    "become",
+    "box",
+    "break",
+    "const",
+    "continue",
+    "crate",
+    "do",
+    "dyn",
+    "else",
+    "enum",
+    "extern",
+    "false",
+    "final",
+    "fn",
+    "for",
+    "if",
+    "impl",
+    "in",
+    "let",
+    "loop",
+    "macro",
+    "match",
+    "mod",
+    "move",
+    "mut",
+    "override",
+    "priv",
+    "pub",
+    "ref",
+    "return",
+    "self",
+    "Self",
+    "static",
+    "struct",
+    "super",
+    "trait",
+    "true",
+    "type",
+    "typeof",
+    "unsafe",
+    "unsized",
+    "use",
+    "virtual",
+    "where",
+    "while",
+    "yield",
 }
 
 
@@ -43,7 +87,9 @@ class RustLanguageVerifier(BaseLanguageVerifier):
         if parser:
             tree = parser.parse(code_bytes)
             errors = find_tree_sitter_errors(tree.root_node)
-            identifiers = extract_tree_sitter_identifiers(tree.root_node, code_bytes) - RUST_KEYWORDS
+            identifiers = (
+                extract_tree_sitter_identifiers(tree.root_node, code_bytes) - RUST_KEYWORDS
+            )
             return VerificationResult(
                 is_valid=len(errors) == 0,
                 errors=errors,
@@ -60,7 +106,9 @@ class RustLanguageVerifier(BaseLanguageVerifier):
             identifiers=identifiers,
         )
 
-    def verify_identifiers(self, file_path: Path, required_identifiers: list[str]) -> VerificationResult:
+    def verify_identifiers(
+        self, file_path: Path, required_identifiers: list[str]
+    ) -> VerificationResult:
         """Verify presence of required Rust identifiers, types, or functions."""
         syntax_res = self.verify_syntax(file_path)
         if not syntax_res.is_valid:
@@ -74,7 +122,9 @@ class RustLanguageVerifier(BaseLanguageVerifier):
             parser = get_tree_sitter_parser("rust")
             if parser:
                 tree = parser.parse(code_bytes)
-                identifiers = extract_tree_sitter_identifiers(tree.root_node, code_bytes) - RUST_KEYWORDS
+                identifiers = (
+                    extract_tree_sitter_identifiers(tree.root_node, code_bytes) - RUST_KEYWORDS
+                )
             else:
                 identifiers = self._extract_identifiers_fallback(code_text)
 
@@ -91,7 +141,9 @@ class RustLanguageVerifier(BaseLanguageVerifier):
         """Execute cargo check in the target Cargo project directory."""
         cargo_toml = project_dir / "Cargo.toml"
         if not cargo_toml.exists():
-            return VerificationResult(is_valid=False, errors=[f"Cargo.toml not found in {project_dir}"])
+            return VerificationResult(
+                is_valid=False, errors=[f"Cargo.toml not found in {project_dir}"]
+            )
 
         res = subprocess.run(
             ["cargo", "check", "--message-format=short"],
@@ -129,7 +181,9 @@ class RustLanguageVerifier(BaseLanguageVerifier):
                         break
                     last_open, _ = stack.pop()
                     if pairs[last_open] != char:
-                        errors.append(f"Mismatched brace '{last_open}' and '{char}' at line {line_idx}")
+                        errors.append(
+                            f"Mismatched brace '{last_open}' and '{char}' at line {line_idx}"
+                        )
                         break
         if stack:
             unclosed, line_idx = stack[-1]
@@ -138,9 +192,8 @@ class RustLanguageVerifier(BaseLanguageVerifier):
 
     def _extract_identifiers_fallback(self, code: str) -> set[str]:
         import re
+
         identifiers = set()
         for match in re.finditer(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", code):
             identifiers.add(match.group(0))
         return identifiers - RUST_KEYWORDS
-
-

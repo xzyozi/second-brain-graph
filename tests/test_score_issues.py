@@ -45,9 +45,9 @@ def test_calculate_scores() -> None:
 def test_calculate_issue_score() -> None:
     issue: Dict[str, Any] = {
         "priority": "high",  # P=4
-        "added": None,       # F=5
-        "estimate": "4h",    # E=4
-        "blockedby": [],     # D=5
+        "added": None,  # F=5
+        "estimate": "4h",  # E=4
+        "blockedby": [],  # D=5
     }
     # Total = (4*3.0) + (5*2.0) + (4*1.5) + (5*2.0) = 12 + 10 + 6 + 10 = 38
     # Score = (38 / 42.5) * 100 = 89.41... -> 89.4

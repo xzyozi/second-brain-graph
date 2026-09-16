@@ -115,10 +115,25 @@ class SettingsDialog(tk.Toplevel):
 def init_git_repo(repo_dir: Path) -> None:
     """Initialize temporary directory as an isolated git repository for Aider."""
     subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "TestUser"], cwd=str(repo_dir), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "TestUser"],
+        cwd=str(repo_dir),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=str(repo_dir),
+        check=True,
+        capture_output=True,
+    )
     subprocess.run(["git", "add", "."], cwd=str(repo_dir), check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "initial commit"], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial commit"],
+        cwd=str(repo_dir),
+        check=True,
+        capture_output=True,
+    )
 
 
 @pytest.mark.integration
@@ -139,10 +154,17 @@ def test_coder_practical_gui_async_and_validation(tmp_path):
     msg_file.write_text(instruction, encoding="utf-8")
 
     cmd = [
-        "aider", "--model", "ollama/ornith-1.5-9b:latest",
-        "--no-auto-commits", "--yes-always", "--no-show-model-warnings",
-        "--edit-format", "whole", "--message-file", str(msg_file.resolve()),
-        "order_app.py"
+        "aider",
+        "--model",
+        "ollama/ornith-1.5-9b:latest",
+        "--no-auto-commits",
+        "--yes-always",
+        "--no-show-model-warnings",
+        "--edit-format",
+        "whole",
+        "--message-file",
+        str(msg_file.resolve()),
+        "order_app.py",
     ]
 
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
@@ -153,9 +175,7 @@ def test_coder_practical_gui_async_and_validation(tmp_path):
     syntax_res = verifier.verify_syntax(gui_file)
     assert syntax_res.is_valid, f"Syntax error: {syntax_res.errors}"
 
-    idents_res = verifier.verify_identifiers(
-        gui_file, ["threading", "Progressbar", "messagebox"]
-    )
+    idents_res = verifier.verify_identifiers(gui_file, ["threading", "Progressbar", "messagebox"])
     assert idents_res.is_valid, f"Missing identifiers: {idents_res.errors}"
     assert verifier.has_try_except_block(gui_file), "Missing try-except statement"
 
@@ -178,10 +198,17 @@ def test_coder_practical_gui_data_visualization(tmp_path):
     msg_file.write_text(instruction, encoding="utf-8")
 
     cmd = [
-        "aider", "--model", "ollama/ornith-1.5-9b:latest",
-        "--no-auto-commits", "--yes-always", "--no-show-model-warnings",
-        "--edit-format", "whole", "--message-file", str(msg_file.resolve()),
-        "dashboard.py"
+        "aider",
+        "--model",
+        "ollama/ornith-1.5-9b:latest",
+        "--no-auto-commits",
+        "--yes-always",
+        "--no-show-model-warnings",
+        "--edit-format",
+        "whole",
+        "--message-file",
+        str(msg_file.resolve()),
+        "dashboard.py",
     ]
 
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
@@ -192,9 +219,7 @@ def test_coder_practical_gui_data_visualization(tmp_path):
     syntax_res = verifier.verify_syntax(gui_file)
     assert syntax_res.is_valid, f"Syntax error: {syntax_res.errors}"
 
-    idents_res = verifier.verify_identifiers(
-        gui_file, ["FigureCanvasTkAgg", "clear", "draw"]
-    )
+    idents_res = verifier.verify_identifiers(gui_file, ["FigureCanvasTkAgg", "clear", "draw"])
     assert idents_res.is_valid, f"Missing identifiers: {idents_res.errors}"
 
 
@@ -215,10 +240,17 @@ def test_coder_practical_gui_config_persistence(tmp_path):
     msg_file.write_text(instruction, encoding="utf-8")
 
     cmd = [
-        "aider", "--model", "ollama/ornith-1.5-9b:latest",
-        "--no-auto-commits", "--yes-always", "--no-show-model-warnings",
-        "--edit-format", "whole", "--message-file", str(msg_file.resolve()),
-        "settings_gui.py"
+        "aider",
+        "--model",
+        "ollama/ornith-1.5-9b:latest",
+        "--no-auto-commits",
+        "--yes-always",
+        "--no-show-model-warnings",
+        "--edit-format",
+        "whole",
+        "--message-file",
+        str(msg_file.resolve()),
+        "settings_gui.py",
     ]
 
     res = subprocess.run(cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=300)
@@ -229,8 +261,6 @@ def test_coder_practical_gui_config_persistence(tmp_path):
     syntax_res = verifier.verify_syntax(gui_file)
     assert syntax_res.is_valid, f"Syntax error: {syntax_res.errors}"
 
-    idents_res = verifier.verify_identifiers(
-        gui_file, ["dump", "load", "messagebox"]
-    )
+    idents_res = verifier.verify_identifiers(gui_file, ["dump", "load", "messagebox"])
     assert idents_res.is_valid, f"Missing identifiers: {idents_res.errors}"
     assert verifier.has_try_except_block(gui_file), "Missing try-except error handling block"

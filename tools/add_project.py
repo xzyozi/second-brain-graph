@@ -99,15 +99,11 @@ def register_project(
 
 def main() -> None:
     """CLI entrypoint."""
-    parser = argparse.ArgumentParser(
-        description="Add a new satellite project to Second Brain OS."
-    )
+    parser = argparse.ArgumentParser(description="Add a new satellite project to Second Brain OS.")
     parser.add_argument(
         "--key", "-k", required=True, help="Project ID key prefix (e.g. EC, MOB, NEW)"
     )
-    parser.add_argument(
-        "--name", "-n", required=True, help="Human-readable project name"
-    )
+    parser.add_argument("--name", "-n", required=True, help="Human-readable project name")
     parser.add_argument(
         "--dir", "-d", default="", help="Satellite directory path (e.g. projects/new-service)"
     )
@@ -125,7 +121,9 @@ def main() -> None:
             base_branch=args.base_branch,
             root_dir=".",
         )
-        print(f"Project '{args.key}' successfully registered: {json.dumps(entry, ensure_ascii=False)}")
+        print(
+            f"Project '{args.key}' successfully registered: {json.dumps(entry, ensure_ascii=False)}"
+        )
     except Exception as e:
         logger.error(f"Failed to register project: {e}")
         sys.exit(1)

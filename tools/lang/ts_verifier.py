@@ -13,15 +13,77 @@ from tools.lang.base import (
 )
 
 TS_KEYWORDS = {
-    "abstract", "any", "as", "asserts", "async", "await", "bigint", "boolean", "break",
-    "case", "catch", "class", "const", "continue", "debugger", "declare", "default",
-    "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for",
-    "from", "function", "get", "if", "implements", "import", "in", "instanceof",
-    "interface", "is", "keyof", "let", "module", "namespace", "never", "new", "null",
-    "number", "object", "package", "private", "protected", "public", "readonly", "require",
-    "return", "set", "static", "string", "super", "switch", "symbol", "this", "throw",
-    "true", "try", "type", "typeof", "undefined", "unknown", "var", "void", "while",
-    "with", "yield",
+    "abstract",
+    "any",
+    "as",
+    "asserts",
+    "async",
+    "await",
+    "bigint",
+    "boolean",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "declare",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "from",
+    "function",
+    "get",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "is",
+    "keyof",
+    "let",
+    "module",
+    "namespace",
+    "never",
+    "new",
+    "null",
+    "number",
+    "object",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "readonly",
+    "require",
+    "return",
+    "set",
+    "static",
+    "string",
+    "super",
+    "switch",
+    "symbol",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "type",
+    "typeof",
+    "undefined",
+    "unknown",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
 }
 
 
@@ -43,7 +105,9 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
 
         # For JavaScript files, optionally run node --check if available
         if file_path.suffix in [".js", ".cjs", ".mjs"]:
-            res = subprocess.run(["node", "--check", str(file_path)], capture_output=True, text=True)
+            res = subprocess.run(
+                ["node", "--check", str(file_path)], capture_output=True, text=True
+            )
             if res.returncode != 0:
                 errors.append(f"Node syntax error: {res.stderr}")
 
@@ -72,7 +136,9 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
             identifiers=identifiers,
         )
 
-    def verify_identifiers(self, file_path: Path, required_identifiers: list[str]) -> VerificationResult:
+    def verify_identifiers(
+        self, file_path: Path, required_identifiers: list[str]
+    ) -> VerificationResult:
         """Verify presence of required TypeScript/JavaScript identifiers."""
         syntax_res = self.verify_syntax(file_path)
         if not syntax_res.is_valid:
@@ -87,7 +153,9 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
             parser = get_tree_sitter_parser(lang)
             if parser:
                 tree = parser.parse(code_bytes)
-                identifiers = extract_tree_sitter_identifiers(tree.root_node, code_bytes) - TS_KEYWORDS
+                identifiers = (
+                    extract_tree_sitter_identifiers(tree.root_node, code_bytes) - TS_KEYWORDS
+                )
             else:
                 identifiers = self._extract_identifiers_fallback(code_text)
 
@@ -104,7 +172,9 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
         """Run tsc --noEmit in target TypeScript project directory."""
         tsconfig = project_dir / "tsconfig.json"
         if not tsconfig.exists():
-            return VerificationResult(is_valid=False, errors=[f"tsconfig.json not found in {project_dir}"])
+            return VerificationResult(
+                is_valid=False, errors=[f"tsconfig.json not found in {project_dir}"]
+            )
 
         res = subprocess.run(
             ["npx", "tsc", "--noEmit"],
@@ -130,7 +200,9 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
                         break
                     last_open, _ = stack.pop()
                     if pairs[last_open] != char:
-                        errors.append(f"Mismatched bracket '{last_open}' and '{char}' at line {line_idx}")
+                        errors.append(
+                            f"Mismatched bracket '{last_open}' and '{char}' at line {line_idx}"
+                        )
                         break
         if stack:
             unclosed, line_idx = stack[-1]
@@ -139,9 +211,8 @@ class TypeScriptLanguageVerifier(BaseLanguageVerifier):
 
     def _extract_identifiers_fallback(self, code: str) -> set[str]:
         import re
+
         identifiers = set()
         for match in re.finditer(r"\b[a-zA-Z_$][a-zA-Z0-9_$]*\b", code):
             identifiers.add(match.group(0))
         return identifiers - TS_KEYWORDS
-
-
