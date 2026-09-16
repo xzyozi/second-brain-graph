@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -586,6 +587,8 @@ class GraphState(TypedDict, total=False):
     target_files: List[str]
     instruction: str
     cwd: Optional[str]
+    # #26: FAILURE_REPORT 等を衛星ワークツリー外（母艦メタデータ）へ隔離するための出力先
+    metadata_dir: Optional[str]
     base_branch: str
     aider_message: str
     test_feedback_instruction: Optional[str]
@@ -673,6 +676,18 @@ def code_node(state: GraphState) -> GraphState:
     if state.get("aider_message"):
         instruction += f"\n\nFeedback:\n{state['aider_message']}"
 
+    # #26: .gitignore の巻き戻しは Aider 由来の変更に限定する。Aider 実行前の内容を
+    # スナップショットし、実行後に変化した場合のみ戻す。無条件の checkout は人手変更や
+    # 必要な ignore 設定を失わせるため行わない。
+    gitignore_before: Optional[str] = None
+    if cwd:
+        gitignore_path = Path(cwd) / ".gitignore"
+        if gitignore_path.exists():
+            try:
+                gitignore_before = gitignore_path.read_text(encoding="utf-8")
+            except Exception:
+                gitignore_before = None
+
     try:
         # #25: Aider も GPU リース配下で実行し、planner/reviewer の LLM 呼出しと
         # GPU/VRAM を奪い合わないようにする。従来は run_aider を直接 subprocess 起動して
@@ -684,9 +699,21 @@ def code_node(state: GraphState) -> GraphState:
 
         coordinator = get_coordinator()
         coordinator.execute("aider_edit", {"action": _do_aider})
-        # Aider が自動追記した .gitignore の変更を元に戻し、規約違反・レビュー拒否を防止
-        if cwd and is_in_git_workspace(cwd):
-            run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
+        # #26: Aider が .gitignore を変更した場合のみ元に戻す（規約違反・レビュー拒否を防止）。
+        # 実行前後で内容が変わっていなければ何もしない。
+        if cwd and gitignore_before is not None and is_in_git_workspace(cwd):
+            gitignore_path = Path(cwd) / ".gitignore"
+            try:
+                gitignore_after = (
+                    gitignore_path.read_text(encoding="utf-8")
+                    if gitignore_path.exists()
+                    else None
+                )
+            except Exception:
+                gitignore_after = None
+            if gitignore_after != gitignore_before:
+                logger.info("Aider modified .gitignore; reverting to pre-Aider state.")
+                run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
 
         state["status"] = "code_completed"
         # Aider が編集・新規作成したファイルを動的に target_files へ追加
@@ -844,7 +871,15 @@ def run_pytest_node(state: GraphState) -> GraphState:
     logger.info("Executing test_node (Pytest)")
     cwd = state.get("cwd")
     target_files = state.get("target_files", [])
-    report_file = Path(cwd) / ".report.json" if cwd else Path(".report.json")
+    # #26: 固定名 .report.json を cwd 直下へ出力し finally で無条件削除すると、
+    # 既存ファイルや並行実行のレポートを上書き・削除してしまう。実行ごとに一意名の
+    # 一時ファイルを用い、他プロセス・利用者のファイルを侵さないようにする。
+    report_dir = Path(cwd) if cwd else Path(".")
+    report_fd, report_file_str = tempfile.mkstemp(
+        prefix=f".pytest-report-{os.getpid()}-", suffix=".json", dir=str(report_dir)
+    )
+    os.close(report_fd)
+    report_file = Path(report_file_str)
 
     # 対象タスクに関連するテストファイルを特定
     test_files = [tf for tf in target_files if "test" in Path(tf).name.lower()]
@@ -1502,8 +1537,18 @@ def escalate_node(state: GraphState) -> GraphState:
                 else str(res)
             )
 
-            # ワークスペース内にレポートを出力
-            report_path = Path(cwd) / f"FAILURE_REPORT_{state['issue_id']}.md"
+            # #26: FAILURE_REPORT を衛星ワークツリー（cwd）へ書くと target 外ファイルで
+            # 作業ツリーを汚染し、既存同名を上書きし、次回の dirty tree 判定を阻害する。
+            # 母艦メタデータ領域 metadata/projects/<PROJECT_KEY>/ へ隔離出力する。
+            metadata_dir = state.get("metadata_dir")
+            project_key = state.get("project_key")
+            if metadata_dir and project_key:
+                report_dir = Path(metadata_dir) / "projects" / project_key
+            else:
+                # フォールバックでも衛星ワークツリー外へ隔離する
+                report_dir = Path(tempfile.gettempdir()) / "sbos_failure_reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_path = report_dir / f"FAILURE_REPORT_{state['issue_id']}.md"
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(f"# Failure Analysis Report for {state['issue_id']}\n\n")
                 f.write(analysis_text)
@@ -1958,6 +2003,7 @@ def execute_issue(
                 target_files=target_files,
                 instruction=instruction_text,
                 cwd=cwd,
+                metadata_dir=str(metadata_dir),
                 base_branch=base_branch,
                 aider_message="",
                 impl_plan=None,
