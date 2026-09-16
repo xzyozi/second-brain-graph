@@ -136,8 +136,15 @@ def init_git_repo(repo_dir: Path) -> None:
     )
 
 
+from pathlib import Path
+
+import pytest
+
+from tools.lang import PythonLanguageVerifier
+
+
 @pytest.mark.integration
-def test_coder_practical_gui_async_and_validation(tmp_path):
+def test_coder_practical_gui_async_and_validation(tmp_path: Path) -> None:
     """Test 1: Validation, Async Threading, Progress Bar & Error Dialogs."""
     gui_file = tmp_path / "order_app.py"
     gui_file.write_text(INITIAL_ORDER_APP_CODE, encoding="utf-8")
@@ -181,7 +188,7 @@ def test_coder_practical_gui_async_and_validation(tmp_path):
 
 
 @pytest.mark.integration
-def test_coder_practical_gui_data_visualization(tmp_path):
+def test_coder_practical_gui_data_visualization(tmp_path: Path) -> None:
     """Test 2: Embed Matplotlib FigureCanvasTkAgg and add clear/re-render logic."""
     gui_file = tmp_path / "dashboard.py"
     gui_file.write_text(INITIAL_DASHBOARD_CODE, encoding="utf-8")
@@ -224,7 +231,7 @@ def test_coder_practical_gui_data_visualization(tmp_path):
 
 
 @pytest.mark.integration
-def test_coder_practical_gui_config_persistence(tmp_path):
+def test_coder_practical_gui_config_persistence(tmp_path: Path) -> None:
     """Test 3: JSON Config Persistence, Binding to Entry fields & Exception Dialogs."""
     gui_file = tmp_path / "settings_gui.py"
     gui_file.write_text(INITIAL_CONFIG_GUI_CODE, encoding="utf-8")

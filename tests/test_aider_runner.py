@@ -140,7 +140,7 @@ def test_run_aider_tmp_file_cleaned_up_on_error(mock_run: MagicMock, tmp_path: P
 # ---------------------------------------------------------------------------
 # get_default_aider_model の ollama/ プレフィックス付与ロジック
 # ---------------------------------------------------------------------------
-def _backend_config_with_coding_model(backend: str, model: str):
+def _backend_config_with_coding_model(backend: str, model: str) -> AppConfig:
     """code_edit ルートに指定 backend/model を持つ設定を組み立てるヘルパー。"""
     from tools.config_loader import BackendExecutionConfig, ProfileConfig
 

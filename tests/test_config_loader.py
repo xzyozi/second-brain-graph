@@ -66,7 +66,7 @@ def test_profile_rejects_unknown_backend() -> None:
     """未知の backend 種別は Literal 検証で拒否されることを確認する。"""
     with pytest.raises(ValidationError):
         ProfileConfig(
-            backend="unknown_backend",
+            backend="unknown_backend",  # type: ignore[arg-type]
             model="test-model",
             openai_endpoint="http://localhost:11434/v1",
         )

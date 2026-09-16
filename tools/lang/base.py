@@ -65,7 +65,10 @@ def get_tree_sitter_parser(language: str) -> Optional[Any]:
         if lang_key in ["javascript", "js"]:
             import tree_sitter_typescript as tstypescript
 
-            return Parser(Language(tstypescript.language_javascript()))
+            ts_lang_func = getattr(
+                tstypescript, "language_javascript", tstypescript.language_typescript
+            )
+            return Parser(Language(ts_lang_func()))
 
         return None
     except Exception:
@@ -108,10 +111,10 @@ def extract_tree_sitter_identifiers(node: Any, code_bytes: bytes) -> set[str]:
     return identifiers
 
 
-def register_verifier(name: str):
+def register_verifier(name: str) -> Any:
     """Decorator to register a language verifier class."""
 
-    def decorator(cls: type[BaseLanguageVerifier]):
+    def decorator(cls: type[BaseLanguageVerifier]) -> type[BaseLanguageVerifier]:
         _VERIFIER_REGISTRY[name.lower()] = cls
         return cls
 

@@ -37,7 +37,7 @@ class PythonLanguageVerifier(BaseLanguageVerifier):
             errors.append(f"SyntaxError in {file_path.name}:{e.lineno}: {e.msg}")
 
         try:
-            py_compile.compile(file_path, doraise=True)
+            py_compile.compile(str(file_path), doraise=True)
         except Exception as e:
             errors.append(f"py_compile error: {e}")
 

@@ -1,11 +1,13 @@
 """Unit tests for PythonLanguageVerifier in tools.lang."""
 
+from pathlib import Path
+
 import pytest
 
 from tools.lang import PythonLanguageVerifier, get_verifier
 
 
-def test_get_verifier_factory():
+def test_get_verifier_factory() -> None:
     verifier = get_verifier("python")
     assert isinstance(verifier, PythonLanguageVerifier)
 
@@ -16,7 +18,7 @@ def test_get_verifier_factory():
         get_verifier("unknown_lang")
 
 
-def test_python_verifier_valid_syntax(tmp_path):
+def test_python_verifier_valid_syntax(tmp_path: Path) -> None:
     code = """import os
 import json
 
@@ -41,7 +43,7 @@ class SampleApp:
     assert verifier.has_try_except_block(file_path)
 
 
-def test_python_verifier_invalid_syntax(tmp_path):
+def test_python_verifier_invalid_syntax(tmp_path: Path) -> None:
     invalid_code = "def broken_func(: pass"
     file_path = tmp_path / "broken.py"
     file_path.write_text(invalid_code, encoding="utf-8")
@@ -54,7 +56,7 @@ def test_python_verifier_invalid_syntax(tmp_path):
     assert any("SyntaxError" in err for err in res.errors)
 
 
-def test_python_verifier_required_identifiers(tmp_path):
+def test_python_verifier_required_identifiers(tmp_path: Path) -> None:
     code = """import threading
 from tkinter import messagebox
 
@@ -75,7 +77,7 @@ def process_order():
     assert any("NonExistentClass" in err for err in res_missing.errors)
 
 
-def test_python_verifier_has_try_except_block_negative(tmp_path):
+def test_python_verifier_has_try_except_block_negative(tmp_path: Path) -> None:
     code = "def no_try():\n    print('hello')\n"
     file_path = tmp_path / "no_try.py"
     file_path.write_text(code, encoding="utf-8")
@@ -84,7 +86,7 @@ def test_python_verifier_has_try_except_block_negative(tmp_path):
     assert not verifier.has_try_except_block(file_path)
 
 
-def test_python_verifier_check_build(tmp_path):
+def test_python_verifier_check_build(tmp_path: Path) -> None:
     verifier = PythonLanguageVerifier()
 
     # Empty dir check

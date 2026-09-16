@@ -1,9 +1,11 @@
 """Unit tests for RustLanguageVerifier and TypeScriptLanguageVerifier in tools.lang."""
 
+from pathlib import Path
+
 from tools.lang import RustLanguageVerifier, TypeScriptLanguageVerifier, get_verifier
 
 
-def test_rust_verifier_syntax_and_identifiers(tmp_path):
+def test_rust_verifier_syntax_and_identifiers(tmp_path: Path) -> None:
     rust_code = """use std::sync::Arc;
 
 pub struct OrderProcessor {
@@ -36,7 +38,7 @@ impl OrderProcessor {
     assert not res_missing.is_valid
 
 
-def test_rust_verifier_unbalanced_braces(tmp_path):
+def test_rust_verifier_unbalanced_braces(tmp_path: Path) -> None:
     broken_code = """fn main() {
     println!("Hello, Rust");
 // missing closing brace
@@ -50,7 +52,7 @@ def test_rust_verifier_unbalanced_braces(tmp_path):
     assert any("Syntax error" in err or "Missing" in err or "Unclosed" in err for err in res.errors)
 
 
-def test_rust_verifier_string_braces_and_keywords(tmp_path):
+def test_rust_verifier_string_braces_and_keywords(tmp_path: Path) -> None:
     code = """pub fn process_data() {
     let msg = "{ unmatched brace in string ( } ]";
     // single line comment with } bracket
@@ -71,14 +73,14 @@ def test_rust_verifier_string_braces_and_keywords(tmp_path):
     assert "pub" not in res.identifiers
 
 
-def test_rust_verifier_check_build(tmp_path):
+def test_rust_verifier_check_build(tmp_path: Path) -> None:
     verifier = RustLanguageVerifier()
     res = verifier.check_build(tmp_path)
     assert not res.is_valid
     assert "Cargo.toml not found" in res.errors[0]
 
 
-def test_ts_verifier_syntax_and_identifiers(tmp_path):
+def test_ts_verifier_syntax_and_identifiers(tmp_path: Path) -> None:
     ts_code = """import { useState } from 'react';
 
 export interface UserConfig {
@@ -114,7 +116,7 @@ export class ConfigManager {
     assert not res_missing.is_valid
 
 
-def test_ts_verifier_string_braces_and_keywords(tmp_path):
+def test_ts_verifier_string_braces_and_keywords(tmp_path: Path) -> None:
     ts_code = """const template = `unmatched ${1} brace ( [ {`;
 const strVal = "{ } [ (";
 // line comment with {
@@ -137,7 +139,7 @@ export function process(): void {
     assert "export" not in res.identifiers
 
 
-def test_ts_verifier_unbalanced_braces(tmp_path):
+def test_ts_verifier_unbalanced_braces(tmp_path: Path) -> None:
     broken_code = """function test() {
     console.log("missing closing");
 """
@@ -150,13 +152,13 @@ def test_ts_verifier_unbalanced_braces(tmp_path):
     assert any("Syntax error" in err or "Missing" in err or "Unclosed" in err for err in res.errors)
 
 
-def test_ts_verifier_check_build(tmp_path):
+def test_ts_verifier_check_build(tmp_path: Path) -> None:
     verifier = TypeScriptLanguageVerifier()
     res = verifier.check_build(tmp_path)
     assert not res.is_valid
     assert "tsconfig.json not found" in res.errors[0]
 
 
-def test_js_verifier_factory():
+def test_js_verifier_factory() -> None:
     verifier = get_verifier("js")
     assert isinstance(verifier, TypeScriptLanguageVerifier)
