@@ -635,6 +635,7 @@ class GraphState(TypedDict, total=False):
     reviewdog_result: Optional[Dict[str, Any]]
     history_summary: Optional[Dict[str, Any]]
     rdjson: Optional[Dict[str, Any]]
+    boundary_warning: Optional[str]
 
 
 def spec_draft_node(state: GraphState) -> GraphState:
@@ -1399,15 +1400,12 @@ def done_node(state: GraphState) -> GraphState:
                     normalized_targets = [t.strip().replace("\\", "/") for t in target_files]
                     unauthorized = [sf for sf in staged_files if sf not in normalized_targets]
                     if unauthorized:
-                        logger.error(
-                            f"Unauthorized staged files detected after git add: {unauthorized}"
+                        logger.warning(
+                            f"[BOUNDARY WARNING] Unauthorized staged files detected outside initial target_files: {unauthorized}"
                         )
-                        state["status"] = "PR_FAILED"
-                        state["error_category"] = "PR_ERROR"
-                        state["error"] = (
-                            f"Unauthorized staged files detected after git add: {unauthorized}"
+                        state["boundary_warning"] = (
+                            f"Unauthorized staged files detected outside initial target_files: {unauthorized}"
                         )
-                        return state
 
             # 2. 未コミット差分の存在確認とコミット
             status_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
@@ -1818,6 +1816,26 @@ def execute_issue(
                                 history_file=history_file,
                             )
                             return
+
+                        # 安全性チェック: 既存の head_branch が存在し未マージのコミットを含んでいないか事前監査
+                        chk_branch = run_cmd(
+                            ["git", "rev-parse", "--verify", head_branch], cwd=cwd, timeout=60
+                        )
+                        if chk_branch.returncode == 0:
+                            prev_head_commit = chk_branch.stdout.strip()
+                            unmerged_log = run_cmd(
+                                ["git", "log", f"{base_branch}..{head_branch}", "--oneline"],
+                                cwd=cwd,
+                                timeout=60,
+                            )
+                            if unmerged_log.returncode == 0 and unmerged_log.stdout.strip():
+                                unmerged_commits = unmerged_log.stdout.strip().splitlines()
+                                logger.warning(
+                                    f"[FRESH MODE SAFETY WARNING] Recreating work branch '{head_branch}' which contains "
+                                    f"{len(unmerged_commits)} unmerged commit(s) relative to '{base_branch}'. "
+                                    f"Previous HEAD commit was: {prev_head_commit}\nUnmerged commits:\n"
+                                    + "\n".join(unmerged_commits[:5])
+                                )
 
                         run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
                         sw_c = run_cmd(

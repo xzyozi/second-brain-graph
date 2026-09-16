@@ -43,6 +43,22 @@ def clean_satellite_repository(cwd: str, base_branch: str = "develop") -> None:
     """衛星プロダクトリポジトリの変更を破棄し、クリーンな初期状態にセットアップする"""
     logger.info(f"Cleaning satellite repository at '{cwd}' (base_branch: {base_branch})...")
 
+    # 未コミットの変更・未追跡ファイルを事前監査しログ出力
+    try:
+        status_res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if status_res.returncode == 0 and status_res.stdout.strip():
+            logger.warning(
+                f"[CLEANUP WARNING] Uncommitted changes detected in '{cwd}' before cleanup:\n{status_res.stdout.strip()}"
+            )
+    except Exception as se:
+        logger.warning(f"Failed to inspect git status before cleanup: {se}")
+
     # 1. base_branch へ強制チェックアウト
     try:
         run_command(["git", "checkout", "-f", base_branch], cwd=cwd)

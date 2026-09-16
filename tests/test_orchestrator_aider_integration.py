@@ -1414,3 +1414,67 @@ def test_test_feedback_node_generates_categorized_instructions(
     assert result["test_feedback_instruction"] is not None
     assert "ASSERTION_MISMATCH" in result["test_feedback_instruction"]
     assert "ARCHITECT ADVICE FOR PYTEST FAILURE" in result["aider_message"]
+
+
+def test_done_node_option_b_boundary_warning() -> None:
+    """Verify Option B behavior: unauthorized staged files emit boundary_warning without aborting PR flow."""
+    from tools.orchestrator_graph import done_node
+
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        execution_id="test_exec_boundary",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/allowed.py"],
+        instruction="Fix bug",
+        cwd="/tmp/fake_repo",
+        base_branch="develop",
+        aider_message="",
+        test_feedback_instruction=None,
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict=None,
+        review_comments=None,
+        review_rounds=[],
+        reviewdog_result=None,
+        history_summary=None,
+        rdjson=None,
+        boundary_warning=None,
+    )
+
+    def mock_run_cmd(cmd: list[str], cwd: str | None = None, timeout: int = 60) -> MagicMock:
+        cmd_str = " ".join(cmd)
+        if "diff --cached" in cmd_str:
+            if "git add" in mock_run_cmd.history:
+                # Return allowed and unauthorized staged file
+                return MagicMock(returncode=0, stdout="src/allowed.py\nsrc/extra_unauthorized.py\n")
+            return MagicMock(returncode=0, stdout="")
+        if "add" in cmd_str:
+            mock_run_cmd.history.append("git add")
+            return MagicMock(returncode=0, stdout="")
+        if "status" in cmd_str:
+            return MagicMock(returncode=0, stdout="M src/allowed.py")
+        if "commit" in cmd_str or "push" in cmd_str or "gh pr" in cmd_str:
+            return MagicMock(returncode=0, stdout="Success")
+        return MagicMock(returncode=0, stdout="")
+
+    mock_run_cmd.history = []
+
+    with (
+        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("shutil.which", return_value="/usr/bin/gh"),
+    ):
+        res = done_node(state)
+        assert res.get("boundary_warning") is not None
+        assert "extra_unauthorized.py" in res["boundary_warning"]
+        assert res.get("status") == "COMPLETED"
