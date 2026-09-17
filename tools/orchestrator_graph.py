@@ -705,7 +705,13 @@ def code_node(state: GraphState) -> GraphState:
         "\n\n[EXECUTION STRATEGY - STEP-BY-STEP]\n"
         "Follow a strict 2-phase approach:\n"
         "1. Phase 1 (Core Logic): Focus first on implementing the core logic, classes, and exceptions under `src/`.\n"
-        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass."
+        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass.\n\n"
+        "[STRICT AIDER OUTPUT FORMAT RULES]\n"
+        "- Output ONLY the target file modifications.\n"
+        "- For each file, the FIRST line must be the exact relative file path without backticks, quotes, or markdown formatting (e.g. src/utils/file_utils.py).\n"
+        "- Follow immediately with a markdown code block containing the complete source code.\n"
+        "- DO NOT output any introductory text, conversational filler, greetings, thoughts, or explanations outside code blocks.\n"
+        "- DO NOT create or modify any files not listed in Target Files."
     )
 
     if state.get("aider_message"):
