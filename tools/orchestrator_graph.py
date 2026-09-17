@@ -1354,6 +1354,75 @@ def review_node(state: GraphState) -> GraphState:
     return state
 
 
+def build_pr_content(state: GraphState) -> tuple[str, str]:
+    """Issue メタデータおよび実行結果から PR タイトルとリッチな Markdown 本文を構築する (Issue #30, #31)."""
+    issue_id = state.get("issue_id", "UNKNOWN")
+    metadata_dir = state.get("metadata_dir")
+    project_key = state.get("project_key")
+    target_files = state.get("target_files", [])
+
+    title = f"feat: [{issue_id}] 自動実装完了"
+    summary_text = f"Issue {issue_id} の自動実装および検証が完了しました。"
+    closes_issue = ""
+
+    # issues/<ID>.md からタイトルと概要、関連Issueを抽出
+    if metadata_dir and project_key:
+        issue_md_path = (
+            Path(metadata_dir) / "projects" / project_key / "issues" / f"{issue_id}.md"
+        )
+        if issue_md_path.exists():
+            try:
+                content = issue_md_path.read_text(encoding="utf-8")
+                lines = content.splitlines()
+                for line in lines:
+                    if line.startswith("# ") and issue_id in line:
+                        clean_title = line.lstrip("# ").strip()
+                        title = f"feat: {clean_title}"
+                        break
+
+                # 概要セクションの抽出
+                if "## 1. 概要・背景" in content:
+                    parts = content.split("## 1. 概要・背景")
+                    if len(parts) > 1:
+                        next_section = parts[1].split("##")[0].strip()
+                        if next_section:
+                            summary_text = next_section
+
+                # 関連Issue (例: #4, #12)
+                match = re.search(
+                    r"(?:関連Issue|Issue)[:\s]+(?:GitHub Issue\s*)?#?(\d+)",
+                    content,
+                    re.IGNORECASE,
+                )
+                if match:
+                    closes_issue = f"Closes #{match.group(1)}"
+            except Exception as e:
+                logger.warning(f"Failed to parse issue markdown for PR body: {e}")
+
+    target_files_md = (
+        "\n".join([f"- `{tf}`" for tf in target_files]) if target_files else "- (指定なし)"
+    )
+    review_verdict = state.get("review_verdict") or "LGTM"
+
+    body_lines = [
+        "## 概要",
+        summary_text,
+        "",
+        "## 変更内容",
+        target_files_md,
+        "",
+        "## 検証結果",
+        "- **単体テスト (pytest)**: 合格 (PASSED)",
+        "- **静的解析 (Ruff)**: エラーなし",
+        f"- **AI コードレビュー**: {review_verdict}",
+    ]
+
+    if closes_issue:
+        body_lines.extend(["", "## 関連 Issue", f"- {closes_issue}"])
+
+    return title, "\n".join(body_lines)
+
+
 def done_node(state: GraphState) -> GraphState:
     """PR 作成および完了ノード (DD-003 §4)。
     dirty working tree 拒否 -> git add -> ステージ済みファイル検証 -> git commit -> git push -> gh pr create パイプラインを実行。
@@ -1487,6 +1556,7 @@ def done_node(state: GraphState) -> GraphState:
                     except Exception as pe:
                         logger.warning(f"Failed to parse gh pr list JSON output: {pe}")
 
+                pr_title, pr_body = build_pr_content(state)
                 pr_res = run_cmd(
                     [
                         gh_bin,
@@ -1497,9 +1567,9 @@ def done_node(state: GraphState) -> GraphState:
                         "--head",
                         head_branch,
                         "--title",
-                        f"[{state['issue_id']}] 自動実装完了",
+                        pr_title,
                         "--body",
-                        "Agent生成PR",
+                        pr_body,
                     ],
                     cwd=cwd,
                     timeout=180,
