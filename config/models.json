@@ -52,7 +52,7 @@
       },
       "coding_ollama": {
         "backend": "ollama",
-        "model": "ornith-1.5-9b:latest",
+        "model": "qwen2.5-coder:14b-instruct",
         "openai_endpoint": "http://localhost:11434/v1",
         "ollama_management_endpoint": "http://localhost:11434"
       }
