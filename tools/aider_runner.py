@@ -107,6 +107,62 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
         raise GitDiffError(f"Failed to execute git diff: {e}") from e
 
 
+def cleanup_unauthorized_aider_artifacts(cwd: Optional[str], target_files: List[str]) -> List[str]:
+    """Aider がプロンプトの会話文等を誤って新規ファイルとして作成した場合、
+    target_files 以外の意図しない不正ファイルを自動検知して削除し Git ステータスを正常化する。
+    """
+    removed: List[str] = []
+    if not cwd:
+        return removed
+    cwd_path = Path(cwd)
+    normalized_targets = {Path(tf).as_posix() for tf in target_files}
+
+    try:
+        res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                if not line.strip():
+                    continue
+                raw_filename = line[3:].strip().strip('"')
+                posix_file = Path(raw_filename).as_posix()
+
+                if (
+                    posix_file not in normalized_targets
+                    and not posix_file.startswith(".aider")
+                    and not posix_file.startswith(".pytest")
+                    and not posix_file == ".gitignore"
+                ):
+                    file_path = cwd_path / raw_filename
+                    if file_path.exists() and file_path.is_file():
+                        logger.warning(
+                            f"[Aider Sanitizer] Detected and removing unauthorized artifact: {raw_filename}"
+                        )
+                        try:
+                            subprocess.run(
+                                ["git", "rm", "-f", "--", raw_filename],
+                                cwd=cwd,
+                                capture_output=True,
+                                text=True,
+                                check=False,
+                                timeout=10,
+                            )
+                            if file_path.exists():
+                                file_path.unlink()
+                            removed.append(raw_filename)
+                        except Exception as ce:
+                            logger.warning(f"Failed to remove unauthorized file {raw_filename}: {ce}")
+    except Exception as e:
+        logger.warning(f"Failed to check git status for unauthorized artifacts: {e}")
+    return removed
+
+
 def run_aider(
     instruction: str,
     target_files: List[str],
@@ -187,6 +243,9 @@ def run_aider(
             text=True,
             timeout=timeout,
         )
+        # 不正な前置き文等による意図しない新規ファイルの自動排除
+        cleanup_unauthorized_aider_artifacts(cwd, target_files)
+
         if result.returncode != 0:
             logger.error(f"Aider failed with exit code {result.returncode}: {result.stderr}")
             raise AiderRunError(
@@ -194,10 +253,12 @@ def run_aider(
             )
         return True
     except subprocess.TimeoutExpired as e:
+        cleanup_unauthorized_aider_artifacts(cwd, target_files)
         raise AiderRunError(f"Aider execution timed out after {timeout} seconds") from e
     except AiderRunError:
         raise
     except Exception as e:
+        cleanup_unauthorized_aider_artifacts(cwd, target_files)
         raise AiderRunError(f"Failed to run Aider CLI: {e}") from e
     finally:
         if msg_file and msg_file.exists():
