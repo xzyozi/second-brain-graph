@@ -645,7 +645,8 @@ def spec_draft_node(state: GraphState) -> GraphState:
 
     try:
         system_prompt = (
-            "You are a technical planner. You must define a strict Definition of Done (DoD) for the issue.\n"
+            "You are a technical planner. You must define a strict Definition of Done (DoD) and implementation plan based strictly on the provided issue requirements.\n"
+            "DO NOT invent unrequested functions, features, or alternate requirements. Strictly follow the provided issue specifications.\n"
             "Your plan MUST explicitly state:\n"
             "1. Allowed Files: Which specific files are permitted to be modified.\n"
             "2. Forbidden Actions: Existing signatures, interfaces, or unrelated configuration files (like settings.json) that MUST NOT be altered.\n"
@@ -653,9 +654,11 @@ def spec_draft_node(state: GraphState) -> GraphState:
             "4. Step-by-step implementation logic."
         )
         target_files_str = ", ".join(state.get("target_files", []))
+        instruction_text = state.get("instruction", "").strip()
         user_prompt = (
-            f"Draft spec for issue {state['issue_id']}.\n"
-            f"Target Files in Repository: {target_files_str or 'None'}"
+            f"Draft technical implementation plan for issue {state['issue_id']}.\n\n"
+            f"Target Files in Repository: {target_files_str or 'None'}\n\n"
+            f"Issue Specifications & Requirements:\n{instruction_text or 'No specific instructions provided.'}"
         )
         res = call_llm(
             role="planner",
@@ -663,8 +666,11 @@ def spec_draft_node(state: GraphState) -> GraphState:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
-        plan_str = res.get("content", str(res)) if isinstance(res, dict) else str(res)
-        state["impl_plan"] = plan_str
+        if isinstance(res, dict):
+            plan_str = res.get("raw") or res.get("content") or str(res)
+        else:
+            plan_str = str(res)
+        state["impl_plan"] = plan_str.strip()
     except Exception as e:
         if "timeout" in str(e).lower():
             logger.warning(f"Timeout caught in spec_draft_node: {e}")

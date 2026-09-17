@@ -322,6 +322,52 @@ def test_spec_draft_node_timeout_retry() -> None:
         assert res_2["llm_timeout_count"] == 2
 
 
+def test_spec_draft_node_passes_instruction_and_unpacks_raw() -> None:
+    """Verify that spec_draft_node embeds issue instruction into user_prompt and unpacks raw string properly."""
+    state = GraphState(
+        issue_id="TFG-0009",
+        project_key="TFG",
+        execution_id="test_exec_spec_002",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/utils/file_utils.py", "tests/test_file_utils.py"],
+        instruction="Implement is_safe_path and format_file_size functions.",
+        cwd=None,
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict=None,
+        review_comments=None,
+        review_rounds=[],
+        reviewdog_result=None,
+        history_summary=None,
+        rdjson=None,
+    )
+
+    captured_call = {}
+
+    def mock_call_llm(*args, **kwargs):
+        captured_call.update(kwargs)
+        return {"raw": "  ## Technical Spec\n- Phase 1: Core\n- Phase 2: Tests  "}
+
+    with patch("tools.llm_client.call_llm", side_effect=mock_call_llm):
+        result = spec_draft_node(state.copy())
+
+    assert "Implement is_safe_path and format_file_size functions." in captured_call["user_prompt"]
+    assert "src/utils/file_utils.py, tests/test_file_utils.py" in captured_call["user_prompt"]
+    assert "DO NOT invent unrequested functions" in captured_call["system_prompt"]
+    assert result["impl_plan"] == "## Technical Spec\n- Phase 1: Core\n- Phase 2: Tests"
+
+
 def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
     """Test that code_node maps AiderRunError to LLM_TIMEOUT, retries on 1st timeout, and escalates to FAILED_SYSTEM on 2nd timeout."""
     initial_state = GraphState(
