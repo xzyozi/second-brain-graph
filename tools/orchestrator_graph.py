@@ -1164,7 +1164,9 @@ def review_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
 
     try:
-        diff_text = get_git_diff(cwd) if cwd else ""
+        diff_text = (
+            get_git_diff(cwd, base_branch=state.get("base_branch")) if cwd else ""
+        )
     except GitDiffError as gde:
         logger.error(f"git diff failed in review_node: {gde}")
         state["status"] = "FAILED_SYSTEM"

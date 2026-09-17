@@ -40,9 +40,10 @@ def get_default_aider_model() -> str:
     return "ollama/qwen2.5-coder:7b-instruct"
 
 
-def get_git_diff(cwd: Optional[str] = None) -> str:
+def get_git_diff(cwd: Optional[str] = None, base_branch: Optional[str] = None) -> str:
     """現在の Git 作業ツリーの差分を取得する。失敗時は GitDiffError を送出する (fail-closed).
     初期コミット前のリポジトリ等で HEAD が存在しない場合はフォールバックして差分を取得する。
+    HEAD との差分が空の場合で base_branch が指定されている場合、ブランチ全体の差分 (origin/{base_branch}...HEAD) をフォールバック取得する。
     """
     try:
         # 新規作成された未追跡ファイル (untracked files) も git diff 対象に含めるため intent-to-add を設定
@@ -100,7 +101,23 @@ def get_git_diff(cwd: Optional[str] = None) -> str:
             raise GitDiffError(
                 f"git diff command failed with returncode {res.returncode}: {res.stderr}"
             )
-        return res.stdout
+
+        diff_out = res.stdout
+        # HEAD との差分が空で base_branch が指定されている場合、コミット済み差分をフォールバック取得
+        if not diff_out.strip() and base_branch:
+            for branch_ref in [f"origin/{base_branch}...HEAD", f"{base_branch}...HEAD"]:
+                branch_diff = subprocess.run(
+                    ["git", "diff", branch_ref],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=60,
+                )
+                if branch_diff.returncode == 0 and branch_diff.stdout.strip():
+                    return branch_diff.stdout
+
+        return diff_out
     except Exception as e:
         if isinstance(e, GitDiffError):
             raise
