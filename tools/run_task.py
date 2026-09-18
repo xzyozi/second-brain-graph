@@ -31,6 +31,12 @@ from tools.orchestrator_graph import (  # noqa: E402
 )
 
 
+class DirtyWorkingTreeError(RuntimeError):
+    """未コミット変更や未追跡ファイルが検出された場合のエラー"""
+
+    pass
+
+
 def run_command(
     cmd: List[str], cwd: Optional[str] = None, check: bool = True
 ) -> subprocess.CompletedProcess:
@@ -39,27 +45,96 @@ def run_command(
     return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, check=check)
 
 
-def clean_satellite_repository(cwd: str, base_branch: str = "develop") -> None:
-    """衛星プロダクトリポジトリの変更を破棄し、クリーンな初期状態にセットアップする"""
+def check_and_safeguard_working_tree(
+    cwd: str,
+    auto_stash: bool = False,
+    force: bool = False,
+    issue_id: Optional[str] = None,
+) -> bool:
+    """衛星リポジトリの作業ツリーの未コミット変更を検知し、安全に退避またはエラーを発生させる。
+
+    返り値: stash を実行した場合は True、それ以外は False
+    """
+    status_res = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if status_res.returncode != 0:
+        logger.warning(f"Failed to inspect git status in '{cwd}': {status_res.stderr}")
+        return False
+
+    dirty_output = status_res.stdout.strip()
+    if not dirty_output:
+        return False
+
+    logger.warning(f"Uncommitted changes or untracked files detected in '{cwd}':\n{dirty_output}")
+
+    if force:
+        logger.warning(
+            "--force flag specified. Proceeding without safeguarding uncommitted changes."
+        )
+        return False
+
+    if auto_stash:
+        stash_msg = f"run_task: auto-stash before {issue_id or 'task'}"
+        logger.info(f"Auto-stashing uncommitted changes in '{cwd}' (message: '{stash_msg}')...")
+        stash_res = run_command(
+            ["git", "stash", "push", "-u", "-m", stash_msg], cwd=cwd, check=False
+        )
+        if stash_res.returncode != 0:
+            raise RuntimeError(f"Failed to auto-stash uncommitted changes: {stash_res.stderr}")
+        logger.info("Auto-stash completed successfully.")
+        return True
+
+    error_msg = (
+        f"Dirty working tree detected in satellite repository '{cwd}'.\n"
+        "To prevent accidental loss of work, execution was aborted.\n"
+        "Options:\n"
+        "  1. Commit or stash your changes manually.\n"
+        "  2. Re-run with '--auto-stash' to automatically stash changes before execution.\n"
+        "  3. Re-run with '--force' to discard all uncommitted changes."
+    )
+    raise DirtyWorkingTreeError(error_msg)
+
+
+def sync_base_branch(cwd: str, base_branch: str = "develop") -> None:
+    """ベースブランチをリモートの最新状態と同期する (git fetch origin {base_branch})"""
+    logger.info(f"Fetching latest origin/{base_branch} for '{cwd}'...")
+    fetch_res = subprocess.run(
+        ["git", "fetch", "origin", base_branch],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if fetch_res.returncode == 0:
+        logger.info(f"Successfully fetched origin/{base_branch}.")
+    else:
+        logger.warning(
+            f"git fetch origin {base_branch} failed (offline or branch not found): {fetch_res.stderr.strip()}"
+        )
+
+
+def clean_satellite_repository(
+    cwd: str,
+    base_branch: str = "develop",
+    auto_stash: bool = False,
+    force: bool = False,
+    issue_id: Optional[str] = None,
+) -> None:
+    """衛星プロダクトリポジトリの変更を破棄または退避し、クリーンな初期状態にセットアップする"""
     logger.info(f"Cleaning satellite repository at '{cwd}' (base_branch: {base_branch})...")
 
-    # 未コミットの変更・未追跡ファイルを事前監査しログ出力
-    try:
-        status_res = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=cwd,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if status_res.returncode == 0 and status_res.stdout.strip():
-            logger.warning(
-                f"[CLEANUP WARNING] Uncommitted changes detected in '{cwd}' before cleanup:\n{status_res.stdout.strip()}"
-            )
-    except Exception as se:
-        logger.warning(f"Failed to inspect git status before cleanup: {se}")
+    # 1. 未コミット変更の事前チェック & 退避/停止
+    check_and_safeguard_working_tree(cwd, auto_stash=auto_stash, force=force, issue_id=issue_id)
 
-    # 1. base_branch へ強制チェックアウト
+    # 2. リモートベースブランチの同期
+    sync_base_branch(cwd, base_branch=base_branch)
+
+    # 3. base_branch へ強制チェックアウト
     try:
         run_command(["git", "checkout", "-f", base_branch], cwd=cwd)
     except subprocess.CalledProcessError as e:
@@ -73,14 +148,14 @@ def clean_satellite_repository(cwd: str, base_branch: str = "develop") -> None:
             logger.error(f"Failed to checkout base branch: {e2.stderr}")
             raise e2
 
-    # 2. リモート追跡ブランチまたはローカル HEAD へのリセット
+    # 4. リモート追跡ブランチまたはローカル HEAD へのリセット
     try:
         run_command(["git", "reset", "--hard", f"origin/{base_branch}"], cwd=cwd)
     except subprocess.CalledProcessError:
         logger.warning(f"origin/{base_branch} not found. Falling back to git reset --hard HEAD")
         run_command(["git", "reset", "--hard", "HEAD"], cwd=cwd)
 
-    # 3. 未追跡ファイル・フォルダの完全クリーニング
+    # 5. 未追跡ファイル・フォルダの完全クリーニング
     run_command(["git", "clean", "-fd"], cwd=cwd)
     logger.info("Satellite repository cleaning completed successfully.")
 
@@ -128,6 +203,18 @@ def main() -> None:
         help="Resume existing work branch and continue work on top of previous commits",
     )
     parser.add_argument(
+        "--auto-stash",
+        action="store_true",
+        default=False,
+        help="Automatically stash uncommitted changes in satellite repository before execution",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Force cleanup of uncommitted changes in satellite repository without safeguarding",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -169,6 +256,9 @@ def main() -> None:
 
     if args.dry_run:
         logger.info("[DRY RUN] Would execute satellite cleanup:")
+        if args.auto_stash:
+            logger.info("  - git stash push -u (auto-stash)")
+        logger.info(f"  - git fetch origin {base_branch}")
         logger.info(f"  - git checkout -f {base_branch}")
         logger.info(f"  - git reset --hard origin/{base_branch}")
         logger.info("  - git clean -fd")
@@ -185,6 +275,8 @@ def main() -> None:
             orch_cmd.append("--fresh")
         if args.resume:
             orch_cmd.append("--resume")
+        if args.auto_stash:
+            orch_cmd.append("--auto-stash")
         logger.info(f"[DRY RUN] Would execute orchestrator command: {' '.join(orch_cmd)}")
         return
 
@@ -192,7 +284,13 @@ def main() -> None:
     should_clean = args.clean and not args.resume
     if should_clean:
         try:
-            clean_satellite_repository(satellite_cwd, base_branch=base_branch)
+            clean_satellite_repository(
+                satellite_cwd,
+                base_branch=base_branch,
+                auto_stash=args.auto_stash,
+                force=args.force,
+                issue_id=target_issue_id,
+            )
         except Exception as e:
             logger.error(f"Satellite cleanup failed: {e}")
             sys.exit(1)
@@ -211,6 +309,8 @@ def main() -> None:
         exec_cmd.append("--fresh")
     if args.resume:
         exec_cmd.append("--resume")
+    if args.auto_stash:
+        exec_cmd.append("--auto-stash")
 
     logger.info(f"Starting orchestrator execution for {target_issue_id}...")
     res = subprocess.run(exec_cmd, cwd=str(PROJECT_ROOT))
