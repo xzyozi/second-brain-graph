@@ -178,6 +178,26 @@ class OllamaBackendAdapter:
         ).removesuffix("/v1/")
 
         with patch_env(OLLAMA_API_BASE=ollama_base, OPENAI_API_BASE=endpoint):
+            # 異なるモデルが VRAM に残留して GPU メモリ逼迫・スワップ遅延を引き起こすのを防止するため、
+            # 現在ロード中の異なるモデルを事前にアンロードする
+            try:
+                norm_base = _normalize_management_url(ollama_base)
+                loaded = _list_loaded_models(norm_base)
+                target_model = self.profile.model
+                different_models = [
+                    m for m in loaded
+                    if m != target_model and not m.startswith(f"{target_model}:")
+                ]
+                if different_models:
+                    logger.info(
+                        f"Unloading previous Ollama model(s) from VRAM to prevent memory contention before {target_model}: {different_models}"
+                    )
+                    for dm in different_models:
+                        _unload_model(norm_base, dm)
+                    _wait_until_unloaded(norm_base, timeout=10.0)
+            except Exception as ue:
+                logger.warning(f"Failed to check/unload previous Ollama models: {ue}")
+
             return action(self.profile)
 
 

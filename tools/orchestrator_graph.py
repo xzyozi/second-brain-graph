@@ -672,7 +672,7 @@ def spec_draft_node(state: GraphState) -> GraphState:
             plan_str = str(res)
         state["impl_plan"] = plan_str.strip()
     except Exception as e:
-        if "timeout" in str(e).lower():
+        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")):
             logger.warning(f"Timeout caught in spec_draft_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
             state["error_category"] = "LLM_TIMEOUT"
@@ -1343,7 +1343,7 @@ def review_node(state: GraphState) -> GraphState:
             else:
                 state["status"] = "retry_code"
     except Exception as e:
-        if "timeout" in str(e).lower() or isinstance(e, ProcessTimeoutError):
+        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")) or isinstance(e, ProcessTimeoutError):
             logger.warning(f"Timeout caught in review_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
             state["error_category"] = "LLM_TIMEOUT"
