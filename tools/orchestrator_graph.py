@@ -717,6 +717,7 @@ def code_node(state: GraphState) -> GraphState:
         "- For each file, the FIRST line must be the exact relative file path without backticks, quotes, or markdown formatting (e.g. src/utils/file_utils.py).\n"
         "- Follow immediately with a markdown code block containing the complete source code.\n"
         "- DO NOT output any introductory text, conversational filler, greetings, thoughts, or explanations outside code blocks.\n"
+        "- DO NOT replace implementations or tests with ellipses (...), pass, or placeholder comments. Always write complete, runnable Python code.\n"
         "- DO NOT create or modify any files not listed in Target Files."
     )
 
@@ -1988,6 +1989,11 @@ def execute_issue(
                     return "escalate_node"
                 if s.get("status") == "retry_spec_draft":
                     return "spec_draft"
+                if is_resume_mode and s.get("target_files") and s.get("cwd"):
+                    cwd_p = Path(s["cwd"])
+                    if any((cwd_p / tf).exists() for tf in s["target_files"]):
+                        logger.info("Resume mode: Existing implementation detected. Verifying via lint_node before code edits.")
+                        return "lint_node"
                 return "code_node"
 
             workflow.add_conditional_edges(
@@ -1997,6 +2003,7 @@ def execute_issue(
                     "escalate_node": "escalate_node",
                     "spec_draft": "spec_draft",
                     "code_node": "code_node",
+                    "lint_node": "lint_node",
                 },
             )
 
