@@ -8,3 +8,5 @@
 - [ ] [TFG-0006] 暗号化・パスワード保護Officeドキュメントの自動判定・復号パース機構と構造例外処理の設計・実装 <!-- priority:high -->
 - [ ] [TFG-0007] マルチドキュメント一括検索の非同期・並列処理（Process/Thread Pool）によるパース・検索パフォーマンス強化 <!-- priority:high -->
 - [x] [TFG-0100] 動作確認用のダミーPythonファイルを生成する <!-- priority:medium completed:2026-07-11 -->
+- [x] [TFG-0008] ignore_case 検索におけるループ内の不要な処理の最適化 <!-- priority:medium completed:2026-09-17 pr:#7 -->
+- [x] [TFG-0009] src/utils/file_utils.py にパストラバーサル防止・ファイルサイズ整形関数を追加し、単体テストを作成する <!-- priority:high completed:2026-09-18 pr:#8 -->
