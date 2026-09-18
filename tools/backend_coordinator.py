@@ -185,8 +185,7 @@ class OllamaBackendAdapter:
                 loaded = _list_loaded_models(norm_base)
                 target_model = self.profile.model
                 different_models = [
-                    m for m in loaded
-                    if m != target_model and not m.startswith(f"{target_model}:")
+                    m for m in loaded if m != target_model and not m.startswith(f"{target_model}:")
                 ]
                 if different_models:
                     logger.info(

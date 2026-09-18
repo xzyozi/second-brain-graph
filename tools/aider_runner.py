@@ -174,7 +174,9 @@ def cleanup_unauthorized_aider_artifacts(cwd: Optional[str], target_files: List[
                                 file_path.unlink()
                             removed.append(raw_filename)
                         except Exception as ce:
-                            logger.warning(f"Failed to remove unauthorized file {raw_filename}: {ce}")
+                            logger.warning(
+                                f"Failed to remove unauthorized file {raw_filename}: {ce}"
+                            )
     except Exception as e:
         logger.warning(f"Failed to check git status for unauthorized artifacts: {e}")
     return removed

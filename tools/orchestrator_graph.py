@@ -1171,9 +1171,7 @@ def review_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
 
     try:
-        diff_text = (
-            get_git_diff(cwd, base_branch=state.get("base_branch")) if cwd else ""
-        )
+        diff_text = get_git_diff(cwd, base_branch=state.get("base_branch")) if cwd else ""
     except GitDiffError as gde:
         logger.error(f"git diff failed in review_node: {gde}")
         state["status"] = "FAILED_SYSTEM"
@@ -1346,7 +1344,9 @@ def review_node(state: GraphState) -> GraphState:
             else:
                 state["status"] = "retry_code"
     except Exception as e:
-        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")) or isinstance(e, ProcessTimeoutError):
+        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")) or isinstance(
+            e, ProcessTimeoutError
+        ):
             logger.warning(f"Timeout caught in review_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
             state["error_category"] = "LLM_TIMEOUT"
@@ -1376,9 +1376,7 @@ def build_pr_content(state: GraphState) -> tuple[str, str]:
 
     # issues/<ID>.md からタイトルと概要、関連Issueを抽出
     if metadata_dir and project_key:
-        issue_md_path = (
-            Path(metadata_dir) / "projects" / project_key / "issues" / f"{issue_id}.md"
-        )
+        issue_md_path = Path(metadata_dir) / "projects" / project_key / "issues" / f"{issue_id}.md"
         if issue_md_path.exists():
             try:
                 content = issue_md_path.read_text(encoding="utf-8")
@@ -1994,7 +1992,9 @@ def execute_issue(
                 if is_resume_mode and s.get("target_files") and s.get("cwd"):
                     cwd_p = Path(s["cwd"])
                     if any((cwd_p / tf).exists() for tf in s["target_files"]):
-                        logger.info("Resume mode: Existing implementation detected. Verifying via lint_node before code edits.")
+                        logger.info(
+                            "Resume mode: Existing implementation detected. Verifying via lint_node before code edits."
+                        )
                         return "lint_node"
                 return "code_node"
 
