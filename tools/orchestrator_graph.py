@@ -1691,6 +1691,7 @@ def execute_issue(
     allow_offline_git: bool = False,
     resume: Optional[bool] = None,
     fresh: bool = False,
+    auto_stash: bool = False,
 ) -> None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent
@@ -1792,6 +1793,29 @@ def execute_issue(
                                 cwd=cwd,
                                 timeout=60,
                             )
+                        elif auto_stash:
+                            stash_msg = f"orchestrator: auto-stash before {issue_id}"
+                            logger.info(
+                                f"Auto-stashing uncommitted changes in {cwd} (message: '{stash_msg}')..."
+                            )
+                            st_res = run_cmd(
+                                ["git", "stash", "push", "-u", "-m", stash_msg],
+                                cwd=cwd,
+                                timeout=60,
+                            )
+                            if st_res.returncode != 0:
+                                logger.error(
+                                    f"Failed to auto-stash uncommitted changes: {st_res.stderr}"
+                                )
+                                update_task_state(
+                                    project_key,
+                                    issue_id,
+                                    status="FAILED_SYSTEM",
+                                    error_category="SYSTEM_ERROR",
+                                    metadata_dir=metadata_dir,
+                                )
+                                return
+                            logger.info("Auto-stash completed successfully.")
                         else:
                             logger.error(
                                 f"Dirty working tree detected before execution in {cwd}. Aborting."
@@ -1815,6 +1839,17 @@ def execute_issue(
                                 history_file=history_file,
                             )
                             return
+
+                    # ベースブランチのリモート最新状態を同期 (git fetch)
+                    fetch_res = run_cmd(
+                        ["git", "fetch", "origin", base_branch], cwd=cwd, timeout=60
+                    )
+                    if fetch_res.returncode == 0:
+                        logger.info(f"Successfully fetched origin/{base_branch} in {cwd}.")
+                    else:
+                        logger.warning(
+                            f"git fetch origin {base_branch} in {cwd} skipped or failed (offline or branch not found)."
+                        )
 
                     head_branch = f"{work_branch_prefix}{issue_id}"
 
@@ -2312,6 +2347,12 @@ def main() -> None:
         default=False,
         help="Delete existing work branch and create clean branch from base_branch",
     )
+    exec_parser.add_argument(
+        "--auto-stash",
+        action="store_true",
+        default=False,
+        help="Automatically stash uncommitted changes in satellite repository before execution",
+    )
 
     orch_parser = subparsers.add_parser("orchestrate", help="Orchestrate uncompleted issues")
     orch_parser.add_argument("--project-key", help="Target Project Key (All if omitted)")
@@ -2328,7 +2369,13 @@ def main() -> None:
             sys.exit(1)
 
         validate_project_consistency(issue_id, project_key)
-        execute_issue(issue_id, project_key, resume=args.resume, fresh=args.fresh)
+        execute_issue(
+            issue_id,
+            project_key,
+            resume=args.resume,
+            fresh=args.fresh,
+            auto_stash=args.auto_stash,
+        )
     elif args.subcommand == "orchestrate":
         cmd_orchestrate(args.project_key)
     else:
