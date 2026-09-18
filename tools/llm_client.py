@@ -25,7 +25,7 @@ def call_llm(
     system_prompt: str,
     user_prompt: str,
     expect_json: bool = False,
-    timeout: int = 300,
+    timeout: int = 600,
     intent: str = "",
     **kwargs: Any,
 ) -> Dict[str, Any]:
