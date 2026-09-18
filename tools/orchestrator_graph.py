@@ -1196,7 +1196,9 @@ def review_node(state: GraphState) -> GraphState:
                 "You are a reviewer. You must respond with JSON containing a 'verdict' "
                 "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity). "
                 "severity MUST be one of: 'INFO', 'WARNING', 'ERROR', 'MAJOR', 'STRUCTURAL'. "
-                "Ensure that the changes align with the Implementation Plan and report any deviations as structural comments."
+                "Focus on critical correctness, security, and functional completeness. "
+                "Benign stylistic differences (e.g. for vs while loop) that fully satisfy requirements MUST NOT trigger changes_requested. "
+                "If the implementation correctly satisfies the requirements and tests are passing, give 'LGTM'."
             ),
             user_prompt=user_prompt,
             expect_json=True,
