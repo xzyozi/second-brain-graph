@@ -355,7 +355,7 @@ def test_spec_draft_node_passes_instruction_and_unpacks_raw() -> None:
 
     captured_call = {}
 
-    def mock_call_llm(*args, **kwargs):
+    def mock_call_llm(*args: Any, **kwargs: Any) -> dict[str, Any]:
         captured_call.update(kwargs)
         return {"raw": "  ## Technical Spec\n- Phase 1: Core\n- Phase 2: Tests  "}
 

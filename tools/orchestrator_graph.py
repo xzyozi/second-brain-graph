@@ -1989,8 +1989,9 @@ def execute_issue(
                     return "escalate_node"
                 if s.get("status") == "retry_spec_draft":
                     return "spec_draft"
-                if is_resume_mode and s.get("target_files") and s.get("cwd"):
-                    cwd_p = Path(s["cwd"])
+                cwd_val = s.get("cwd")
+                if is_resume_mode and s.get("target_files") and cwd_val:
+                    cwd_p = Path(cwd_val)
                     if any((cwd_p / tf).exists() for tf in s["target_files"]):
                         logger.info(
                             "Resume mode: Existing implementation detected. Verifying via lint_node before code edits."
