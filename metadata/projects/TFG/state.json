@@ -26,5 +26,21 @@
     "max_round": 3,
     "error_category": "LINT_ERROR",
     "updated_at": "2026-08-05T05:00:09.335904+00:00"
+  },
+  "TFG-0008": {
+    "status": "COMPLETED",
+    "review_round": 1,
+    "max_round": 3,
+    "error_category": null,
+    "pr_number": 7,
+    "updated_at": "2026-09-17T11:16:58.000000+00:00"
+  },
+  "TFG-0009": {
+    "status": "COMPLETED",
+    "review_round": 1,
+    "max_round": 3,
+    "error_category": null,
+    "pr_number": 8,
+    "updated_at": "2026-09-18T04:01:16.671165+00:00"
   }
 }
