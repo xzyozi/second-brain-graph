@@ -212,3 +212,68 @@ def test_resolve_project_context_nonexistent(tmp_path: Path) -> None:
     ctx = resolve_project_context("NONEXISTENT", metadata_dir=tmp_path)
     assert ctx["valid"] is False
     assert ctx["cwd"] is None
+
+
+def test_record_execution_history_sanitizes_secrets(tmp_path: Path) -> None:
+    """Issue #20: 実行履歴保存時に機密情報（APIキー、トークン、パスワード）がマスクされることを確認する。"""
+    history_file = tmp_path / "execution_history.json"
+    state = {
+        "issue_id": "TEST-0001",
+        "project_key": "TEST_PROJ",
+        "cwd": "/path/to/repo",
+        "error": "Failed connection: postgresql://admin:super_secret_pw@db.local:5432/main",
+        "review_rounds": [
+            {
+                "round": 1,
+                "comments": [
+                    {
+                        "file": "config.py",
+                        "message": (
+                            "Found token: "
+                            + "ghp_"
+                            + "123456789012345678901234567890123456"
+                            + " with secret='my_token'"
+                        ),
+                    }
+                ],
+            }
+        ],
+    }
+
+    record_execution_history(
+        state, final_status=TaskStatus.FAILED_SYSTEM, history_file=history_file
+    )
+
+    with open(history_file, "r", encoding="utf-8") as f:
+        hdata = json.load(f)
+
+    record = hdata["records"][0]
+    # エラーメッセージ内のパスワードがマスクされていること
+    assert "super_secret_pw" not in record["error_message"]
+    assert "[REDACTED]@" in record["error_message"]
+
+    # レビューコメント内のGitHubトークンおよびKVシークレットがマスクされていること
+    comment_msg = record["review_rounds"][0]["comments"][0]["message"]
+    assert "ghp_" + "123456789012345678901234567890123456" not in comment_msg
+    assert "my_token" not in comment_msg
+    assert "[REDACTED]" in comment_msg
+
+
+def test_write_event_sanitizes_secrets(tmp_path: Path) -> None:
+    """Issue #20: 個別イベント保存時に機密情報がマスクされることを確認する。"""
+    event_data = {
+        "execution_id": "exec-9999",
+        "event": "OLLAMA_TIMEOUT",
+        "details": "Timeout with key: " + "sk-" + "1234567890abcdef1234567890abcdef",
+    }
+    write_event("TEST_PROJ", event_data, metadata_dir=tmp_path)
+
+    events_dir = tmp_path / "projects" / "TEST_PROJ" / "events"
+    event_files = list(events_dir.glob("event_exec-9999_*.json"))
+    assert len(event_files) == 1
+
+    with open(event_files[0], "r", encoding="utf-8") as f:
+        saved = json.load(f)
+
+    assert "sk-" + "1234567890abcdef1234567890abcdef" not in saved["details"]
+    assert "[REDACTED]" in saved["details"]

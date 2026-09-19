@@ -4,10 +4,10 @@
 | 項目     | 内容                                                                                                  |
 | :------- | :---------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                                                           |
-| 版数     | Rev.6.0（コード修正追随および設計補強版）                                                             |
-| 改訂日   | 2026年8月8日                                                                                          |
+| 版数     | Rev.6.2（メタデータ分離[#22]および機密情報マスキング[#20]追随版）                                     |
+| 改訂日   | 2026年9月19日                                                                                         |
 | 作成日   | 2026年7月28日                                                                                         |
-| 実装正本 | `tools/`、`config/models.json`、`metadata/.project-registry.json`、`metadata/projects/<PROJECT_KEY>/` |
+| 実装正本 | `tools/`、`config/models.yaml`、`metadata/.project-registry.json`、`metadata/projects/<PROJECT_KEY>/` |
 | 対象読者 | 実装担当エンジニア、運用担当者、テスト担当者                                                          |
 
 ---
@@ -47,9 +47,11 @@ flowchart LR
 
 | Module                   | Interface                                        | 責務                                                                   |
 | :----------------------- | :----------------------------------------------- | :--------------------------------------------------------------------- |
-| `orchestrator_graph.py`  | `execute_issue()`、`cmd_orchestrate()`、`main()` | 実行前検証、ロック、Git ブランチ準備、LangGraph 実行、状態・履歴保存。 |
+| `orchestrator_graph.py`  | `execute_issue()`、`cmd_orchestrate()`、`main()` | 実行前検証、Git ブランチ準備、LangGraph 実行。                          |
+| `metadata_store.py`      | `update_task_state()`, `record_execution_history()`, `write_event()`, `ProjectLockManager` | プロジェクト台帳・タスク状態・実行履歴・排他ロック管理。              |
+| `sanitizer.py`           | `sanitize_text()`, `sanitize_data()`             | 機密情報（キー、トークン、秘密鍵、パスワード、メール等）のマスキング。 |
 | `config_loader.py`       | `load_model_config()`、各 `get_*_config()`       | Pydantic による設定検証と設定値の提供。                                |
-| `llm_client.py`          | `call_llm()`                                     | role・intent・設定から OpenAI 互換 API 呼び出しを構成。                |
+| `llm_client.py`          | `call_llm()`                                     | role・intent・設定からサニタイズ済み OpenAI 互換 API 呼び出しを構成。  |
 | `backend_coordinator.py` | `BackendExecutionCoordinator.execute()`          | intent の profile 解決、GPU リース、Backend Adapter 選択。             |
 | `llama_backend.py`       | `managed_llama_server()`                         | llama-server プロセスの起動、待機、終了、ポート解放確認。              |
 | `aider_runner.py`        | `run_aider()`、`get_git_diff()`                  | Aider CLI 実行と Git 差分取得。                                        |
@@ -310,16 +312,20 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
    - PR 作成時（`done_node`）に `sbos/<ISSUE_ID>` がハードコードされていたが、`GraphState` で `work_branch_prefix` を保持し動的適用するよう修正。
 3. **`GraphState` の `test_feedback_instruction` の初期値**
    - 型定義上必須だが初期 state では未設定である。各 node は `.get()` を使用するため実行時には支障ない。
+4. **`status` の Enum / Literal 化および Metadata モジュールの独立分離【Rev.6.1 で改修済み (Issue #22)】**
+   - `tools/metadata_store.py` を新設し、`TaskStatus` / `ErrorCategory` Enum & Literal を導入して型安全性を担保。
+   - プロジェクト台帳、タスク状態（`state.json`）、実行履歴（`execution_history.json`）、排他ロック管理（`ProjectLockManager`）を独立分離。
+5. **機密情報マスキング・サニタイズ共通モジュール `tools/sanitizer.py` の導入【Rev.6.2 で改修済み (Issue #20)】**
+   - `tools/sanitizer.py`（`sanitize_text`, `sanitize_data`）を新設。
+   - APIキー、アクセストークン、秘密鍵、Basic認証URL、Key-Valueシークレット、メールアドレス（RFC 2606テストドメイン除外）等のマスキング基盤を確立。
+   - `tools/llm_client.py`（プロンプト送信直前）、`tools/metadata_store.py`（履歴・イベント保存直前）、`orchestrator_graph.py`（Failure Report出力時）の全境界へ統合完了。
 
 ### 10.3 要件決定が必要な事項
 
 - **`target_files` の厳密な境界要件**: 今後 Aider による意図しない他ファイル変更を完全にブロックするため、事前許可リスト以外の変更をエラーとするか（厳密な不変条件）、現状の柔軟な追記を許容するかを決定する。
-- **データ境界とログ・LLM 情報セキュリティ**: LLM に送信する Git diff・テストログ、および実行履歴や Failure Report に出力される内容について、機密データや個人情報を含む場合のマスキング処理・保存期間・送信境界ルールを定義する。
 
 ### 10.4 将来のリファクタリング候補
 
-- **`status` の Enum / Literal 化**: 現行 `str` 保持から型安全な定義へ移行。
-- **Metadata モジュールの独立分離**: `orchestrator_graph.py` 内のメタデータ操作関数群を独立した Metadata Store / Access モジュールとして切り出し。
 - **`run_task.py` と CLI の責務整理**: 破壊的クリーンアップ機能と通常実行の連携のさらなる整理。
 
 ## 11. テスト・検証設計

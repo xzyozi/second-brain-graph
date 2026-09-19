@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from filelock import FileLock, Timeout
 
+from tools.sanitizer import sanitize_data
+
 logger = logging.getLogger("metadata_store")
 
 ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
@@ -351,8 +353,10 @@ def record_execution_history(
             },
         }
 
+        # #20 (DD-003 §10.3): 永続化前の機密情報サニタイズ
+        clean_record = sanitize_data(record)
         records = history_data.get("records", [])
-        records.append(record)
+        records.append(clean_record)
         history_data["records"] = records
 
         temp_file = history_file.with_name(f"execution_history.json.{uuid.uuid4().hex}.tmp")
@@ -392,10 +396,12 @@ def write_event(
 
     execution_id = event_data.get("execution_id", "unknown")
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    # #20 (DD-003 §10.3): 永続化前の機密情報サニタイズ
+    clean_event_data = sanitize_data(event_data)
     event_file = events_dir / f"event_{execution_id}_{timestamp}.json"
 
     with open(event_file, "w", encoding="utf-8") as f:
-        json.dump(event_data, f, ensure_ascii=False, indent=2)
+        json.dump(clean_event_data, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
 
