@@ -183,27 +183,12 @@ def test_load_prompt_config_loads_yaml() -> None:
     assert "[TEST INTEGRITY AUDIT" in prompt_config.reviewer.code_review_system
 
 
-def test_load_tag_config_loads_yaml() -> None:
-    """tag.yaml が正常にロードされ、タスク分類タグおよび品質ガード設定が取得できることを確認する。"""
-    from tools.config_loader import load_tag_config
-
-    tag_config = load_tag_config()
-    assert "bug" in tag_config.task_classification.read_only_test_tasks
-    assert "fix" in tag_config.task_classification.read_only_test_tasks
-    assert "feature" in tag_config.task_classification.feature_tasks
-    assert tag_config.task_classification.label_mappings.get("bug") == "fix"
-    assert tag_config.quality_guard.tampering_detection_enabled is True
-    assert "assert " in tag_config.quality_guard.protected_assertion_patterns
-    assert "@pytest.mark.skip" in tag_config.quality_guard.forbidden_skip_patterns
-
-
 def test_get_config_returns_unified_app_config() -> None:
-    """get_config() が models, prompt, tag をすべて含む統合 AppConfig を返すことを確認する。"""
+    """get_config() が models, prompt を含む統合 AppConfig を返すことを確認する。"""
     from tools.config_loader import AppConfig, get_config
 
     app_config = get_config()
     assert isinstance(app_config, AppConfig)
     assert app_config.models is not None
     assert app_config.prompt is not None
-    assert app_config.tag is not None
     assert app_config.models.aider.timeout == 1200
