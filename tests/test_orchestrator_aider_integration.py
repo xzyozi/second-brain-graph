@@ -322,6 +322,52 @@ def test_spec_draft_node_timeout_retry() -> None:
         assert res_2["llm_timeout_count"] == 2
 
 
+def test_spec_draft_node_passes_instruction_and_unpacks_raw() -> None:
+    """Verify that spec_draft_node embeds issue instruction into user_prompt and unpacks raw string properly."""
+    state = GraphState(
+        issue_id="TFG-0009",
+        project_key="TFG",
+        execution_id="test_exec_spec_002",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/utils/file_utils.py", "tests/test_file_utils.py"],
+        instruction="Implement is_safe_path and format_file_size functions.",
+        cwd=None,
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict=None,
+        review_comments=None,
+        review_rounds=[],
+        reviewdog_result=None,
+        history_summary=None,
+        rdjson=None,
+    )
+
+    captured_call = {}
+
+    def mock_call_llm(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        captured_call.update(kwargs)
+        return {"raw": "  ## Technical Spec\n- Phase 1: Core\n- Phase 2: Tests  "}
+
+    with patch("tools.llm_client.call_llm", side_effect=mock_call_llm):
+        result = spec_draft_node(state.copy())
+
+    assert "Implement is_safe_path and format_file_size functions." in captured_call["user_prompt"]
+    assert "src/utils/file_utils.py, tests/test_file_utils.py" in captured_call["user_prompt"]
+    assert "DO NOT invent unrequested functions" in captured_call["system_prompt"]
+    assert result["impl_plan"] == "## Technical Spec\n- Phase 1: Core\n- Phase 2: Tests"
+
+
 def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
     """Test that code_node maps AiderRunError to LLM_TIMEOUT, retries on 1st timeout, and escalates to FAILED_SYSTEM on 2nd timeout."""
     initial_state = GraphState(
@@ -1479,3 +1525,141 @@ def test_done_node_option_b_boundary_warning() -> None:
         assert bw is not None
         assert "extra_unauthorized.py" in bw
         assert res.get("status") == "COMPLETED"
+
+
+def test_execute_issue_dirty_working_tree_aborts_without_auto_stash(tmp_path: Path) -> None:
+    """execute_issue が未コミット変更を検知した際、auto_stash=False なら FAILED_SYSTEM で中断することを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    history_file = project_root / "tools" / ".cache" / "execution_history.json"
+    project_key = "TFG"
+    issue_id = "TFG-0004"
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    target_file = sat_dir / "src" / "grep" / "office_parser.py"
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("# Target file", encoding="utf-8")
+
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+    (meta_tfg / "project.json").write_text(
+        json.dumps(
+            {"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}
+        ),
+        encoding="utf-8",
+    )
+
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "test_file_grep",
+                        "dir": "projects/test_file_grep",
+                        "meta": "metadata/projects/TFG",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cmd_responses = [
+        MagicMock(
+            returncode=0, stdout=" M src/uncommitted.py\n"
+        ),  # git status --porcelain (dirty!)
+    ]
+
+    with (
+        patch.object(ProjectLockManager, "_acquire_lock"),
+        patch.object(ProjectLockManager, "_release_lock"),
+        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.orchestrator_graph.run_cmd", side_effect=cmd_responses),
+    ):
+        execute_issue(
+            issue_id,
+            project_key,
+            metadata_dir=metadata_dir,
+            history_file=history_file,
+            project_root=project_root,
+            auto_stash=False,
+        )
+
+    state_file = metadata_dir / "projects" / project_key / "state.json"
+    saved_data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert saved_data[issue_id]["status"] == "FAILED_SYSTEM"
+    assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"
+
+
+def test_execute_issue_dirty_working_tree_auto_stash(tmp_path: Path) -> None:
+    """execute_issue が未コミット変更を検知した際、auto_stash=True なら git stash push を実行して続行することを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    history_file = project_root / "tools" / ".cache" / "execution_history.json"
+    project_key = "TFG"
+    issue_id = "TFG-0004"
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    target_file = sat_dir / "src" / "grep" / "office_parser.py"
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("# Target file", encoding="utf-8")
+
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+    (meta_tfg / "project.json").write_text(
+        json.dumps(
+            {"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}
+        ),
+        encoding="utf-8",
+    )
+
+    registry_file = metadata_dir / ".project-registry.json"
+    registry_file.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "test_file_grep",
+                        "dir": "projects/test_file_grep",
+                        "meta": "metadata/projects/TFG",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executed_cmds: list[str] = []
+
+    def mock_run_cmd(cmd: list[str], cwd: str | None = None, timeout: int = 60) -> MagicMock:
+        executed_cmds.append(" ".join(cmd))
+        if "status --porcelain" in " ".join(cmd):
+            return MagicMock(returncode=0, stdout=" M src/uncommitted.py\n")
+        return MagicMock(returncode=0, stdout="")
+
+    with (
+        patch.object(ProjectLockManager, "_acquire_lock"),
+        patch.object(ProjectLockManager, "_release_lock"),
+        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("tools.orchestrator_graph.StateGraph") as mock_state_graph,
+    ):
+        mock_app = MagicMock()
+        mock_app.invoke.return_value = {"status": "COMPLETED"}
+        mock_state_graph.return_value.compile.return_value = mock_app
+
+        execute_issue(
+            issue_id,
+            project_key,
+            metadata_dir=metadata_dir,
+            history_file=history_file,
+            project_root=project_root,
+            auto_stash=True,
+        )
+
+    assert any(
+        "git stash push -u -m orchestrator: auto-stash before TFG-0004" in c for c in executed_cmds
+    )

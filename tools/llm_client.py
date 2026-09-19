@@ -10,6 +10,7 @@ from openai import OpenAI
 
 from tools.backend_coordinator import get_coordinator
 from tools.config_loader import ProfileConfig, get_model_params
+from tools.sanitizer import sanitize_text
 
 logger = logging.getLogger("llm_client")
 
@@ -25,7 +26,7 @@ def call_llm(
     system_prompt: str,
     user_prompt: str,
     expect_json: bool = False,
-    timeout: int = 300,
+    timeout: int = 600,
     intent: str = "",
     **kwargs: Any,
 ) -> Dict[str, Any]:
@@ -78,12 +79,16 @@ def call_llm(
         if max_tokens is None:
             raise ValueError(f"Missing 'max_tokens' in role '{role}'.")
 
+        # #20 (DD-003 §10.3): LLM 送信直前の機密情報マスキング
+        clean_system_prompt = sanitize_text(system_prompt)
+        clean_user_prompt = sanitize_text(user_prompt)
+
         # Allow explicit kwargs to override defaults
         completion_params: Dict[str, Any] = {
             "model": model_name,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": clean_system_prompt},
+                {"role": "user", "content": clean_user_prompt},
             ],
             "temperature": kwargs.get("temperature", temperature),
             "max_tokens": kwargs.get("max_tokens", max_tokens),

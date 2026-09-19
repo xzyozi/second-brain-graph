@@ -1,0 +1,69 @@
+# ==============================================================================
+# Second Brain OS - モデルおよび実行バックエンド構成定義 (models.yaml)
+# ==============================================================================
+# 本設定は、自律マルチエージェントパイプライン（Planner, Coder, Reviewer 等）が
+# 利用する推論モデル、Aider 実行環境、および GPU 排他リースを定義します。
+
+# 各ロール別モデルハイパーパラメータ
+models:
+  planner:
+    description: "汎用・設計・計画用モデル (spec_draft / task_decomposition)"
+    temperature: 0.2
+    max_tokens: 35000  # 長大な仕様書・DoD・ステップ分解を生成するために十分なトークン枠を確保
+
+  coder:
+    description: "Python・コード記述特化モデル (code_edit / aider_edit)"
+    temperature: 0.1  # 構文・インデント・ロジックのブレを抑えるため低温度に設定
+    max_tokens: 35000
+
+  reviewer:
+    description: "汎用・コード監査・レビュー用モデル (code_review / failure_analysis)"
+    temperature: 0.1  # 厳格な判定と安定したJSON出力を得るため低温度に設定
+    max_tokens: 35000
+
+# Aider CLI 自動コード編集エンジン設定
+aider:
+  description: "Aider 自動コード編集用モデル設定"
+  no_auto_commits: true       # オーケストレーター側で境界検証とアトミックコミットを統制するため無効化
+  edit_format: "hybrid"       # whole / diff / udiff / hybrid (ファイル行数に応じた自動切替)
+  hybrid_line_threshold: 100  # 100行未満は安全な whole、100行以上は高速な diff を試行
+  fallback_to_whole: true     # diff 失敗時に安全に whole へ自動フォールバック
+  timeout: 1200               # 複数ファイルの推論・編集を考慮し十分なタイムアウト (秒) を確保
+
+# GPU 排他リースおよびバックエンドルーティング
+backend_execution:
+  mode: "exclusive"      # VRAM 枯渇 (OOM) を防ぐため、単一モデルの排他起動を強制
+  fallback: "disabled"   # サイレントな意図しないフォールバックによる品質劣化を防止
+  gpu_lease_timeout: 120 # GPU ロック解放待ちのタイムアウト上限 (秒)
+
+  # タスクインテントから実行プロファイルへのマッピング
+  routes:
+    spec_draft: "reasoning_ollama"
+    task_decomposition: "reasoning_ollama"
+    task_prioritization: "reasoning_ollama"
+    code_edit: "coding_ollama"
+    aider_edit: "coding_ollama"
+    code_review: "reasoning_ollama"
+    failure_analysis: "reasoning_ollama"
+    test_feedback: "reasoning_ollama"
+
+  # バックエンドプロファイル定義
+  profiles:
+    reasoning_economy:
+      backend: "llama_server"
+      model: "gemma-4-12B-it-qat-UD-Q4_K_XL"
+      openai_endpoint: "http://localhost:8080/v1"
+      port: 8080
+      model_path: "./models/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
+
+    reasoning_ollama:
+      backend: "ollama"
+      model: "gemma4-12b-it-Q4_K_M:latest"
+      openai_endpoint: "http://localhost:11434/v1"
+      ollama_management_endpoint: "http://localhost:11434"
+
+    coding_ollama:
+      backend: "ollama"
+      model: "ornith-1.5-9b:latest"
+      openai_endpoint: "http://localhost:11434/v1"
+      ollama_management_endpoint: "http://localhost:11434"

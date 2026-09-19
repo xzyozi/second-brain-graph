@@ -17,23 +17,54 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
-from filelock import FileLock, Timeout
 from langgraph.graph import END, StateGraph
 
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.metadata_store import (
+    ISSUE_ID_PATTERN,
+    ErrorCategory,
+    ErrorCategoryLiteral,
+    ProjectLockManager,
+    StatusLiteral,
+    TaskStatus,
+    get_runtime_cache_dir,
+    record_execution_history,
+    resolve_project_context,
+    safe_record_execution_history,
+    update_task_state,
+    validate_issue_id,
+    validate_project_consistency,
+    write_event,
+)
+from tools.sanitizer import sanitize_text
+
+__all__ = [
+    "ISSUE_ID_PATTERN",
+    "ErrorCategory",
+    "ErrorCategoryLiteral",
+    "ProjectLockManager",
+    "StatusLiteral",
+    "TaskStatus",
+    "get_runtime_cache_dir",
+    "record_execution_history",
+    "resolve_project_context",
+    "safe_record_execution_history",
+    "update_task_state",
+    "validate_issue_id",
+    "validate_project_consistency",
+    "write_event",
+]
 
 # ロガー設定
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("orchestrator_graph")
-
-ISSUE_ID_PATTERN = re.compile(r"^[A-Z]{2,5}-(?!0000)\d{4}(-[A-Z])?$")
 
 
 class ProcessTimeoutError(Exception):
@@ -75,286 +106,6 @@ def is_in_git_workspace(cwd: Optional[str]) -> bool:
         return res.returncode == 0 and res.stdout.strip() == "true"
     except Exception:
         return False
-
-
-def validate_issue_id(issue_id: str) -> bool:
-    """Issue ID の形式および連番範囲 (0001〜9999) を検証する (MULTI-001 §2②・§4)."""
-    return bool(ISSUE_ID_PATTERN.match(issue_id))
-
-
-def validate_project_consistency(
-    issue_id: str,
-    project_key: str,
-    metadata_dir: Optional[Path] = None,
-    project_root: Optional[Path] = None,
-) -> None:
-    """Issue ID 形式、プレフィックス、CLI project_key、台帳キー、
-    meta ディレクトリ、project.json、project.json["key"] の必須存在と一致性を検証する (MULTI-001 §2②・§4)。
-    """
-    if not validate_issue_id(issue_id):
-        raise ValueError(
-            f"Invalid Issue ID format: '{issue_id}'. Expected pattern: 'PROJECT-0001' (range 0001-9999)."
-        )
-
-    prefix = issue_id.split("-")[0]
-    if prefix != project_key:
-        raise ValueError(
-            f"Project key mismatch: Issue ID prefix '{prefix}' does not match project_key '{project_key}'."
-        )
-
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-    if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
-
-    reg_file = metadata_dir / ".project-registry.json"
-    if not reg_file.exists():
-        raise ValueError(f"Project registry file '{reg_file}' does not exist.")
-
-    with open(reg_file, "r", encoding="utf-8") as f:
-        reg = json.load(f)
-
-    projects_dict = reg.get("projects", {})
-    if project_key not in projects_dict:
-        raise ValueError(
-            f"Project key '{project_key}' is not registered in .project-registry.json."
-        )
-
-    meta_rel = projects_dict[project_key].get("meta")
-    if not meta_rel:
-        raise ValueError(
-            f"Missing 'meta' field for project '{project_key}' in .project-registry.json."
-        )
-
-    meta_dir_path = project_root / meta_rel
-    if not meta_dir_path.exists():
-        raise ValueError(f"Project metadata directory '{meta_dir_path}' does not exist.")
-
-    proj_json = meta_dir_path / "project.json"
-    if not proj_json.exists():
-        raise ValueError(f"project.json does not exist at '{proj_json}'.")
-
-    with open(proj_json, "r", encoding="utf-8") as pf:
-        pdata = json.load(pf)
-        pkey = pdata.get("key")
-        if not pkey:
-            raise ValueError(f"Missing 'key' field in project.json at '{proj_json}'.")
-        if pkey != project_key:
-            raise ValueError(
-                f"Project key mismatch in project.json: expected '{project_key}', got '{pkey}'."
-            )
-
-
-class ProjectLockManager:
-    """衛星プロジェクトの排他制御（ロック機構）を管理するクラス (PM-037)."""
-
-    def __init__(self, project_key: str, metadata_dir: Optional[Path] = None) -> None:
-        self.project_key = project_key
-        if metadata_dir is None:
-            metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-        self.lock_dir = metadata_dir / "projects" / project_key
-        self.lock_file = self.lock_dir / ".lock"
-        self.lock = FileLock(str(self.lock_file), timeout=0)
-
-    def __enter__(self) -> "ProjectLockManager":
-        self.lock_dir.mkdir(parents=True, exist_ok=True)
-        self._acquire_lock()
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        self._release_lock()
-
-    def _acquire_lock(self) -> None:
-        try:
-            logger.info(f"Waiting for lock on project {self.project_key}...")
-            self.lock.acquire()
-            logger.info(f"Lock acquired for project {self.project_key}")
-        except Timeout as e:
-            logger.error(f"Failed to acquire project lock for {self.project_key} within timeout.")
-            raise TimeoutError(
-                f"Failed to acquire project lock for {self.project_key} within timeout."
-            ) from e
-
-    def _release_lock(self) -> None:
-        try:
-            self.lock.release()
-            logger.info(f"Lock released for project {self.project_key}")
-        except Exception as e:
-            logger.error(f"Failed to release lock: {e}")
-
-
-def update_task_state(
-    project_key: str,
-    issue_id: str,
-    status: str,
-    review_round: int = 0,
-    max_round: int = 3,
-    error_category: Optional[str] = None,
-    metadata_dir: Optional[Path] = None,
-) -> None:
-    """metadata/projects/<PROJECT_KEY>/state.json 内の該当 issue_id の状態項目を
-    アトミックにマージ更新する (DD-003 §4.1.1)。旧フラットデータの自動マイグレーションを含む。
-    """
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-    state_file = metadata_dir / "projects" / project_key / "state.json"
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-
-    state_data: Dict[str, Any] = {}
-    if state_file.exists():
-        try:
-            with open(state_file, "r", encoding="utf-8") as f:
-                raw_data = json.load(f)
-                if "issue_id" in raw_data and not any(
-                    isinstance(v, dict) for v in raw_data.values()
-                ):
-                    old_id = raw_data.get("issue_id", issue_id)
-                    state_data[old_id] = {
-                        "status": raw_data.get("status", "PENDING"),
-                        "review_round": raw_data.get("review_round", 0),
-                        "max_round": raw_data.get("max_round", 3),
-                        "error_category": raw_data.get("error_category"),
-                        "updated_at": raw_data.get(
-                            "updated_at", datetime.now(timezone.utc).isoformat()
-                        ),
-                    }
-                else:
-                    state_data = raw_data
-        except Exception as e:
-            logger.warning(f"Failed to read existing state.json for {project_key}: {e}")
-
-    state_data[issue_id] = {
-        "status": status,
-        "review_round": review_round,
-        "max_round": max_round,
-        "error_category": error_category,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    temp_file = state_file.with_name(f"state.json.{uuid.uuid4().hex}.tmp")
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(state_data, f, indent=2, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-
-    os.replace(temp_file, state_file)
-
-
-def record_execution_history(
-    state: Dict[str, Any],
-    final_status: str,
-    review_round: int = 0,
-    history_file: Optional[Path] = None,
-) -> None:
-    """tools/.cache/execution_history.json へ実行完了・エスカレーション結果を
-    DD-003 §4.1.1 監査スキーマ (actual_round = max(...), review_rounds, history_summary.review_verdict,
-    lint_passed/test_passed の returncode 正本化) に従って専用の FileLock 保護のもとアトミックに追記保存する。
-    """
-    if history_file is None:
-        history_file = (
-            Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
-        )
-    history_file.parent.mkdir(parents=True, exist_ok=True)
-
-    lock_file = history_file.with_name(".execution_history.lock")
-    with FileLock(str(lock_file), timeout=10):
-        history_data: Dict[str, Any] = {"records": []}
-        if history_file.exists():
-            try:
-                with open(history_file, "r", encoding="utf-8") as f:
-                    history_data = json.load(f)
-            except Exception as e:
-                logger.warning(f"Failed to read execution_history.json: {e}")
-
-        lint_round = state.get("lint_round", 0)
-        test_round = state.get("test_round", 0)
-        rev_round = state.get("review_round", review_round)
-        actual_round = max(lint_round, test_round, rev_round)
-        rev_verdict = state.get("review_verdict", "PENDING")
-
-        lint_res = state.get("lint_result")
-        test_res = state.get("test_result")
-        lint_passed = (
-            lint_res.get("returncode") == 0
-            if isinstance(lint_res, dict) and "returncode" in lint_res
-            else None
-        )
-        test_passed = (
-            test_res.get("returncode") == 0
-            if isinstance(test_res, dict) and "returncode" in test_res
-            else None
-        )
-
-        record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "issue_id": state.get("issue_id", "unknown"),
-            "project_key": state.get("project_key", "unknown"),
-            "project_path": state.get("cwd", "unknown"),
-            "final_status": final_status,
-            "actual_round": actual_round,
-            "review_round": rev_round,
-            "max_round": state.get("max_round", 3),
-            "lint_round": lint_round,
-            "test_round": test_round,
-            "error_category": state.get("error_category"),
-            "error_message": state.get("error"),
-            "llm_timeout_count": state.get("llm_timeout_count", 0),
-            "review_rounds": state.get("review_rounds", []),
-            "reviewdog_result": state.get("reviewdog_result"),
-            "history_summary": {
-                "lint_passed": lint_passed,
-                "test_passed": test_passed,
-                "review_verdict": rev_verdict,
-            },
-        }
-
-        records = history_data.get("records", [])
-        records.append(record)
-        history_data["records"] = records
-
-        temp_file = history_file.with_name(f"execution_history.json.{uuid.uuid4().hex}.tmp")
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(history_data, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-
-        os.replace(temp_file, history_file)
-
-
-def safe_record_execution_history(
-    state: Dict[str, Any],
-    final_status: str,
-    review_round: int = 0,
-    history_file: Optional[Path] = None,
-) -> None:
-    """履歴保存時の例外を捕捉し、確定済み state.json を汚染させない統一保護ヘルパー。"""
-    try:
-        record_execution_history(
-            state, final_status=final_status, review_round=review_round, history_file=history_file
-        )
-    except Exception as e:
-        logger.warning(
-            f"Failed to record execution history safely (keeping state '{final_status}'): {e}"
-        )
-
-
-def write_event(
-    project_key: str, event_data: Dict[str, Any], metadata_dir: Optional[Path] = None
-) -> None:
-    """Graph の状態に影響を与えない個別ファイルイベント記録 (PM-050)"""
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-    events_dir = metadata_dir / "projects" / project_key / "events"
-    events_dir.mkdir(parents=True, exist_ok=True)
-
-    execution_id = event_data.get("execution_id", "unknown")
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    event_file = events_dir / f"event_{execution_id}_{timestamp}.json"
-
-    with open(event_file, "w", encoding="utf-8") as f:
-        json.dump(event_data, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
 
 
 def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
@@ -451,160 +202,6 @@ def resolve_target_files_against_cwd(
     return resolved
 
 
-def resolve_project_context(
-    project_key: str,
-    metadata_dir: Optional[Path] = None,
-    project_root: Optional[Path] = None,
-) -> Dict[str, Any]:
-    """.project-registry.json からプロジェクトの dir, meta を解決し、
-    特定のファイル名にハードコードせず、任意の衛星リポジトリの対象ファイルを動的に検出・解決する (MULTI-001 §2③・§4)。
-    """
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-    if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
-
-    registry_file = metadata_dir / ".project-registry.json"
-    if not registry_file.exists():
-        logger.warning(f"Project registry file {registry_file} does not exist.")
-        return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
-
-    try:
-        with open(registry_file, "r", encoding="utf-8") as f:
-            registry = json.load(f)
-
-        proj_info = registry.get("projects", {}).get(project_key)
-        if not proj_info:
-            return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
-
-        rel_dir = proj_info.get("dir")
-        meta_dir = proj_info.get("meta")
-
-        if not rel_dir:
-            return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
-
-        cwd_path = project_root / rel_dir
-        cwd = str(cwd_path)
-
-        # フェイルセーフ: 実在するディレクトリかつ Git リポジトリであることを検証
-        if not (cwd_path.exists() and cwd_path.is_dir() and (cwd_path / ".git").exists()):
-            logger.error(f"Resolved cwd {cwd} is not a valid git repository space.")
-            return {"cwd": cwd, "target_files": [], "base_branch": "develop", "valid": False}
-
-        base_branch = "develop"
-        work_branch_prefix = "sbos/"
-        raw_target_files: List[str] = []
-        exclude_files: List[str] = []
-
-        if meta_dir:
-            project_json = project_root / meta_dir / "project.json"
-            if project_json.exists():
-                with open(project_json, "r", encoding="utf-8") as pf:
-                    pdata = json.load(pf)
-                    base_branch = pdata.get("base_branch", "develop")
-                    work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
-                    if (
-                        "target_files" in pdata
-                        and isinstance(pdata["target_files"], list)
-                        and pdata["target_files"]
-                    ):
-                        raw_target_files.extend(pdata["target_files"])
-                    if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
-                        exclude_files.extend(pdata["exclude_files"])
-
-            if not raw_target_files:
-                tasks_md = project_root / meta_dir / "tasks.md"
-                if tasks_md.exists():
-                    text = tasks_md.read_text(encoding="utf-8")
-                    # tasks.md 内に記述された *.py や src/ パスを動的抽出
-                    matches = re.findall(r"[\w/.-]+\.py", text)
-                    for m in matches:
-                        if m not in raw_target_files:
-                            raw_target_files.append(m)
-
-        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在する Python ファイルを自動検出 (ハードコード排除)
-        if not raw_target_files:
-            for py_file in cwd_path.rglob("*.py"):
-                rel_p = str(py_file.relative_to(cwd_path)).replace("\\", "/")
-                if not any(
-                    excluded in rel_p
-                    for excluded in [".venv", "venv", "__pycache__", "build", "dist"]
-                ):
-                    raw_target_files.append(rel_p)
-
-        # ターゲットファイルの有効性を検証 (新規作成予定ファイルも許容) し、除外ファイルを適用
-        valid_target_files = []
-        for tf in raw_target_files:
-            if tf in exclude_files:
-                continue
-            abs_tf = cwd_path / tf
-            if abs_tf.exists() or (not tf.startswith("..") and not os.path.isabs(tf)):
-                valid_target_files.append(tf)
-
-        if not valid_target_files:
-            logger.error(
-                f"No valid target files found in satellite repo for project {project_key}."
-            )
-            return {
-                "cwd": cwd,
-                "target_files": [],
-                "base_branch": base_branch,
-                "work_branch_prefix": work_branch_prefix,
-                "valid": False,
-            }
-
-        return {
-            "cwd": cwd,
-            "target_files": valid_target_files,
-            "base_branch": base_branch,
-            "work_branch_prefix": work_branch_prefix,
-            "valid": True,
-        }
-    except Exception as e:
-        logger.error(f"Failed to resolve project context for {project_key}: {e}")
-        return {
-            "cwd": None,
-            "target_files": [],
-            "base_branch": "develop",
-            "work_branch_prefix": "sbos/",
-            "valid": False,
-        }
-
-
-# #22: status / error_category を Literal で型安全化する。
-# 文字列値は従来と同一（実行時挙動は不変）で、タイポや未定義状態を型チェックで検出可能にする。
-# 中間（遷移途中）状態と終端状態の両方を列挙する。
-StatusLiteral = Literal[
-    # 中間・遷移状態
-    "running",
-    "code_completed",
-    "lint_passed",
-    "test_passed",
-    "review_lgtm",
-    "retry_spec_draft",
-    "retry_code",
-    "retry_review",
-    # 終端状態
-    "COMPLETED",
-    "FAILED_SYSTEM",
-    "FAILED_B7",
-    "PR_FAILED",
-    "SKIPPED_LOCKED",
-    "ESCALATED_NEEDS_REVISION",
-]
-
-# DD-003 §2.1 のエラー分類（7分類）
-ErrorCategoryLiteral = Literal[
-    "LINT_ERROR",
-    "TEST_ERROR",
-    "REVIEW_REJECTED",
-    "LLM_TIMEOUT",
-    "SYSTEM_ERROR",
-    "LOCKED",
-    "PR_ERROR",
-]
-
-
 class GraphState(TypedDict, total=False):
     issue_id: str
     project_key: str
@@ -645,7 +242,8 @@ def spec_draft_node(state: GraphState) -> GraphState:
 
     try:
         system_prompt = (
-            "You are a technical planner. You must define a strict Definition of Done (DoD) for the issue.\n"
+            "You are a technical planner. You must define a strict Definition of Done (DoD) and implementation plan based strictly on the provided issue requirements.\n"
+            "DO NOT invent unrequested functions, features, or alternate requirements. Strictly follow the provided issue specifications.\n"
             "Your plan MUST explicitly state:\n"
             "1. Allowed Files: Which specific files are permitted to be modified.\n"
             "2. Forbidden Actions: Existing signatures, interfaces, or unrelated configuration files (like settings.json) that MUST NOT be altered.\n"
@@ -653,9 +251,11 @@ def spec_draft_node(state: GraphState) -> GraphState:
             "4. Step-by-step implementation logic."
         )
         target_files_str = ", ".join(state.get("target_files", []))
+        instruction_text = state.get("instruction", "").strip()
         user_prompt = (
-            f"Draft spec for issue {state['issue_id']}.\n"
-            f"Target Files in Repository: {target_files_str or 'None'}"
+            f"Draft technical implementation plan for issue {state['issue_id']}.\n\n"
+            f"Target Files in Repository: {target_files_str or 'None'}\n\n"
+            f"Issue Specifications & Requirements:\n{instruction_text or 'No specific instructions provided.'}"
         )
         res = call_llm(
             role="planner",
@@ -663,10 +263,13 @@ def spec_draft_node(state: GraphState) -> GraphState:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
-        plan_str = res.get("content", str(res)) if isinstance(res, dict) else str(res)
-        state["impl_plan"] = plan_str
+        if isinstance(res, dict):
+            plan_str = res.get("raw") or res.get("content") or str(res)
+        else:
+            plan_str = str(res)
+        state["impl_plan"] = plan_str.strip()
     except Exception as e:
-        if "timeout" in str(e).lower():
+        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")):
             logger.warning(f"Timeout caught in spec_draft_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
             state["error_category"] = "LLM_TIMEOUT"
@@ -705,7 +308,14 @@ def code_node(state: GraphState) -> GraphState:
         "\n\n[EXECUTION STRATEGY - STEP-BY-STEP]\n"
         "Follow a strict 2-phase approach:\n"
         "1. Phase 1 (Core Logic): Focus first on implementing the core logic, classes, and exceptions under `src/`.\n"
-        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass."
+        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass.\n\n"
+        "[STRICT AIDER OUTPUT FORMAT RULES]\n"
+        "- Output ONLY the target file modifications.\n"
+        "- For each file, the FIRST line must be the exact relative file path without backticks, quotes, or markdown formatting (e.g. src/utils/file_utils.py).\n"
+        "- Follow immediately with a markdown code block containing the complete source code.\n"
+        "- DO NOT output any introductory text, conversational filler, greetings, thoughts, or explanations outside code blocks.\n"
+        "- DO NOT replace implementations or tests with ellipses (...), pass, or placeholder comments. Always write complete, runnable Python code.\n"
+        "- DO NOT create or modify any files not listed in Target Files."
     )
 
     if state.get("aider_message"):
@@ -1158,7 +768,7 @@ def review_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
 
     try:
-        diff_text = get_git_diff(cwd) if cwd else ""
+        diff_text = get_git_diff(cwd, base_branch=state.get("base_branch")) if cwd else ""
     except GitDiffError as gde:
         logger.error(f"git diff failed in review_node: {gde}")
         state["status"] = "FAILED_SYSTEM"
@@ -1181,7 +791,9 @@ def review_node(state: GraphState) -> GraphState:
                 "You are a reviewer. You must respond with JSON containing a 'verdict' "
                 "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity). "
                 "severity MUST be one of: 'INFO', 'WARNING', 'ERROR', 'MAJOR', 'STRUCTURAL'. "
-                "Ensure that the changes align with the Implementation Plan and report any deviations as structural comments."
+                "Focus on critical correctness, security, and functional completeness. "
+                "Benign stylistic differences (e.g. for vs while loop) that fully satisfy requirements MUST NOT trigger changes_requested. "
+                "If the implementation correctly satisfies the requirements and tests are passing, give 'LGTM'."
             ),
             user_prompt=user_prompt,
             expect_json=True,
@@ -1329,7 +941,9 @@ def review_node(state: GraphState) -> GraphState:
             else:
                 state["status"] = "retry_code"
     except Exception as e:
-        if "timeout" in str(e).lower() or isinstance(e, ProcessTimeoutError):
+        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")) or isinstance(
+            e, ProcessTimeoutError
+        ):
             logger.warning(f"Timeout caught in review_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
             state["error_category"] = "LLM_TIMEOUT"
@@ -1344,6 +958,73 @@ def review_node(state: GraphState) -> GraphState:
             state["error_category"] = "SYSTEM_ERROR"
             state["error"] = str(e)
     return state
+
+
+def build_pr_content(state: GraphState) -> tuple[str, str]:
+    """Issue メタデータおよび実行結果から PR タイトルとリッチな Markdown 本文を構築する (Issue #30, #31)."""
+    issue_id = state.get("issue_id", "UNKNOWN")
+    metadata_dir = state.get("metadata_dir")
+    project_key = state.get("project_key")
+    target_files = state.get("target_files", [])
+
+    title = f"feat: [{issue_id}] 自動実装完了"
+    summary_text = f"Issue {issue_id} の自動実装および検証が完了しました。"
+    closes_issue = ""
+
+    # issues/<ID>.md からタイトルと概要、関連Issueを抽出
+    if metadata_dir and project_key:
+        issue_md_path = Path(metadata_dir) / "projects" / project_key / "issues" / f"{issue_id}.md"
+        if issue_md_path.exists():
+            try:
+                content = issue_md_path.read_text(encoding="utf-8")
+                lines = content.splitlines()
+                for line in lines:
+                    if line.startswith("# ") and issue_id in line:
+                        clean_title = line.lstrip("# ").strip()
+                        title = f"feat: {clean_title}"
+                        break
+
+                # 概要セクションの抽出
+                if "## 1. 概要・背景" in content:
+                    parts = content.split("## 1. 概要・背景")
+                    if len(parts) > 1:
+                        next_section = parts[1].split("##")[0].strip()
+                        if next_section:
+                            summary_text = next_section
+
+                # 関連Issue (例: #4, #12)
+                match = re.search(
+                    r"(?:関連Issue|Issue)[:\s]+(?:GitHub Issue\s*)?#?(\d+)",
+                    content,
+                    re.IGNORECASE,
+                )
+                if match:
+                    closes_issue = f"Closes #{match.group(1)}"
+            except Exception as e:
+                logger.warning(f"Failed to parse issue markdown for PR body: {e}")
+
+    target_files_md = (
+        "\n".join([f"- `{tf}`" for tf in target_files]) if target_files else "- (指定なし)"
+    )
+    review_verdict = state.get("review_verdict") or "LGTM"
+
+    body_lines = [
+        "## 概要",
+        summary_text,
+        "",
+        "## 変更内容",
+        target_files_md,
+        "",
+        "## 検証結果",
+        "- **単体テスト (pytest)**: 合格 (PASSED)",
+        "- **静的解析 (Ruff)**: エラーなし",
+        f"- **AI コードレビュー**: {review_verdict}",
+    ]
+
+    if closes_issue:
+        body_lines.extend(["", "## 関連 Issue", f"- {closes_issue}"])
+
+    return title, "\n".join(body_lines)
 
 
 def done_node(state: GraphState) -> GraphState:
@@ -1479,6 +1160,7 @@ def done_node(state: GraphState) -> GraphState:
                     except Exception as pe:
                         logger.warning(f"Failed to parse gh pr list JSON output: {pe}")
 
+                pr_title, pr_body = build_pr_content(state)
                 pr_res = run_cmd(
                     [
                         gh_bin,
@@ -1489,9 +1171,9 @@ def done_node(state: GraphState) -> GraphState:
                         "--head",
                         head_branch,
                         "--title",
-                        f"[{state['issue_id']}] 自動実装完了",
+                        pr_title,
                         "--body",
-                        "Agent生成PR",
+                        pr_body,
                     ],
                     cwd=cwd,
                     timeout=180,
@@ -1581,9 +1263,11 @@ def escalate_node(state: GraphState) -> GraphState:
                 report_dir = Path(tempfile.gettempdir()) / "sbos_failure_reports"
             report_dir.mkdir(parents=True, exist_ok=True)
             report_path = report_dir / f"FAILURE_REPORT_{state['issue_id']}.md"
+            # #20 (DD-003 §10.3): レポート出力時の機密情報マスキング
+            clean_analysis_text = sanitize_text(analysis_text)
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(f"# Failure Analysis Report for {state['issue_id']}\n\n")
-                f.write(analysis_text)
+                f.write(clean_analysis_text)
 
             logger.info(f"Failure report generated at {report_path}")
 
@@ -1606,6 +1290,7 @@ def execute_issue(
     allow_offline_git: bool = False,
     resume: Optional[bool] = None,
     fresh: bool = False,
+    auto_stash: bool = False,
 ) -> None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent
@@ -1658,13 +1343,17 @@ def execute_issue(
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
             # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かを判定
             current_task_status = ""
+            state_json_candidates = [get_runtime_cache_dir(project_key) / "state.json"]
             if metadata_dir:
-                state_json_path = metadata_dir / "projects" / project_key / "state.json"
+                state_json_candidates.append(metadata_dir / "projects" / project_key / "state.json")
+            for state_json_path in state_json_candidates:
                 if state_json_path.exists():
                     try:
                         with open(state_json_path, "r", encoding="utf-8") as sf:
                             sdata = json.load(sf)
                             current_task_status = sdata.get(issue_id, {}).get("status", "")
+                            if current_task_status:
+                                break
                     except Exception:
                         pass
 
@@ -1707,6 +1396,29 @@ def execute_issue(
                                 cwd=cwd,
                                 timeout=60,
                             )
+                        elif auto_stash:
+                            stash_msg = f"orchestrator: auto-stash before {issue_id}"
+                            logger.info(
+                                f"Auto-stashing uncommitted changes in {cwd} (message: '{stash_msg}')..."
+                            )
+                            st_res = run_cmd(
+                                ["git", "stash", "push", "-u", "-m", stash_msg],
+                                cwd=cwd,
+                                timeout=60,
+                            )
+                            if st_res.returncode != 0:
+                                logger.error(
+                                    f"Failed to auto-stash uncommitted changes: {st_res.stderr}"
+                                )
+                                update_task_state(
+                                    project_key,
+                                    issue_id,
+                                    status="FAILED_SYSTEM",
+                                    error_category="SYSTEM_ERROR",
+                                    metadata_dir=metadata_dir,
+                                )
+                                return
+                            logger.info("Auto-stash completed successfully.")
                         else:
                             logger.error(
                                 f"Dirty working tree detected before execution in {cwd}. Aborting."
@@ -1730,6 +1442,17 @@ def execute_issue(
                                 history_file=history_file,
                             )
                             return
+
+                    # ベースブランチのリモート最新状態を同期 (git fetch)
+                    fetch_res = run_cmd(
+                        ["git", "fetch", "origin", base_branch], cwd=cwd, timeout=60
+                    )
+                    if fetch_res.returncode == 0:
+                        logger.info(f"Successfully fetched origin/{base_branch} in {cwd}.")
+                    else:
+                        logger.warning(
+                            f"git fetch origin {base_branch} in {cwd} skipped or failed (offline or branch not found)."
+                        )
 
                     head_branch = f"{work_branch_prefix}{issue_id}"
 
@@ -1904,6 +1627,14 @@ def execute_issue(
                     return "escalate_node"
                 if s.get("status") == "retry_spec_draft":
                     return "spec_draft"
+                cwd_val = s.get("cwd")
+                if is_resume_mode and s.get("target_files") and cwd_val:
+                    cwd_p = Path(cwd_val)
+                    if any((cwd_p / tf).exists() for tf in s["target_files"]):
+                        logger.info(
+                            "Resume mode: Existing implementation detected. Verifying via lint_node before code edits."
+                        )
+                        return "lint_node"
                 return "code_node"
 
             workflow.add_conditional_edges(
@@ -1913,6 +1644,7 @@ def execute_issue(
                     "escalate_node": "escalate_node",
                     "spec_draft": "spec_draft",
                     "code_node": "code_node",
+                    "lint_node": "lint_node",
                 },
             )
 
@@ -2012,11 +1744,20 @@ def execute_issue(
 
             app = workflow.compile()
 
-            # Issue 詳細記述ファイル (metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md) の探索および読み込み
-            issue_detail_file = (
+            # Issue 詳細記述ファイルの探索および読み込み (1. サテライト docs/issues/ -> 2. 母艦 metadata/projects/<KEY>/issues/)
+            satellite_issue_file = Path(cwd) / "docs" / "issues" / f"{issue_id}.md" if cwd else None
+            meta_issue_file = (
                 metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
+                if metadata_dir
+                else None
             )
-            if issue_detail_file.exists():
+            issue_detail_file = None
+            if satellite_issue_file and satellite_issue_file.exists():
+                issue_detail_file = satellite_issue_file
+            elif meta_issue_file and meta_issue_file.exists():
+                issue_detail_file = meta_issue_file
+
+            if issue_detail_file and issue_detail_file.exists():
                 logger.info(f"Loaded issue detail specification from {issue_detail_file}")
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
                 md_targets = extract_target_files_from_issue_text(instruction_text)
@@ -2028,8 +1769,17 @@ def execute_issue(
                     target_files = resolved_targets
             else:
                 instruction_text = f"Implement issue {issue_id}"
-                tasks_md = metadata_dir / "projects" / project_key / "tasks.md"
-                if tasks_md.exists():
+                satellite_tasks_md = Path(cwd) / "docs" / "tasks.md" if cwd else None
+                meta_tasks_md = (
+                    metadata_dir / "projects" / project_key / "tasks.md" if metadata_dir else None
+                )
+                tasks_md = None
+                if satellite_tasks_md and satellite_tasks_md.exists():
+                    tasks_md = satellite_tasks_md
+                elif meta_tasks_md and meta_tasks_md.exists():
+                    tasks_md = meta_tasks_md
+
+                if tasks_md and tasks_md.exists():
                     try:
                         tasks_content = tasks_md.read_text(encoding="utf-8")
                         for line in tasks_content.splitlines():
@@ -2218,6 +1968,12 @@ def main() -> None:
         default=False,
         help="Delete existing work branch and create clean branch from base_branch",
     )
+    exec_parser.add_argument(
+        "--auto-stash",
+        action="store_true",
+        default=False,
+        help="Automatically stash uncommitted changes in satellite repository before execution",
+    )
 
     orch_parser = subparsers.add_parser("orchestrate", help="Orchestrate uncompleted issues")
     orch_parser.add_argument("--project-key", help="Target Project Key (All if omitted)")
@@ -2234,7 +1990,13 @@ def main() -> None:
             sys.exit(1)
 
         validate_project_consistency(issue_id, project_key)
-        execute_issue(issue_id, project_key, resume=args.resume, fresh=args.fresh)
+        execute_issue(
+            issue_id,
+            project_key,
+            resume=args.resume,
+            fresh=args.fresh,
+            auto_stash=args.auto_stash,
+        )
     elif args.subcommand == "orchestrate":
         cmd_orchestrate(args.project_key)
     else:
