@@ -34,6 +34,7 @@ from tools.metadata_store import (
     ProjectLockManager,
     StatusLiteral,
     TaskStatus,
+    get_runtime_cache_dir,
     record_execution_history,
     resolve_project_context,
     safe_record_execution_history,
@@ -51,6 +52,7 @@ __all__ = [
     "ProjectLockManager",
     "StatusLiteral",
     "TaskStatus",
+    "get_runtime_cache_dir",
     "record_execution_history",
     "resolve_project_context",
     "safe_record_execution_history",
@@ -1341,13 +1343,17 @@ def execute_issue(
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
             # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かを判定
             current_task_status = ""
+            state_json_candidates = [get_runtime_cache_dir(project_key) / "state.json"]
             if metadata_dir:
-                state_json_path = metadata_dir / "projects" / project_key / "state.json"
+                state_json_candidates.append(metadata_dir / "projects" / project_key / "state.json")
+            for state_json_path in state_json_candidates:
                 if state_json_path.exists():
                     try:
                         with open(state_json_path, "r", encoding="utf-8") as sf:
                             sdata = json.load(sf)
                             current_task_status = sdata.get(issue_id, {}).get("status", "")
+                            if current_task_status:
+                                break
                     except Exception:
                         pass
 
@@ -1738,11 +1744,20 @@ def execute_issue(
 
             app = workflow.compile()
 
-            # Issue 詳細記述ファイル (metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md) の探索および読み込み
-            issue_detail_file = (
+            # Issue 詳細記述ファイルの探索および読み込み (1. サテライト docs/issues/ -> 2. 母艦 metadata/projects/<KEY>/issues/)
+            satellite_issue_file = Path(cwd) / "docs" / "issues" / f"{issue_id}.md" if cwd else None
+            meta_issue_file = (
                 metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
+                if metadata_dir
+                else None
             )
-            if issue_detail_file.exists():
+            issue_detail_file = None
+            if satellite_issue_file and satellite_issue_file.exists():
+                issue_detail_file = satellite_issue_file
+            elif meta_issue_file and meta_issue_file.exists():
+                issue_detail_file = meta_issue_file
+
+            if issue_detail_file and issue_detail_file.exists():
                 logger.info(f"Loaded issue detail specification from {issue_detail_file}")
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
                 md_targets = extract_target_files_from_issue_text(instruction_text)
@@ -1754,8 +1769,17 @@ def execute_issue(
                     target_files = resolved_targets
             else:
                 instruction_text = f"Implement issue {issue_id}"
-                tasks_md = metadata_dir / "projects" / project_key / "tasks.md"
-                if tasks_md.exists():
+                satellite_tasks_md = Path(cwd) / "docs" / "tasks.md" if cwd else None
+                meta_tasks_md = (
+                    metadata_dir / "projects" / project_key / "tasks.md" if metadata_dir else None
+                )
+                tasks_md = None
+                if satellite_tasks_md and satellite_tasks_md.exists():
+                    tasks_md = satellite_tasks_md
+                elif meta_tasks_md and meta_tasks_md.exists():
+                    tasks_md = meta_tasks_md
+
+                if tasks_md and tasks_md.exists():
                     try:
                         tasks_content = tasks_md.read_text(encoding="utf-8")
                         for line in tasks_content.splitlines():

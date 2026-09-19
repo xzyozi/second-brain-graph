@@ -102,6 +102,20 @@ def validate_issue_id(issue_id: str) -> bool:
     return bool(ISSUE_ID_PATTERN.match(issue_id))
 
 
+def get_runtime_cache_dir(
+    project_key: str,
+    project_root: Optional[Path] = None,
+) -> Path:
+    """ランタイム動的データ（.lock, state.json, events/ 等）を格納するキャッシュディレクトリパスを返す。
+    母艦の Git 管理から完全に除外された tools/.cache/projects/<PROJECT_KEY>/ 配下に配置される。
+    """
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+    cache_dir = project_root / "tools" / ".cache" / "projects" / project_key
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 def validate_project_consistency(
     issue_id: str,
     project_key: str,
@@ -109,7 +123,8 @@ def validate_project_consistency(
     project_root: Optional[Path] = None,
 ) -> None:
     """Issue ID 形式、プレフィックス、CLI project_key、台帳キー、
-    meta ディレクトリ、project.json、project.json["key"] の必須存在と一致性を検証する (MULTI-001 §2②・§4)。
+    ディレクトリ、project.json、project.json["key"] の必須存在と一致性を検証する (MULTI-001 §2②・§4)。
+    サテライト（<dir>/docs/project.json）または母艦（<meta>/project.json）の存在を許容・検証する。
     """
     if not validate_issue_id(issue_id):
         raise ValueError(
@@ -140,29 +155,54 @@ def validate_project_consistency(
             f"Project key '{project_key}' is not registered in .project-registry.json."
         )
 
-    meta_rel = projects_dict[project_key].get("meta")
-    if not meta_rel:
-        raise ValueError(
-            f"Missing 'meta' field for project '{project_key}' in .project-registry.json."
-        )
+    proj_entry = projects_dict[project_key]
+    dir_rel = proj_entry.get("dir")
+    meta_rel = proj_entry.get("meta")
 
-    meta_dir_path = project_root / meta_rel
-    if not meta_dir_path.exists():
-        raise ValueError(f"Project metadata directory '{meta_dir_path}' does not exist.")
+    # project.json の探索: 1. サテライト (projects/<name>/docs/project.json) -> 2. 母艦 (metadata/projects/<KEY>/project.json)
+    candidate_proj_json: Optional[Path] = None
+    if dir_rel:
+        satellite_proj_json = project_root / dir_rel / "docs" / "project.json"
+        if satellite_proj_json.exists():
+            candidate_proj_json = satellite_proj_json
 
-    proj_json = meta_dir_path / "project.json"
-    if not proj_json.exists():
-        raise ValueError(f"project.json does not exist at '{proj_json}'.")
+    if candidate_proj_json is None and meta_rel:
+        meta_dir_path = project_root / meta_rel
+        if meta_dir_path.exists():
+            fallback_proj_json = meta_dir_path / "project.json"
+            if fallback_proj_json.exists():
+                candidate_proj_json = fallback_proj_json
 
-    with open(proj_json, "r", encoding="utf-8") as pf:
+    if candidate_proj_json is None:
+        if not meta_rel:
+            raise ValueError(
+                f"Missing 'meta' and 'dir' field for project '{project_key}' in .project-registry.json."
+            )
+        meta_dir_path = project_root / meta_rel
+        if not meta_dir_path.exists():
+            raise ValueError(f"Project metadata directory '{meta_dir_path}' does not exist.")
+        raise ValueError(f"project.json does not exist at '{meta_dir_path / 'project.json'}'.")
+
+    with open(candidate_proj_json, "r", encoding="utf-8") as pf:
         pdata = json.load(pf)
         pkey = pdata.get("key")
         if not pkey:
-            raise ValueError(f"Missing 'key' field in project.json at '{proj_json}'.")
+            raise ValueError(f"Missing 'key' field in project.json at '{candidate_proj_json}'.")
         if pkey != project_key:
             raise ValueError(
                 f"Project key mismatch in project.json: expected '{project_key}', got '{pkey}'."
             )
+
+
+def _is_default_metadata_dir(metadata_dir: Optional[Path]) -> bool:
+    """渡された metadata_dir が未指定、または母艦標準の metadata ディレクトリであるかを判定する。"""
+    if metadata_dir is None:
+        return True
+    default_meta = Path(__file__).resolve().parent.parent / "metadata"
+    try:
+        return metadata_dir.resolve() == default_meta.resolve()
+    except Exception:
+        return False
 
 
 # ==============================================================================
@@ -173,12 +213,24 @@ def validate_project_consistency(
 class ProjectLockManager:
     """衛星プロジェクトの排他制御（ロック機構）を管理するクラス (PM-037)."""
 
-    def __init__(self, project_key: str, metadata_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        project_key: str,
+        metadata_dir: Optional[Path] = None,
+        lock_file: Optional[Path] = None,
+    ) -> None:
         self.project_key = project_key
-        if metadata_dir is None:
-            metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-        self.lock_dir = metadata_dir / "projects" / project_key
-        self.lock_file = self.lock_dir / ".lock"
+        if lock_file is not None:
+            self.lock_file = lock_file
+            self.lock_dir = lock_file.parent
+        elif not _is_default_metadata_dir(metadata_dir) and metadata_dir is not None:
+            # テスト環境等で一時ディレクトリが明示指定された場合
+            self.lock_dir = metadata_dir / "projects" / project_key
+            self.lock_file = self.lock_dir / ".lock"
+        else:
+            # 本番・標準環境: tools/.cache/projects/<KEY>/.lock に完全隔離
+            self.lock_dir = get_runtime_cache_dir(project_key)
+            self.lock_file = self.lock_dir / ".lock"
         self.lock = FileLock(str(self.lock_file), timeout=0)
 
     def __enter__(self) -> "ProjectLockManager":
@@ -221,19 +273,24 @@ def update_task_state(
     max_round: int = 3,
     error_category: Optional[str] = None,
     metadata_dir: Optional[Path] = None,
+    state_file: Optional[Path] = None,
 ) -> None:
-    """metadata/projects/<PROJECT_KEY>/state.json 内の該当 issue_id の状態項目を
-    アトミックにマージ更新する (DD-003 §4.1.1)。旧フラットデータの自動マイグレーションを含む。
+    """state.json 内の該当 issue_id の状態項目をアトミックにマージ更新する (DD-003 §4.1.1)。
+    state_file または非デフォルトの metadata_dir が明示された場合はそちらを優先（後方互換・テスト支援）。
+    未指定または標準母艦 metadata_dir の場合は tools/.cache/projects/<PROJECT_KEY>/state.json へ隔離保存する。
     """
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-    state_file = metadata_dir / "projects" / project_key / "state.json"
-    state_file.parent.mkdir(parents=True, exist_ok=True)
+    if state_file is not None:
+        target_state_file = state_file
+    elif not _is_default_metadata_dir(metadata_dir) and metadata_dir is not None:
+        target_state_file = metadata_dir / "projects" / project_key / "state.json"
+    else:
+        target_state_file = get_runtime_cache_dir(project_key) / "state.json"
+    target_state_file.parent.mkdir(parents=True, exist_ok=True)
 
     state_data: Dict[str, Any] = {}
-    if state_file.exists():
+    if target_state_file.exists():
         try:
-            with open(state_file, "r", encoding="utf-8") as f:
+            with open(target_state_file, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
                 if "issue_id" in raw_data and not any(
                     isinstance(v, dict) for v in raw_data.values()
@@ -252,6 +309,21 @@ def update_task_state(
                     state_data = raw_data
         except Exception as e:
             logger.warning(f"Failed to read existing state.json for {project_key}: {e}")
+    elif metadata_dir is None and state_file is None:
+        # 新パスに state.json がまだ存在しない場合、旧パス (metadata/projects/<KEY>/state.json) があればフォールバック読み込み
+        legacy_state_file = (
+            Path(__file__).resolve().parent.parent
+            / "metadata"
+            / "projects"
+            / project_key
+            / "state.json"
+        )
+        if legacy_state_file.exists():
+            try:
+                with open(legacy_state_file, "r", encoding="utf-8") as lf:
+                    state_data = json.load(lf)
+            except Exception as e:
+                logger.warning(f"Failed to read legacy state.json for {project_key}: {e}")
 
     status_str = status.value if isinstance(status, Enum) else str(status)
     err_cat_str = (
@@ -268,13 +340,13 @@ def update_task_state(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    temp_file = state_file.with_name(f"state.json.{uuid.uuid4().hex}.tmp")
+    temp_file = target_state_file.with_name(f"state.json.{uuid.uuid4().hex}.tmp")
     with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(state_data, f, indent=2, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
 
-    os.replace(temp_file, state_file)
+    os.replace(temp_file, target_state_file)
 
 
 def record_execution_history(
@@ -386,19 +458,29 @@ def safe_record_execution_history(
 
 
 def write_event(
-    project_key: str, event_data: Dict[str, Any], metadata_dir: Optional[Path] = None
+    project_key: str,
+    event_data: Dict[str, Any],
+    metadata_dir: Optional[Path] = None,
+    events_dir: Optional[Path] = None,
 ) -> None:
-    """Graph の状態に影響を与えない個別ファイルイベント記録 (PM-050)"""
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
-    events_dir = metadata_dir / "projects" / project_key / "events"
-    events_dir.mkdir(parents=True, exist_ok=True)
+    """Graph の状態に影響を与えない個別ファイルイベント記録 (PM-050)。
+    events_dir または metadata_dir が明示された場合はそちらを使用（後方互換）。
+    未指定の場合は tools/.cache/projects/<PROJECT_KEY>/events/ へ隔離保存する。
+    """
+    if events_dir is not None:
+        target_events_dir = events_dir
+    elif not _is_default_metadata_dir(metadata_dir) and metadata_dir is not None:
+        target_events_dir = metadata_dir / "projects" / project_key / "events"
+    else:
+        target_events_dir = get_runtime_cache_dir(project_key) / "events"
+
+    target_events_dir.mkdir(parents=True, exist_ok=True)
 
     execution_id = event_data.get("execution_id", "unknown")
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
     # #20 (DD-003 §10.3): 永続化前の機密情報サニタイズ
     clean_event_data = sanitize_data(event_data)
-    event_file = events_dir / f"event_{execution_id}_{timestamp}.json"
+    event_file = target_events_dir / f"event_{execution_id}_{timestamp}.json"
 
     with open(event_file, "w", encoding="utf-8") as f:
         json.dump(clean_event_data, f, ensure_ascii=False, indent=2)
@@ -417,6 +499,7 @@ def resolve_project_context(
     project_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """.project-registry.json からプロジェクトの dir, meta を解決し、
+    サテライト本体 (docs/) を最優先として設定・タスクを読み込み、
     特定のファイル名にハードコードせず、任意の衛星リポジトリの対象ファイルを動的に検出・解決する (MULTI-001 §2③・§4)。
     """
     if metadata_dir is None:
@@ -456,30 +539,48 @@ def resolve_project_context(
         raw_target_files: List[str] = []
         exclude_files: List[str] = []
 
+        # 優先順位1: サテライト側の docs/project.json
+        # 優先順位2: 母艦側の meta_dir/project.json
+        project_json_candidates = [cwd_path / "docs" / "project.json"]
         if meta_dir:
-            project_json = project_root / meta_dir / "project.json"
-            if project_json.exists():
-                with open(project_json, "r", encoding="utf-8") as pf:
-                    pdata = json.load(pf)
-                    base_branch = pdata.get("base_branch", "develop")
-                    work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
-                    if (
-                        "target_files" in pdata
-                        and isinstance(pdata["target_files"], list)
-                        and pdata["target_files"]
-                    ):
-                        raw_target_files.extend(pdata["target_files"])
-                    if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
-                        exclude_files.extend(pdata["exclude_files"])
+            project_json_candidates.append(project_root / meta_dir / "project.json")
 
-            if not raw_target_files:
-                tasks_md = project_root / meta_dir / "tasks.md"
-                if tasks_md.exists():
-                    text = tasks_md.read_text(encoding="utf-8")
-                    matches = re.findall(r"[\w/.-]+\.py", text)
-                    for m in matches:
-                        if m not in raw_target_files:
-                            raw_target_files.append(m)
+        for pjson_path in project_json_candidates:
+            if pjson_path.exists():
+                try:
+                    with open(pjson_path, "r", encoding="utf-8") as pf:
+                        pdata = json.load(pf)
+                        base_branch = pdata.get("base_branch", "develop")
+                        work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
+                        if (
+                            "target_files" in pdata
+                            and isinstance(pdata["target_files"], list)
+                            and pdata["target_files"]
+                        ):
+                            raw_target_files.extend(pdata["target_files"])
+                        if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
+                            exclude_files.extend(pdata["exclude_files"])
+                        break
+                except Exception as ex:
+                    logger.warning(f"Failed to read project.json at {pjson_path}: {ex}")
+
+        # tasks.md からの target_files 探索（未設定時）: サテライト docs/tasks.md 優先、フォールバックで母艦 meta_dir/tasks.md
+        if not raw_target_files:
+            tasks_candidates = [cwd_path / "docs" / "tasks.md"]
+            if meta_dir:
+                tasks_candidates.append(project_root / meta_dir / "tasks.md")
+            for tpath in tasks_candidates:
+                if tpath.exists():
+                    try:
+                        text = tpath.read_text(encoding="utf-8")
+                        matches = re.findall(r"[\w/.-]+\.py", text)
+                        for m in matches:
+                            if m not in raw_target_files:
+                                raw_target_files.append(m)
+                        if raw_target_files:
+                            break
+                    except Exception as ex:
+                        logger.warning(f"Failed to parse tasks.md at {tpath}: {ex}")
 
         # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在する Python ファイルを自動検出
         if not raw_target_files:

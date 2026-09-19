@@ -236,6 +236,12 @@ __marimo__/
 # Kiro IDE local state (steering / lessons / hooks etc.)
 /.kiro/
 
-
-
-
+# Issue #45: Runtime dynamic files and reports isolation
+.lock
+*.lock
+metadata/projects/**/.lock
+metadata/projects/**/events/
+metadata/projects/**/state.json
+FAILURE_REPORT_*.md
+.vscode/
+*.tmp

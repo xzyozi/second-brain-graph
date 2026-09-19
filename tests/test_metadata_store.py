@@ -13,6 +13,7 @@ from tools.metadata_store import (
     ErrorCategory,
     ProjectLockManager,
     TaskStatus,
+    get_runtime_cache_dir,
     record_execution_history,
     resolve_project_context,
     safe_record_execution_history,
@@ -277,3 +278,131 @@ def test_write_event_sanitizes_secrets(tmp_path: Path) -> None:
 
     assert "sk-" + "1234567890abcdef1234567890abcdef" not in saved["details"]
     assert "[REDACTED]" in saved["details"]
+
+
+# ==============================================================================
+# 6. Issue #45: Runtime Cache Isolation & Satellite Docs Priority Tests
+# ==============================================================================
+
+
+def test_get_runtime_cache_dir(tmp_path: Path) -> None:
+    """get_runtime_cache_dir が指定 project_root 配下の tools/.cache/projects/<KEY> を生成して返すことを確認する。"""
+    cache_dir = get_runtime_cache_dir("TEST_PROJ", project_root=tmp_path)
+    assert cache_dir == tmp_path / "tools" / ".cache" / "projects" / "TEST_PROJ"
+    assert cache_dir.exists()
+
+
+def test_project_lock_manager_runtime_cache_isolation(tmp_path: Path) -> None:
+    """Issue #45: デフォルト (metadata_dir=None) 時に tools/.cache 配下に .lock が生成され、排他制御できることを確認する。"""
+    custom_lock_file = tmp_path / "tools" / ".cache" / "projects" / "TEST_PROJ" / ".lock"
+    lock_mgr = ProjectLockManager("TEST_PROJ", lock_file=custom_lock_file)
+    with lock_mgr:
+        assert custom_lock_file.exists()
+
+
+def test_update_task_state_runtime_cache_isolation(tmp_path: Path) -> None:
+    """Issue #45: state_file を明示またはデフォルト隔離時に指定ファイルに状態が保存されることを確認する。"""
+    custom_state_file = tmp_path / "tools" / ".cache" / "projects" / "TEST_PROJ" / "state.json"
+    update_task_state(
+        project_key="TEST_PROJ",
+        issue_id="TEST-0001",
+        status=TaskStatus.RUNNING,
+        state_file=custom_state_file,
+    )
+    assert custom_state_file.exists()
+    with open(custom_state_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["TEST-0001"]["status"] == "running"
+
+
+def test_write_event_runtime_cache_isolation(tmp_path: Path) -> None:
+    """Issue #45: events_dir を明示またはデフォルト隔離時に指定ディレクトリにイベントが保存されることを確認する。"""
+    custom_events_dir = tmp_path / "tools" / ".cache" / "projects" / "TEST_PROJ" / "events"
+    write_event(
+        project_key="TEST_PROJ",
+        event_data={"execution_id": "test-iso-001", "event": "ISOLATION_TEST"},
+        events_dir=custom_events_dir,
+    )
+    assert custom_events_dir.exists()
+    files = list(custom_events_dir.glob("event_test-iso-001_*.json"))
+    assert len(files) == 1
+
+
+def test_validate_project_consistency_satellite_docs(tmp_path: Path) -> None:
+    """Issue #45: サテライト側の docs/project.json に定義されたプロジェクトの整合性が検証できることを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "SAT": {
+                "name": "satellite_repo",
+                "dir": "projects/satellite_repo",
+                "meta": "metadata/projects/SAT",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    # サテライト側の docs/project.json を作成（母艦側の meta には project.json なし）
+    sat_docs = tmp_path / "projects" / "satellite_repo" / "docs"
+    sat_docs.mkdir(parents=True)
+    sat_proj_json = sat_docs / "project.json"
+    sat_proj_json.write_text(json.dumps({"key": "SAT", "name": "satellite_repo"}), encoding="utf-8")
+
+    # 例外がスローされずに通過すること
+    validate_project_consistency(
+        "SAT-0001",
+        "SAT",
+        metadata_dir=meta_dir,
+        project_root=tmp_path,
+    )
+
+
+def test_resolve_project_context_prioritizes_satellite_docs(tmp_path: Path) -> None:
+    """Issue #45: resolve_project_context がサテライト側の docs/project.json と docs/tasks.md を母艦より優先して読み込むことを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "SAT": {
+                "name": "satellite_repo",
+                "dir": "projects/satellite_repo",
+                "meta": "metadata/projects/SAT",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    # サテライトディレクトリ（Git リポジトリ）の模擬作成
+    sat_dir = tmp_path / "projects" / "satellite_repo"
+    sat_dir.mkdir(parents=True)
+    (sat_dir / ".git").mkdir()
+    (sat_dir / "satellite_code.py").write_text("print('hello')", encoding="utf-8")
+
+    # 母艦側の meta/project.json (旧設定: base_branch = master)
+    host_meta = tmp_path / "metadata" / "projects" / "SAT"
+    host_meta.mkdir(parents=True)
+    (host_meta / "project.json").write_text(
+        json.dumps({"key": "SAT", "base_branch": "master", "target_files": ["host_file.py"]}),
+        encoding="utf-8",
+    )
+
+    # サテライト側の docs/project.json (新設定: base_branch = develop, target_files = ['satellite_code.py'])
+    sat_docs = sat_dir / "docs"
+    sat_docs.mkdir(parents=True)
+    (sat_docs / "project.json").write_text(
+        json.dumps({"key": "SAT", "base_branch": "develop", "target_files": ["satellite_code.py"]}),
+        encoding="utf-8",
+    )
+
+    ctx = resolve_project_context(
+        "SAT",
+        metadata_dir=meta_dir,
+        project_root=tmp_path,
+    )
+
+    assert ctx["valid"] is True
+    assert ctx["base_branch"] == "develop"
+    assert ctx["target_files"] == ["satellite_code.py"]

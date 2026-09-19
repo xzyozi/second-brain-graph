@@ -105,3 +105,42 @@ def test_process_scoring_and_pm039_blocker_filtering(tmp_path: pytest.TempPathFa
     with open(cache_path, "r", encoding="utf-8") as f:
         data = json.load(f)
         assert len(data["issues"]) == len(candidates)
+
+
+def test_process_scoring_prioritizes_satellite_tasks_md(tmp_path: pytest.TempPathFactory) -> None:
+    """Issue #45: サテライト側の docs/tasks.md が母艦側の tasks.md より優先して読み込まれることを確認する。"""
+    root_dir = str(tmp_path)
+
+    # 1. 母艦側の tasks.md（古いタスク）
+    meta_dir = os.path.join(root_dir, "metadata", "projects", "TEST")
+    os.makedirs(meta_dir, exist_ok=True)
+    with open(os.path.join(meta_dir, "tasks.md"), "w", encoding="utf-8") as f:
+        f.write("- [ ] [TEST-0001] Old host task <!-- priority:low -->\n")
+
+    # 2. サテライト側の docs/tasks.md（最新タスク）
+    satellite_docs = os.path.join(root_dir, "projects", "test", "docs")
+    os.makedirs(satellite_docs, exist_ok=True)
+    with open(os.path.join(satellite_docs, "tasks.md"), "w", encoding="utf-8") as f:
+        f.write("- [ ] [TEST-0002] Satellite prioritized task <!-- priority:critical -->\n")
+
+    reg_dir = os.path.join(root_dir, "metadata")
+    os.makedirs(reg_dir, exist_ok=True)
+    registry_data = {
+        "version": "1.0",
+        "projects": {
+            "TEST": {
+                "name": "Test Project",
+                "dir": "projects/test",
+                "meta": "metadata/projects/TEST",
+            }
+        },
+    }
+    with open(os.path.join(reg_dir, ".project-registry.json"), "w", encoding="utf-8") as f:
+        json.dump(registry_data, f)
+
+    candidates = process_scoring(root_dir=root_dir)
+    candidate_ids = [c["id"] for c in candidates]
+
+    # サテライト側の tasks.md が読まれているため TEST-0002 のみが候補になり、TEST-0001 は含まれない
+    assert "TEST-0002" in candidate_ids
+    assert "TEST-0001" not in candidate_ids
