@@ -14,6 +14,7 @@
 * **`docs/features/`**: 機能別の利用契約と運用手順
   * [`ollama_modelfile_profile_management.md`](features/ollama_modelfile_profile_management.md): GGUF向けQwen ModelfileのCLI入力契約・生成手順
   * [`coder_test_and_github_ci_pr_fixer.md`](features/coder_test_and_github_ci_pr_fixer.md): Coderモデル動作検証仕様・実績および GitHub CI PR Fixer 設計書
+  * [`yaml_configuration_system.md`](features/yaml_configuration_system.md): YAMLベース共通設定基盤仕様書 (`models.yaml`, `prompt.yaml`, `tag.yaml`)
 
 ---
 
