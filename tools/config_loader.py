@@ -3,7 +3,7 @@
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -124,33 +124,7 @@ class PromptConfig(BaseModel):
 
 
 # ==============================================================================
-# 3. Tags & Policy Configuration (tag.yaml)
-# ==============================================================================
-
-
-class TaskClassificationConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    read_only_test_tasks: List[str]
-    feature_tasks: List[str]
-    label_mappings: Dict[str, str]
-    fallback_keyword_signals: List[str]
-
-
-class QualityGuardConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    tampering_detection_enabled: bool = True
-    protected_assertion_patterns: List[str]
-    forbidden_skip_patterns: List[str]
-
-
-class TagConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    task_classification: TaskClassificationConfig
-    quality_guard: QualityGuardConfig
-
-
-# ==============================================================================
-# 4. Unified Application Configuration
+# 3. Unified Application Configuration
 # ==============================================================================
 
 
@@ -158,7 +132,6 @@ class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     models: ModelConfig
     prompt: PromptConfig
-    tag: TagConfig
 
 
 # ==============================================================================
@@ -194,15 +167,10 @@ def _load_yaml_or_json(path: Path) -> Dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def load_model_config() -> ModelConfig:
-    """Load model configuration from models.yaml (or models.json fallback) and return validated model."""
-    yaml_path = get_config_path("models.yaml")
-    json_path = get_config_path("models.json")
-
-    target_path = yaml_path if yaml_path.exists() else json_path
+    """Load model configuration from models.yaml and return validated model."""
+    target_path = get_config_path("models.yaml")
     if not target_path.exists():
-        raise FileNotFoundError(
-            f"Required configuration file not found: {yaml_path} or {json_path}"
-        )
+        raise FileNotFoundError(f"Required configuration file not found: {target_path}")
 
     try:
         data = _load_yaml_or_json(target_path)
@@ -223,23 +191,11 @@ def load_prompt_config() -> PromptConfig:
 
 
 @lru_cache(maxsize=1)
-def load_tag_config() -> TagConfig:
-    """Load tag configuration from tag.yaml and return validated model."""
-    target_path = get_config_path("tag.yaml")
-    try:
-        data = _load_yaml_or_json(target_path)
-        return TagConfig.model_validate(data)
-    except Exception as e:
-        raise RuntimeError(f"Failed to parse or validate config from {target_path}: {e}") from e
-
-
-@lru_cache(maxsize=1)
 def get_config() -> AppConfig:
-    """Load and return unified AppConfig combining models, prompt, and tag configs."""
+    """Load and return unified AppConfig combining models and prompt configs."""
     return AppConfig(
         models=load_model_config(),
         prompt=load_prompt_config(),
-        tag=load_tag_config(),
     )
 
 
