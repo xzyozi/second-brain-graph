@@ -1,8 +1,8 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.18
+# 課題・矛盾点一覧 (Problem Management) Rev.2.19
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.18（PM-040 の AST スコープ確定・PM-039 解決反映、重複したサマリ表ブロックの除去、MULTI-001 の add_project.py 実装済み整合）
-改訂日: 2026年9月16日  
+版数: Rev.2.19（PM-051 情報マスキング[#20]、PM-052 メタデータ分離・Status Enum化[#22] 解決反映）
+改訂日: 2026年9月19日  
 作成日: 2026年6月25日  
 対象読者: 全開発・運用メンバー  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-DD-004, SBOS-DD-005, SBOS-DD-006, SBOS-DD-007, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
@@ -10,6 +10,7 @@
 ---
 
 ## 更新履歴
+- **2026/09/19 (Rev.2.19)**: PM-051 (DD-003 §10.3 / Issue #20 機密情報マスキング) および PM-052 (DD-003 §10.4 / Issue #22 メタデータ分離・Status Enum化) の実装完了を反映し、解決済みへ更新。
 - **2026/09/16 (Rev.2.18)**: 実装実体（`tools/score_issues.py`, `tools/add_project.py`）と突き合わせて課題ステータスを整合。PM-039（ブロッカー除外ハードリミット）を実装完了として解決済みへ更新。PM-004 に対応する `tools/add_project.py` が実装済みであることを踏まえ SBOS-MULTI-001 §5 の「未実装・対象範囲外」記述を実装済みへ修正し、Step 5 の `score-issues.py` 表記を実体の `score_issues.py` に統一。サマリ表が二重化し PM-025〜PM-039 が重複・PM-024 行が破損していた不整合を除去し、単一の表に正規化。
 - **2026/09/16 (Rev.2.17)**: PM-040 の対策スコープを AST 解析（Tree-sitter, `tools/lang/`）による Context Fetching に限定して確定し、ベクトル検索（RAG）を本課題のスコープ外（将来課題）として切り離したうえでステータスを解決済みへ更新。あわせて §1 概要末尾から続いていたサマリ表のヘッダー行が欠落していた不整合を修正し「## 2. 課題・矛盾点サマリ」の表ヘッダーを補完。
 - **2026/08/08 (Rev.2.16)**: 詳細設計書のSSOT原則に基づく再構成（SBOS-DD-005, 006, 007 の新設、DD-003 のスリム化、ORCH-001 の削除）および `run_task.py` のロック保護と作業ブランチ prefix の動的適用を反映。
@@ -74,6 +75,8 @@
 | **PM-048** | 全文書横断                                      | 🟢      | 文書間の版数参照が現行版と不一致                                                                                    | 本文・関連文書欄の他文書固定版数参照を削除し文書番号のみの参照へ統一                                                                                                 | 🟢 解決済み                             |
 | **PM-049** | ORCH                                            | 🟢      | 旧ORCH文書の位置付けが不明瞭（現行仕様との混同リスク）                                                              | `SBOS-ORCH-001.md` 各節に「非規範・参考資料」のアラートを追記し、正本は DD-003 である旨を明記                                                                        | 🟢 解決済み                             |
 | **PM-050** | DD / ORCH                                       | 🟠 中   | Ollama (localhost:11434) と llama-server (localhost:8080) のLLMバックエンド接続経路・起動方針が混在している         | `BackendExecutionCoordinator` を導入し、推論目的（intent）に応じた排他併用（Exclusive Co-usage）アーキテクチャへ移行                                                 | 🟢 解決済み                             |
+| **PM-051** | DD-003 §10.3                                    | 🔴 高   | LLM 送信プロンプト・実行履歴・Failure Report への機密情報漏洩リスク (Issue #20)                                      | `tools/sanitizer.py` を新設し、APIキー・トークン・秘密鍵・認証URL・パスワード・メール等の自動マスキングを全境界に統合 | 🟢 解決済み                             |
+| **PM-052** | DD-003 §10.4                                    | 🟡 低   | `orchestrator_graph.py` の肥大化およびステータス管理の型安全性欠如 (Issue #22)                                       | `tools/metadata_store.py` へ状態・履歴・排他ロック管理を独立分離し `TaskStatus` / `ErrorCategory` Enum を導入          | 🟢 解決済み                             |
 
 ---
 

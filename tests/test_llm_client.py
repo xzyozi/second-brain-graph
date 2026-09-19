@@ -148,3 +148,51 @@ def test_call_llm_returns_raw_when_expect_json_false() -> None:
     result = _run_call_llm_with_content(raw, expect_json=False)
 
     assert result == {"raw": raw}
+
+
+@patch("tools.llm_client.OpenAI")
+@patch("tools.llm_client.get_coordinator")
+@patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
+def test_call_llm_sanitizes_prompts(
+    mock_get_coordinator: MagicMock, mock_openai_class: MagicMock
+) -> None:
+    """Issue #20: LLM 送信直前のプロンプト内の機密情報が自動マスクされることを確認する。"""
+    mock_coordinator = MagicMock()
+    dummy_profile = ProfileConfig(
+        backend="ollama",
+        model="test-model",
+        openai_endpoint="http://localhost:11434/v1",
+        ollama_management_endpoint="http://localhost:11434",
+    )
+    mock_coordinator.execute.side_effect = lambda intent, req: req["action"](dummy_profile)
+    mock_get_coordinator.return_value = mock_coordinator
+
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=MagicMock(content="LGTM"))]
+    mock_client.chat.completions.create.return_value = mock_response
+
+    secret_sys = "System prompt with password='secret_master_password'"
+    secret_user = (
+        "User prompt with "
+        + "sk-"
+        + "1234567890abcdef1234567890abcdef"
+        + " and postgres://user:pass1234@localhost:5432/mydb"
+    )
+
+    call_llm("planner", secret_sys, secret_user, intent="spec_draft")
+
+    mock_client.chat.completions.create.assert_called_once()
+    messages = mock_client.chat.completions.create.call_args.kwargs["messages"]
+
+    sent_sys = messages[0]["content"]
+    sent_user = messages[1]["content"]
+
+    # 機密情報が含まれていないこと
+    assert "secret_master_password" not in sent_sys
+    assert "password='[REDACTED]'" in sent_sys
+
+    assert "sk-" + "1234567890abcdef1234567890abcdef" not in sent_user
+    assert "pass1234" not in sent_user
+    assert "[REDACTED]@" in sent_user

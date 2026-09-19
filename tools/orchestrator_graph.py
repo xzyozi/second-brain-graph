@@ -42,6 +42,7 @@ from tools.metadata_store import (
     validate_project_consistency,
     write_event,
 )
+from tools.sanitizer import sanitize_text
 
 __all__ = [
     "ISSUE_ID_PATTERN",
@@ -1260,9 +1261,11 @@ def escalate_node(state: GraphState) -> GraphState:
                 report_dir = Path(tempfile.gettempdir()) / "sbos_failure_reports"
             report_dir.mkdir(parents=True, exist_ok=True)
             report_path = report_dir / f"FAILURE_REPORT_{state['issue_id']}.md"
+            # #20 (DD-003 §10.3): レポート出力時の機密情報マスキング
+            clean_analysis_text = sanitize_text(analysis_text)
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(f"# Failure Analysis Report for {state['issue_id']}\n\n")
-                f.write(analysis_text)
+                f.write(clean_analysis_text)
 
             logger.info(f"Failure report generated at {report_path}")
 
