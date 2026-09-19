@@ -182,38 +182,65 @@ def cleanup_unauthorized_aider_artifacts(cwd: Optional[str], target_files: List[
     return removed
 
 
-def run_aider(
+def get_max_target_file_lines(cwd: Optional[str], target_files: List[str]) -> int:
+    """対象ファイル群の中で最大の行数を返す（未存在ファイルは 0 行）。"""
+    max_lines = 0
+    cwd_path = Path(cwd) if cwd else Path.cwd()
+    for tf in target_files:
+        abs_path = cwd_path / tf
+        if abs_path.exists() and abs_path.is_file():
+            try:
+                content = abs_path.read_text(encoding="utf-8", errors="replace")
+                max_lines = max(max_lines, len(content.splitlines()))
+            except Exception as e:
+                logger.warning(f"Failed to read line count for {tf}: {e}")
+    return max_lines
+
+
+def resolve_effective_edit_format(
+    edit_format: Optional[str],
+    max_lines: int,
+    threshold: int = 100,
+) -> str:
+    """ハイブリッド設定または明示設定から、実際に使用する edit_format を決定する。"""
+    fmt = (edit_format or "whole").lower()
+    if fmt == "hybrid":
+        if max_lines >= threshold:
+            logger.info(
+                f"Hybrid mode: max file lines={max_lines} >= threshold={threshold}. "
+                "Selecting 'diff' format for accelerated editing."
+            )
+            return "diff"
+        else:
+            logger.info(
+                f"Hybrid mode: max file lines={max_lines} < threshold={threshold}. "
+                "Selecting 'whole' format for safe editing."
+            )
+            return "whole"
+    return fmt
+
+
+def revert_working_tree_files(cwd: Optional[str], target_files: List[str]) -> None:
+    """フォールバック実行前に target_files の変更を元に戻す。"""
+    if not target_files:
+        return
+    try:
+        cmd = ["git", "checkout", "--"] + target_files
+        subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    except Exception as e:
+        logger.warning(f"Failed to revert files with git checkout: {e}")
+    cleanup_unauthorized_aider_artifacts(cwd, target_files)
+
+
+def _execute_aider_single(
     instruction: str,
     target_files: List[str],
-    cwd: Optional[str] = None,
-    model: Optional[str] = None,
-    timeout: Optional[int] = None,
-    edit_format: Optional[str] = None,
+    cwd: Optional[str],
+    model: str,
+    timeout: int,
+    format_to_run: str,
 ) -> bool:
-    """Aider CLI を subprocess 経由で非対話形式で実行する。
-    - Ollama API ベースが指定されている場合、末尾の /v1 サフィックスを自動除去する。
-    - config/models.json から edit_format および timeout (デフォルト 1200秒/20分) を動的に設定可能。
-    - タイムアウトおよび非ゼロ終了時は AiderRunError を発生させる。
-    - 対象ファイルが存在しない場合は警告ログを出力し、新規ファイル作成を許可する。
-    """
-    if model is None:
-        model = get_default_aider_model()
-
-    if edit_format is None or timeout is None:
-        try:
-            from tools.config_loader import get_aider_config
-
-            aider_cfg = get_aider_config()
-            if edit_format is None:
-                edit_format = aider_cfg.edit_format
-            if timeout is None:
-                timeout = aider_cfg.timeout
-        except Exception as e:
-            logger.warning(f"Failed to load Aider config: {e}")
-
-    if timeout is None:
-        timeout = 1200
-
+    """指定された edit_format で Aider CLI プロセスを単一実行する。"""
     cwd_path = Path(cwd) if cwd else Path.cwd()
     for tf in target_files:
         abs_path = cwd_path / tf
@@ -240,10 +267,9 @@ def run_aider(
             "--no-auto-commits",
             "--yes-always",
             "--no-show-model-warnings",
+            "--edit-format",
+            format_to_run,
         ]
-
-        if edit_format:
-            cmd.extend(["--edit-format", edit_format])
 
         # Windows コマンドライン長制限 (WinError 206) 回避および並行実行競合防止のため UUID 一時ファイルを使用
         msg_filename = f".aider.instruction_{uuid.uuid4().hex[:8]}.tmp"
@@ -262,11 +288,12 @@ def run_aider(
             text=True,
             timeout=timeout,
         )
-        # 不正な前置き文等による意図しない新規ファイルの自動排除
         cleanup_unauthorized_aider_artifacts(cwd, target_files)
 
         if result.returncode != 0:
-            logger.error(f"Aider failed with exit code {result.returncode}: {result.stderr}")
+            logger.error(
+                f"Aider failed (format={format_to_run}) with exit code {result.returncode}: {result.stderr}"
+            )
             raise AiderRunError(
                 f"Aider process failed with returncode {result.returncode}: {result.stderr}"
             )
@@ -285,3 +312,99 @@ def run_aider(
                 msg_file.unlink()
             except Exception:
                 pass
+
+
+def run_aider(
+    instruction: str,
+    target_files: List[str],
+    cwd: Optional[str] = None,
+    model: Optional[str] = None,
+    timeout: Optional[int] = None,
+    edit_format: Optional[str] = None,
+    hybrid_line_threshold: Optional[int] = None,
+    fallback_to_whole: Optional[bool] = None,
+) -> bool:
+    """Aider CLI を subprocess 経由で非対話形式で実行する。
+    - config/models.yaml から edit_format, timeout, hybrid_line_threshold, fallback_to_whole を動的に取得。
+    - edit_format='hybrid' 時:
+        - 100行未満（新規ファイル含む）➔ 'whole' で安全実行
+        - 100行以上 ➔ 'diff' で高速実行
+    - fallback_to_whole=True 時:
+        - 'diff' / 'udiff' 実行で失敗した場合、自動でワーキングツリーを退避復元し、'whole' で再実行。
+    """
+    if model is None:
+        model = get_default_aider_model()
+
+    if (
+        edit_format is None
+        or timeout is None
+        or hybrid_line_threshold is None
+        or fallback_to_whole is None
+    ):
+        try:
+            from tools.config_loader import get_aider_config
+
+            aider_cfg = get_aider_config()
+            if edit_format is None:
+                edit_format = aider_cfg.edit_format
+            if timeout is None:
+                timeout = aider_cfg.timeout
+            if hybrid_line_threshold is None:
+                hybrid_line_threshold = aider_cfg.hybrid_line_threshold
+            if fallback_to_whole is None:
+                fallback_to_whole = aider_cfg.fallback_to_whole
+        except Exception as e:
+            logger.warning(f"Failed to load Aider config: {e}")
+
+    if timeout is None:
+        timeout = 1200
+    if hybrid_line_threshold is None:
+        hybrid_line_threshold = 100
+    if fallback_to_whole is None:
+        fallback_to_whole = True
+
+    # 最大ファイル行数を判定して実効 edit_format を決定
+    max_lines = get_max_target_file_lines(cwd, target_files)
+    effective_format = resolve_effective_edit_format(
+        edit_format, max_lines, threshold=hybrid_line_threshold
+    )
+
+    logger.info(
+        f"Running Aider with model='{model}', format='{effective_format}' "
+        f"(max_lines={max_lines}, fallback_to_whole={fallback_to_whole})"
+    )
+
+    # diff / udiff の場合に whole への自動フォールバックを適用
+    if effective_format in ["diff", "udiff"] and fallback_to_whole:
+        try:
+            return _execute_aider_single(
+                instruction=instruction,
+                target_files=target_files,
+                cwd=cwd,
+                model=model,
+                timeout=timeout,
+                format_to_run=effective_format,
+            )
+        except AiderRunError as e:
+            logger.warning(
+                f"Aider execution with format '{effective_format}' failed: {e}. "
+                "Reverting changes and falling back to 'whole' format for safe recovery."
+            )
+            revert_working_tree_files(cwd, target_files)
+            return _execute_aider_single(
+                instruction=instruction,
+                target_files=target_files,
+                cwd=cwd,
+                model=model,
+                timeout=timeout,
+                format_to_run="whole",
+            )
+
+    return _execute_aider_single(
+        instruction=instruction,
+        target_files=target_files,
+        cwd=cwd,
+        model=model,
+        timeout=timeout,
+        format_to_run=effective_format,
+    )
