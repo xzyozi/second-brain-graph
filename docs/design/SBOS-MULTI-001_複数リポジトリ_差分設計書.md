@@ -1,25 +1,25 @@
-# 複数リポジトリ管理および差分検証・スコアリング設計書 Rev.2.8
+# 複数リポジトリ管理および差分検証・スコアリング設計書 Rev.3.0
 **「第二の脳」母艦 × 衛星アーキテクチャ 拡張仕様**
 
 | 項目     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-MULTI-001                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 版数     | Rev.2.8（詳細設計書分離に伴うマップ追記版）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 改訂日   | 2026年8月9日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 版数     | Rev.3.0（サテライト仕様帰属化・母艦純化・ランタイムデータ完全隔離版）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 改訂日   | 2026年9月20日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 作成日   | 2026年6月26日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%8BEA%E4%BB%95%E6%A7%98.md)、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
 
 ---
 
 ## 1. アーキテクチャ設計方針
 本システムでは **Git Submodule を一切使用しない**。LLMはサブモジュールのポインタ更新やDetached HEADの概念を正確に扱えず、リポジトリを破壊するためである。
-代わりに **「母艦の `.gitignore` による完全遮断 × メタデータ階層分離 (`metadata/projects/`) × 中央台帳 (`metadata/.project-registry.json`)」** を採用する。
+代わりに **「母艦の `.gitignore` による完全遮断 × 衛星本体への仕様帰属 (`projects/<name>/docs/`) × 中央台帳 (`metadata/.project-registry.json`) × ランタイム動的データの完全隔離 (`tools/.cache/`)」** を採用する。
 
-* **母艦 (`~/second-brain/`)**：システムOS。ルール・プロンプト・自動化ツール・衛星メタデータを管理する。
-* **衛星 (`projects/<name>/`)**：独立したプロダクト。各自が独立した `.git` を持つ通常のリポジトリ（ソースコード専用）。
-* **衛星メタデータ (`metadata/projects/<project-key>/`)**：母艦側で管理する各衛星の定義 (`project.json`) およびタスク定義 (`tasks.md`)。
+* **母艦 (`second-brain-graph/`)**：システムOS・自律オーケストレーターエンジン。ルール・プロンプト・自動化ツール・中央台帳を管理し、Git 履歴をサテライトの進捗 ToDo で汚染させない（母艦の純化）。
+* **衛星 (`projects/<name>/`)**：独立したプロダクト。各自が独立した `.git` を持ち、プロダクトコード（`src/`, `tests/`）に加えて、自律運用に必要なタスク一覧（`docs/tasks.md`）、詳細仕様（`docs/issues/*.md`）、プロジェクト構成（`docs/project.json`）を自前で正本保持する。
+* **ランタイム動的データ (`tools/.cache/projects/<KEY>/`)**：排他ロック（`.lock`）、実行ステータス（`state.json`）、時系列イベント（`events/`）は母艦の `.gitignore` で完全遮断されたキャッシュ領域へ隔離する。
 
-> **（PM-026/PM-027 設計決定）** 衛星ソースコードツリーの汚染を防止するため、`project.json` や `tasks.md` は衛星配下ではなく母艦側 `metadata/projects/<project-key>/` に一括保存する。また、衛星発見は中央台帳 **`metadata/.project-registry.json`** を正とする。
+> **（Issue #45 アーキテクチャ進化）** 初期の消極的隔離（PM-026: サテライト汚染防止のための母艦一括集約）から、ステージング境界ガード（`target_files` のみコミット）の完成を経て、**「サテライト本体への仕様・タスク資産帰属」** と **「母艦ランタイム動的データの完全物理隔離」** による3層分離アーキテクチャへと刷新した。これにより、サテライト単体のポータビリティを確保しつつ、母艦の Git 履歴汚染を根本解消した。
 
 ---
 
@@ -59,20 +59,30 @@
 * **オーバーフロー時のタスク分解ルール:**
   `Z` を超えるような複雑かつ肥大化したタスクは、無制限に階層を深めるのではなく、要件定義・分解フェーズの段階で複数の独立した親タスクへ分割するか、先行実装部分などを切り離して新規親タスク（例: `EC-0002`）として追加定義する。
 
-#### 4. メタデータ配置階層 (PM-026 確定仕様)
-各衛星のメタデータ (`project.json`) およびタスク定義 (`tasks.md`) は、衛星ソースツリー汚染防止のため、母艦側の **`metadata/projects/<PROJECT_KEY>/`** 階層に一括配置する。
+#### 4. メタデータ配置階層 (Issue #45 確定仕様)
+サテライトプロジェクト固有の仕様・タスク資産は衛星本体の `docs/` 配下に正本（SSOT）として帰属させ、実行時動的データは母艦の `tools/.cache/` 配下に完全隔離する。
 
 ```text
-metadata/projects/EC/
-├── project.json      # プロジェクト固有の設定（base_branch等）
-├── tasks.md          # 人間向けのタスク説明・インデックス一覧（HTML状態埋め込みは廃止）
-├── state.json        # 【正本】各タスクの機械状態（status, round等）
-└── issues/           # 【詳細要件】Issue ID 単位の詳細仕様マークダウン格納ディレクトリ
-    ├── EC-0001.md    # 各 Issue の背景、仕様、除外条件、DoD
-    └── _template.md  # 統一記述テンプレート
+[サテライト側] projects/ec-site/
+└── docs/
+    ├── project.json   # 【正本】プロジェクト固有の設定（base_branch等）
+    ├── tasks.md       # 【正本】人間向けのタスク説明・インデックス一覧
+    └── issues/        # 【正本】Issue ID 単位の詳細仕様マークダウン格納ディレクトリ
+        ├── EC-0001.md # 各 Issue の背景、仕様、除外条件、DoD
+        └── _template.md
+
+[母艦エンジン] second-brain-graph/
+├── metadata/
+│   ├── .project-registry.json  # 全衛星プロジェクトの中央台帳
+│   └── projects/EC/            # （後方互換・旧環境用フォールバック）
+└── tools/.cache/               # 【Git完全隔離領域】
+    └── projects/EC/
+        ├── .lock               # プロジェクト排他ロック
+        ├── state.json          # 各タスクの機械状態（status, round等）
+        └── events/             # ロック競合・実行イベントログ
 ```
 
-`metadata/projects/<PROJECT_KEY>/project.json`:
+`projects/<name>/docs/project.json`:
 ```json
 {
   "name": "自社ECサイトリニューアル",
@@ -91,13 +101,13 @@ metadata/projects/EC/
 #### `/work <ISSUE_ID>` （例: `/work EC-0001`）
 
 1. `sisyphus` がプレフィックス `EC` を抽出。
-2. 母艦の `metadata/.project-registry.json` を引き、キー `EC` に対応するソースフォルダ（`projects/ec-site/`）およびメタデータフォルダ（`metadata/projects/EC/`）を特定。
-3. **エージェントの作業カレントディレクトリを `~/second-brain/projects/ec-site/` へ動的に切り替えてから** `executor` および `coder` を起動する。
-4. 進捗・完了状態は母艦側の `metadata/projects/EC/state.json` へ記録し、自動処理で `tasks.md` は書き換えない。
+2. 母艦の `metadata/.project-registry.json` を引き、キー `EC` に対応するソースフォルダ（`projects/ec-site/`）を特定。
+3. **エージェントの作業カレントディレクトリを `projects/ec-site/` へ動的に切り替えてから** `executor` および `coder` を起動する。
+4. 進捗・完了状態は母艦の隔離領域 `tools/.cache/projects/EC/state.json` へ記録し、自動処理で `tasks.md` は書き換えない。
 
 ### ④ スコアリング (`score-issues.py`) の全横断スキャン化
 
-日次バッチが叩くスコアリングスクリプトは、母艦の中央台帳 `metadata/.project-registry.json` を参照し全衛星のメタデータを舐めるロジックへ改修する。
+日次バッチが叩くスコアリングスクリプトは、母艦の中央台帳 `metadata/.project-registry.json` を参照し、各サテライトの `docs/tasks.md`（フォールバックで母艦側）を探索・走査する。
 
 ```python
 # score-issues.py 概念ロジック（実物実装と整合させたもの。詳細はSBOS-OP-001 §5.1を正とする）
@@ -105,8 +115,7 @@ import os, json
 
 
 def load_registry(root_dir: str) -> dict:
-    """metadata/.project-registry.json を読み込む。
-    形式: {"version": "1.0", "projects": {"EC": {"dir": "projects/ec-site", "meta": "metadata/projects/EC"}}}"""
+    """metadata/.project-registry.json を読み込む。"""
     reg_path = os.path.join(root_dir, "metadata", ".project-registry.json")
     if not os.path.exists(reg_path):
         return {}
@@ -118,17 +127,20 @@ def load_registry(root_dir: str) -> dict:
 all_issues = []
 projects = load_registry(root_dir=".")
 for project_key, info in projects.items():
+    project_dir = info.get("dir", f"projects/{project_key}")
     meta_dir = info.get("meta", os.path.join("metadata", "projects", project_key))
-    tasks_path = os.path.join(meta_dir, "tasks.md")
+    # サテライト側 docs/tasks.md を最優先、なければ母艦フォールバック
+    sat_tasks = os.path.join(root_dir, project_dir, "docs", "tasks.md")
+    host_tasks = os.path.join(root_dir, meta_dir, "tasks.md")
+    tasks_path = sat_tasks if os.path.exists(sat_tasks) else host_tasks
     if not os.path.exists(tasks_path):
         continue
-    # tasks.md をパースし、各Issueに project_key を付与してスコアリング
-    issues = parse_tasks(tasks_path, project_key=project_key)
+    issues = parse_tasks_md(tasks_path, project_key=project_key)
     all_issues.extend(issues)
 
-# 全プロジェクト横断の優先度Top10を算出
+# 全プロジェクト横断の優先度Top10を算出しキャッシュ保存
 top_issues = calculate_4axis_score(all_issues)
-save_to_cache("tools/.cache/priority-cache.json", top_issues)
+save_to_cache(top_issues, root_dir=".")
 ```
 
 > **注意：** `projects/<name>/`に`project.json`を配置しただけでは、このスクリプトはそのプロジェクトを検出しない。`.project-registry.json`への登録が別途必要（§5参照）。

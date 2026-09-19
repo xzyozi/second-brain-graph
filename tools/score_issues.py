@@ -184,7 +184,10 @@ def process_scoring(root_dir: str = ".") -> List[Dict[str, Any]]:
     for project_key, info in projects.items():
         project_dir = info.get("dir", f"projects/{project_key}")
         meta_dir = info.get("meta", os.path.join("metadata", "projects", project_key))
-        tasks_path = os.path.join(root_dir, meta_dir, "tasks.md")
+        # サテライト側 (projects/<name>/docs/tasks.md) を最優先し、存在しない場合は母艦側 (metadata/projects/<KEY>/tasks.md) をフォールバック
+        satellite_tasks = os.path.join(root_dir, project_dir, "docs", "tasks.md")
+        fallback_tasks = os.path.join(root_dir, meta_dir, "tasks.md")
+        tasks_path = satellite_tasks if os.path.exists(satellite_tasks) else fallback_tasks
 
         issues = parse_tasks_md(tasks_path, project_key)
         for iss in issues:
