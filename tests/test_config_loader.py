@@ -154,3 +154,56 @@ def test_get_backend_execution_config_routes_are_consistent() -> None:
     config = get_backend_execution_config()
     for intent, profile_name in config.routes.items():
         assert profile_name in config.profiles, f"Route '{intent}' -> '{profile_name}' is undefined"
+
+
+# ---------------------------------------------------------------------------
+# YAML Configuration Loaders (models.yaml, prompt.yaml, tag.yaml, AppConfig)
+# ---------------------------------------------------------------------------
+def test_load_model_config_loads_yaml() -> None:
+    """models.yaml が正常にロードされ、Pydantic モデルとして妥当であることを確認する。"""
+    from tools.config_loader import load_model_config
+
+    config = load_model_config()
+    assert config.aider.no_auto_commits is True
+    assert "planner" in config.models
+    assert "coder" in config.models
+    assert "reviewer" in config.models
+    assert config.backend_execution.mode == "exclusive"
+
+
+def test_load_prompt_config_loads_yaml() -> None:
+    """prompt.yaml が正常にロードされ、各ロールのプロンプトが取得できることを確認する。"""
+    from tools.config_loader import load_prompt_config
+
+    prompt_config = load_prompt_config()
+    assert len(prompt_config.planner.spec_draft_system.strip()) > 0
+    assert len(prompt_config.coder.scope_restriction_template.strip()) > 0
+    assert len(prompt_config.advisor.test_feedback_system.strip()) > 0
+    assert len(prompt_config.reviewer.code_review_system.strip()) > 0
+    assert "[TEST INTEGRITY AUDIT" in prompt_config.reviewer.code_review_system
+
+
+def test_load_tag_config_loads_yaml() -> None:
+    """tag.yaml が正常にロードされ、タスク分類タグおよび品質ガード設定が取得できることを確認する。"""
+    from tools.config_loader import load_tag_config
+
+    tag_config = load_tag_config()
+    assert "bug" in tag_config.task_classification.read_only_test_tasks
+    assert "fix" in tag_config.task_classification.read_only_test_tasks
+    assert "feature" in tag_config.task_classification.feature_tasks
+    assert tag_config.task_classification.label_mappings.get("bug") == "fix"
+    assert tag_config.quality_guard.tampering_detection_enabled is True
+    assert "assert " in tag_config.quality_guard.protected_assertion_patterns
+    assert "@pytest.mark.skip" in tag_config.quality_guard.forbidden_skip_patterns
+
+
+def test_get_config_returns_unified_app_config() -> None:
+    """get_config() が models, prompt, tag をすべて含む統合 AppConfig を返すことを確認する。"""
+    from tools.config_loader import AppConfig, get_config
+
+    app_config = get_config()
+    assert isinstance(app_config, AppConfig)
+    assert app_config.models is not None
+    assert app_config.prompt is not None
+    assert app_config.tag is not None
+    assert app_config.models.aider.timeout == 1200
