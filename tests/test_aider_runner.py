@@ -272,9 +272,7 @@ def test_revert_working_tree_files(mock_run: MagicMock) -> None:
 
 
 @patch("subprocess.run")
-def test_run_aider_hybrid_selects_whole_for_small_file(
-    mock_run: MagicMock, tmp_path: Path
-) -> None:
+def test_run_aider_hybrid_selects_whole_for_small_file(mock_run: MagicMock, tmp_path: Path) -> None:
     """行数が閾値未満のファイルに対して hybrid モードで whole が選択されることを検証する。"""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     small_file = tmp_path / "small.py"
@@ -296,9 +294,7 @@ def test_run_aider_hybrid_selects_whole_for_small_file(
 
 
 @patch("subprocess.run")
-def test_run_aider_hybrid_selects_diff_for_large_file(
-    mock_run: MagicMock, tmp_path: Path
-) -> None:
+def test_run_aider_hybrid_selects_diff_for_large_file(mock_run: MagicMock, tmp_path: Path) -> None:
     """行数が閾値以上のファイルに対して hybrid モードで diff が選択されることを検証する。"""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     large_file = tmp_path / "large.py"
@@ -370,6 +366,7 @@ def test_run_aider_diff_does_not_fallback_when_disabled(
     mock_run: MagicMock, tmp_path: Path
 ) -> None:
     """fallback_to_whole=False の場合、diff 失敗時に再試行せず即座に例外を送出することを検証する。"""
+
     def side_effect(cmd: Any, *args: Any, **kwargs: Any) -> MagicMock:
         if cmd[0] == "aider":
             return MagicMock(returncode=1, stderr="diff failed")
@@ -396,6 +393,7 @@ def test_run_aider_diff_and_fallback_whole_both_fail(
     mock_run: MagicMock, mock_revert: MagicMock, tmp_path: Path
 ) -> None:
     """diff と フォールバック whole の両方が失敗した場合、例外が送出されることを検証する。"""
+
     def side_effect(cmd: Any, *args: Any, **kwargs: Any) -> MagicMock:
         if cmd[0] == "aider":
             return MagicMock(returncode=1, stderr="diff failed")
@@ -432,9 +430,7 @@ def test_get_max_target_file_lines_empty_and_unicode(tmp_path: Path) -> None:
 
 
 @patch("subprocess.run")
-def test_run_aider_hybrid_mixed_files_selects_diff(
-    mock_run: MagicMock, tmp_path: Path
-) -> None:
+def test_run_aider_hybrid_mixed_files_selects_diff(mock_run: MagicMock, tmp_path: Path) -> None:
     """小規模ファイルと大規模ファイルが混在する場合、最大行数が閾値以上であれば diff が選択されることを検証する。"""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     f1 = tmp_path / "small.py"
@@ -507,4 +503,3 @@ def test_run_aider_fallback_cleans_up_artifacts(
     assert res is True
     mock_revert.assert_called_once_with(str(tmp_path), ["large.py"])
     assert mock_cleanup.called
-

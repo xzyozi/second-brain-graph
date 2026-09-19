@@ -33,9 +33,21 @@ def create_mock_repo(base_dir: Path) -> Path:
     repo_dir.mkdir(parents=True, exist_ok=True)
 
     subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "BenchmarkUser"], cwd=repo_dir, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "benchmark@example.com"], cwd=repo_dir, capture_output=True, check=True)
-    subprocess.run(["git", "config", "core.autocrlf", "input"], cwd=repo_dir, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "BenchmarkUser"],
+        cwd=repo_dir,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "benchmark@example.com"],
+        cwd=repo_dir,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "core.autocrlf", "input"], cwd=repo_dir, capture_output=True, check=True
+    )
 
     return repo_dir
 
@@ -43,7 +55,9 @@ def create_mock_repo(base_dir: Path) -> Path:
 def _safe_commit(repo_dir: Path, msg: str) -> None:
     """変更がある場合のみ安全に git add & commit を行う。"""
     subprocess.run(["git", "add", "-A", "."], cwd=repo_dir, capture_output=True, check=False)
-    st = subprocess.run(["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True, check=False)
+    st = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo_dir, capture_output=True, text=True, check=False
+    )
     if st.stdout.strip():
         subprocess.run(["git", "commit", "-m", msg], cwd=repo_dir, capture_output=True, check=False)
 
@@ -126,39 +140,43 @@ def generate_medium_file(repo_dir: Path) -> Path:
     ]
 
     for i in range(1, 25):
-        lines.extend([
-            f"class TransformerBlock{i}:",
-            f'    """Transformer block {i}."""',
-            f"    def __init__(self, scale: float = {i}.0):",
-            "        self.scale = scale",
-            "",
-            "    def transform(self, val: float) -> float:",
-            "        return val * self.scale",
-            "",
-        ])
+        lines.extend(
+            [
+                f"class TransformerBlock{i}:",
+                f'    """Transformer block {i}."""',
+                f"    def __init__(self, scale: float = {i}.0):",
+                "        self.scale = scale",
+                "",
+                "    def transform(self, val: float) -> float:",
+                "        return val * self.scale",
+                "",
+            ]
+        )
 
-    lines.extend([
-        "class PipelineRunner:",
-        '    """Main runner for data processing pipeline."""',
-        "",
-        "    def __init__(self):",
-        "        self.validator = RecordValidator()",
-        "        self.records: List[Dict[str, Any]] = []",
-        "",
-        "    def process_records(self, raw_records: List[Dict[str, Any]]) -> int:",
-        '        """Process all records. NEEDS ERROR HANDLING."""',
-        "        count = 0",
-        "        for r in raw_records:",
-        "            # TARGET FOR EDIT: Add try-except block here to catch ValueError and log warning",
-        "            val = float(r.get('value', 0))",
-        "            if val > 0:",
-        "                count += 1",
-        "        return count",
-        "",
-        "    def get_summary(self) -> Dict[str, Any]:",
-        "        return {'processed_count': len(self.records)}",
-        "",
-    ])
+    lines.extend(
+        [
+            "class PipelineRunner:",
+            '    """Main runner for data processing pipeline."""',
+            "",
+            "    def __init__(self):",
+            "        self.validator = RecordValidator()",
+            "        self.records: List[Dict[str, Any]] = []",
+            "",
+            "    def process_records(self, raw_records: List[Dict[str, Any]]) -> int:",
+            '        """Process all records. NEEDS ERROR HANDLING."""',
+            "        count = 0",
+            "        for r in raw_records:",
+            "            # TARGET FOR EDIT: Add try-except block here to catch ValueError and log warning",
+            "            val = float(r.get('value', 0))",
+            "            if val > 0:",
+            "                count += 1",
+            "        return count",
+            "",
+            "    def get_summary(self) -> Dict[str, Any]:",
+            "        return {'processed_count': len(self.records)}",
+            "",
+        ]
+    )
 
     file_path.write_text("\n".join(lines), encoding="utf-8")
     _safe_commit(repo_dir, "Initial commit medium")
@@ -192,42 +210,46 @@ def generate_large_file(repo_dir: Path) -> Path:
 
     # 40個のハンドラクラスを追加して行数を一気に約600行まで伸ばす
     for i in range(1, 45):
-        lines.extend([
-            f"class TaskHandler_{i:02d}:",
-            f'    """Task handler stage {i}."""',
-            f"    STAGE_ID = {i}",
+        lines.extend(
+            [
+                f"class TaskHandler_{i:02d}:",
+                f'    """Task handler stage {i}."""',
+                f"    STAGE_ID = {i}",
+                "",
+                "    def __init__(self, config: Optional[Dict[str, Any]] = None):",
+                "        self.config = config or {}",
+                "        self.executed = False",
+                "",
+                "    def handle(self, context: OrchestratorContext) -> bool:",
+                f"        context.record('Executing stage {i}')",
+                "        self.executed = True",
+                "        return True",
+                "",
+                "    def rollback(self, context: OrchestratorContext) -> None:",
+                f"        context.record('Rollback stage {i}')",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "class SystemWorkflowCoordinator:",
+            '    """Root coordinator executing all stages sequentially."""',
             "",
-            "    def __init__(self, config: Optional[Dict[str, Any]] = None):",
-            "        self.config = config or {}",
-            "        self.executed = False",
+            "    def __init__(self):",
+            "        self.stages: List[Any] = []",
             "",
-            "    def handle(self, context: OrchestratorContext) -> bool:",
-            f"        context.record('Executing stage {i}')",
-            "        self.executed = True",
+            "    def execute_workflow(self, context: OrchestratorContext) -> bool:",
+            '        """Execute all configured stages in order."""',
+            "        # TARGET FOR EDIT: Add safety check: if not context.trace_id, raise ValueError('Missing trace_id')",
+            "        for stage in self.stages:",
+            "            ok = stage.handle(context)",
+            "            if not ok:",
+            "                return False",
             "        return True",
             "",
-            "    def rollback(self, context: OrchestratorContext) -> None:",
-            f"        context.record('Rollback stage {i}')",
-            "",
-        ])
-
-    lines.extend([
-        "class SystemWorkflowCoordinator:",
-        '    """Root coordinator executing all stages sequentially."""',
-        "",
-        "    def __init__(self):",
-        "        self.stages: List[Any] = []",
-        "",
-        "    def execute_workflow(self, context: OrchestratorContext) -> bool:",
-        '        """Execute all configured stages in order."""',
-        "        # TARGET FOR EDIT: Add safety check: if not context.trace_id, raise ValueError('Missing trace_id')",
-        "        for stage in self.stages:",
-        "            ok = stage.handle(context)",
-        "            if not ok:",
-        "                return False",
-        "        return True",
-        "",
-    ])
+        ]
+    )
 
     file_path.write_text("\n".join(lines), encoding="utf-8")
     _safe_commit(repo_dir, "Initial commit large")
@@ -343,20 +365,24 @@ class Order:
         "",
     ]
     for i in range(1, 20):
-        f2_lines.extend([
-            f"class OrderHook_{i}:",
-            "    def on_process(self, order: Order) -> None:",
-            f"        logger.debug('Hook {i} executed')",
+        f2_lines.extend(
+            [
+                f"class OrderHook_{i}:",
+                "    def on_process(self, order: Order) -> None:",
+                f"        logger.debug('Hook {i} executed')",
+                "",
+            ]
+        )
+    f2_lines.extend(
+        [
+            "class OrderService:",
+            "    def calculate_total(self, order: Order) -> float:",
+            "        # TARGET FOR EDIT: Calculate sum of item.price * item.quantity and set order.total_amount",
+            "        total = sum(item.price * item.quantity for item in order.items)",
+            "        return total",
             "",
-        ])
-    f2_lines.extend([
-        "class OrderService:",
-        "    def calculate_total(self, order: Order) -> float:",
-        "        # TARGET FOR EDIT: Calculate sum of item.price * item.quantity and set order.total_amount",
-        "        total = sum(item.price * item.quantity for item in order.items)",
-        "        return total",
-        "",
-    ])
+        ]
+    )
     f2.write_text("\n".join(f2_lines), encoding="utf-8")
 
     _safe_commit(repo_dir, "Initial commit multi")
@@ -460,7 +486,9 @@ def execute_benchmark_run(
     success = (returncode == 0) and has_diff and syntax_valid
 
     # 次のテストのために git reset --hard & clean
-    subprocess.run(["git", "reset", "--hard", rev_before], cwd=repo_dir, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "reset", "--hard", rev_before], cwd=repo_dir, capture_output=True, check=True
+    )
     subprocess.run(["git", "clean", "-fd"], cwd=repo_dir, capture_output=True, check=True)
 
     return {
@@ -503,9 +531,13 @@ def run_all_benchmarks(
                 instr = "In calculator.py, fix the bug in the add function so that it returns a + b instead of a - b."
                 for fmt in formats:
                     print(f"  ▶ format={fmt:6s} ... ", end="", flush=True)
-                    res = execute_benchmark_run(repo_dir, ["calculator.py"], instr, model, fmt, timeout=timeout)
+                    res = execute_benchmark_run(
+                        repo_dir, ["calculator.py"], instr, model, fmt, timeout=timeout
+                    )
                     status = "PASS" if res["success"] else "FAIL"
-                    print(f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}")
+                    print(
+                        f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}"
+                    )
                     res["scenario"] = "小 (~50行)"
                     all_results.append(res)
 
@@ -516,9 +548,13 @@ def run_all_benchmarks(
                 instr = "In processor.py, in PipelineRunner.process_records, wrap the float(r.get('value', 0)) conversion in a try-except ValueError block and log a warning if it fails."
                 for fmt in formats:
                     print(f"  ▶ format={fmt:6s} ... ", end="", flush=True)
-                    res = execute_benchmark_run(repo_dir, ["processor.py"], instr, model, fmt, timeout=timeout)
+                    res = execute_benchmark_run(
+                        repo_dir, ["processor.py"], instr, model, fmt, timeout=timeout
+                    )
                     status = "PASS" if res["success"] else "FAIL"
-                    print(f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}")
+                    print(
+                        f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}"
+                    )
                     res["scenario"] = "中 (~250行)"
                     all_results.append(res)
 
@@ -529,22 +565,32 @@ def run_all_benchmarks(
                 instr = "In system_orchestrator.py, in SystemWorkflowCoordinator.execute_workflow, add a guard at the beginning: if not context.trace_id, raise ValueError('Missing trace_id')."
                 for fmt in formats:
                     print(f"  ▶ format={fmt:6s} ... ", end="", flush=True)
-                    res = execute_benchmark_run(repo_dir, ["system_orchestrator.py"], instr, model, fmt, timeout=timeout)
+                    res = execute_benchmark_run(
+                        repo_dir, ["system_orchestrator.py"], instr, model, fmt, timeout=timeout
+                    )
                     status = "PASS" if res["success"] else "FAIL"
-                    print(f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}")
+                    print(
+                        f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}"
+                    )
                     res["scenario"] = "大 (~600行)"
                     all_results.append(res)
 
             # --- Scenario 4: 日本語混在コード (~150行) ---
             if "japanese" in scenarios:
-                print("\n[シナリオ 4] 日本語混在コード (~150行: auth_service.py バリデーション強化)")
+                print(
+                    "\n[シナリオ 4] 日本語混在コード (~150行: auth_service.py バリデーション強化)"
+                )
                 generate_japanese_file(repo_dir)
                 instr = "auth_service.py の UserSessionManager.validate_request メソッドの先頭に、token_str が None または空文字（not token_str）の場合に直ちに False を返すガード節を追加してください。"
                 for fmt in formats:
                     print(f"  ▶ format={fmt:6s} ... ", end="", flush=True)
-                    res = execute_benchmark_run(repo_dir, ["auth_service.py"], instr, model, fmt, timeout=timeout)
+                    res = execute_benchmark_run(
+                        repo_dir, ["auth_service.py"], instr, model, fmt, timeout=timeout
+                    )
                     status = "PASS" if res["success"] else "FAIL"
-                    print(f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}")
+                    print(
+                        f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}"
+                    )
                     res["scenario"] = "日本語 (~150行)"
                     all_results.append(res)
 
@@ -554,9 +600,13 @@ def run_all_benchmarks(
                 instr = "Create a new file utils/string_helper.py containing a function 'truncate(text: str, max_len: int = 50) -> str' that truncates text with '...' if longer than max_len."
                 for fmt in ["whole", "diff"]:
                     print(f"  ▶ format={fmt:6s} ... ", end="", flush=True)
-                    res = execute_benchmark_run(repo_dir, ["utils/string_helper.py"], instr, model, fmt, timeout=timeout)
+                    res = execute_benchmark_run(
+                        repo_dir, ["utils/string_helper.py"], instr, model, fmt, timeout=timeout
+                    )
                     status = "PASS" if res["success"] else "FAIL"
-                    print(f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}")
+                    print(
+                        f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}"
+                    )
                     res["scenario"] = "新規作成 (0行)"
                     all_results.append(res)
 
@@ -576,7 +626,9 @@ def run_all_benchmarks(
                     use_runner_api=True,
                 )
                 status_a = "PASS" if res_a["success"] else "FAIL"
-                print(f"[{status_a}] 時間: {res_a['elapsed_sec']:5.1f}s | 差分行数: {res_a['diff_lines']:3d}")
+                print(
+                    f"[{status_a}] 時間: {res_a['elapsed_sec']:5.1f}s | 差分行数: {res_a['diff_lines']:3d}"
+                )
                 res_a["scenario"] = "Hybrid:小➔whole"
                 all_results.append(res_a)
 
@@ -593,7 +645,9 @@ def run_all_benchmarks(
                     use_runner_api=True,
                 )
                 status_b = "PASS" if res_b["success"] else "FAIL"
-                print(f"[{status_b}] 時間: {res_b['elapsed_sec']:5.1f}s | 差分行数: {res_b['diff_lines']:3d}")
+                print(
+                    f"[{status_b}] 時間: {res_b['elapsed_sec']:5.1f}s | 差分行数: {res_b['diff_lines']:3d}"
+                )
                 res_b["scenario"] = "Hybrid:大➔diff"
                 all_results.append(res_b)
 
@@ -610,7 +664,9 @@ def run_all_benchmarks(
                     print(f"  ▶ format={fmt:6s} ... ", end="", flush=True)
                     res = execute_benchmark_run(repo_dir, files, instr, model, fmt, timeout=timeout)
                     status = "PASS" if res["success"] else "FAIL"
-                    print(f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}")
+                    print(
+                        f"[{status}] 時間: {res['elapsed_sec']:5.1f}s | 差分行数: {res['diff_lines']:3d} | 構文: {res['syntax_valid']}"
+                    )
                     res["scenario"] = "複数ファイル"
                     all_results.append(res)
 
@@ -622,12 +678,30 @@ def print_summary_table(results: List[Dict[str, Any]]) -> None:
     print("\n" + "=" * 76)
     print("  多角的ベンチマーク結果総合サマリ")
     print("=" * 76)
-    print(f"| {'モデル':18s} | {'シナリオ':16s} | {'Format':8s} | {'合否':6s} | {'所要時間':8s} | {'差分行数':8s} |")
-    print("| " + "-" * 18 + " | " + "-" * 16 + " | " + "-" * 8 + " | " + "-" * 6 + " | " + "-" * 8 + " | " + "-" * 8 + " |")
+    print(
+        f"| {'モデル':18s} | {'シナリオ':16s} | {'Format':8s} | {'合否':6s} | {'所要時間':8s} | {'差分行数':8s} |"
+    )
+    print(
+        "| "
+        + "-" * 18
+        + " | "
+        + "-" * 16
+        + " | "
+        + "-" * 8
+        + " | "
+        + "-" * 6
+        + " | "
+        + "-" * 8
+        + " | "
+        + "-" * 8
+        + " |"
+    )
     for r in results:
         model_name = r["model"].split("/")[-1].split(":")[0]
         verdict = "**PASS**" if r["success"] else "FAIL"
-        print(f"| {model_name:18s} | {r.get('scenario', '-'):16s} | {r['edit_format']:8s} | {verdict:6s} | {r['elapsed_sec']:6.1f}s  | {r['diff_lines']:6d}行  |")
+        print(
+            f"| {model_name:18s} | {r.get('scenario', '-'):16s} | {r['edit_format']:8s} | {verdict:6s} | {r['elapsed_sec']:6.1f}s  | {r['diff_lines']:6d}行  |"
+        )
     print("=" * 76)
 
 
