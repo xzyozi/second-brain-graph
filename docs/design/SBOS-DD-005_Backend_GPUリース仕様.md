@@ -3,9 +3,9 @@
 | 項目 | 内容 |
 | --- | --- |
 | 文書名 | Second Brain OS - Backend LLM 制御・GPU リース仕様 |
-| 版数 | Rev.1.0 |
-| 改訂日 | 2026年8月8日 |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計） |
+| 版数 | Rev.1.1 |
+| 改訂日 | 2026年9月19日 |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、Issue #39 |
 | 対象コンポーネント | `tools/backend_coordinator.py`、`tools/llama_backend.py`、`tools/gguf_manager.py`、`tools/config_loader.py`、`tools/llm_client.py` |
 | 役割 | LLM プロファイルの検証、Ollama と llama-server の排他制御、GPU リソースのリース管理、OpenAI 互換 API へのリクエスト構成 |
 
@@ -15,9 +15,10 @@
 
 本仕様は、オーケストレーターが多様な LLM バックエンド（Ollama、llama-server 等）を利用する際の、設定の検証（Pydantic）、Intent によるルーティング解決、およびローカル GPU リソースの排他リース制御について定義する。
 
-## 2. 設定モデルとスキーマ (`config/models.json`)
+## 2. 設定モデルとスキーマ (`config/models.yaml`)
 
-`config/models.json` は LLM 関連設定の SSOT である。`RootConfig` は `extra='forbid'` の Pydantic 検証を行うため、未知のキーを許可しない。
+`config/models.yaml`（後方互換用フォールバックとして `models.json`）は LLM 関連設定の SSOT である。YAML 形式の採用により、各設定パラメータの選定理由や VRAM 推奨マージンをコメントとして直接記述可能としている。
+`ModelConfig`（旧 `RootConfig`）は `extra='forbid'` の Pydantic 検証を行うため、未知のキーを許可しない。
 
 | 設定ブロック | 主な項目 | 契約 |
 | :--- | :--- | :--- |

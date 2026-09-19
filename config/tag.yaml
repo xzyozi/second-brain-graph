@@ -1,0 +1,74 @@
+# ==============================================================================
+# Second Brain OS - タスク分類・品質ガードタグポリシー定義 (tag.yaml)
+# ==============================================================================
+# 本設定は、Issue のタスク種別判定（バグ修正 vs 新機能）および
+# テスト整合性ガード（アサーション改ざん検知・テストRead-only保護）の
+# ルールを定義します。コード内のハードコードを排除し、本ファイルで一元管理します。
+
+task_classification:
+  # テストファイルを完全 Read-only（編集不可・改変時ロールバック）として保護するタスク種別
+  read_only_test_tasks:
+    - "bug"
+    - "fix"
+    - "refactor"
+    - "hotfix"
+    - "defect"
+
+  # 新規テストの作成・追加が許可されるタスク種別
+  feature_tasks:
+    - "feat"
+    - "feature"
+    - "enhancement"
+    - "new"
+
+  # GitHub ラベルまたは Issue Frontmatter の type から標準種別への正規化マッピング
+  label_mappings:
+    bug: "fix"
+    fix: "fix"
+    defect: "fix"
+    hotfix: "fix"
+    enhancement: "feature"
+    feature: "feature"
+    feat: "feature"
+    refactor: "refactor"
+
+  # メタデータが存在しない場合のフォールバック用キーワードシグナル
+  fallback_keyword_signals:
+    - "[bug]"
+    - "[fix]"
+    - "[refactor]"
+    - "[hotfix]"
+    - "bug:"
+    - "fix:"
+    - "refactor:"
+    - "hotfix:"
+    - "type: bug"
+    - "type: fix"
+    - "type: refactor"
+    - "バグ"
+    - "不具合"
+    - "障害"
+    - "リファクタリング"
+    - "bug fix"
+    - "bugfix"
+    - "fix issue"
+
+quality_guard:
+  # git diff によるアサーション改ざん検知の有効化フラグ
+  tampering_detection_enabled: true
+
+  # 削除・弱体化を禁止する既存アサーション行のパターン
+  protected_assertion_patterns:
+    - "assert "
+    - "assert("
+    - " assert "
+    - "self.assert"
+    - "pytest.raises("
+    - "def test_"
+
+  # 挿入を禁止するテストスキップ行のパターン
+  forbidden_skip_patterns:
+    - "@pytest.mark.skip"
+    - "pytest.skip("
+    - "@unittest.skip"
+    - "skip("
