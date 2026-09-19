@@ -3,11 +3,20 @@ Unit tests for tools/aider_runner.py
 """
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.aider_runner import (
+    AiderRunError,
+    GitDiffError,
+    get_git_diff,
+    get_max_target_file_lines,
+    resolve_effective_edit_format,
+    revert_working_tree_files,
+    run_aider,
+)
 from tools.config_loader import BackendExecutionConfig
 
 
@@ -218,3 +227,192 @@ def test_get_default_aider_model_falls_back_on_config_error() -> None:
         model = get_default_aider_model()
 
     assert model == "ollama/qwen2.5-coder:7b-instruct"
+
+
+# ---------------------------------------------------------------------------
+# ハイブリッド編集モード & フォールバックのテスト
+# ---------------------------------------------------------------------------
+def test_get_max_target_file_lines(tmp_path: Path) -> None:
+    """実在ファイル群の最大行数が正しく取得されること、未存在ファイルが0行として扱われることを検証する。"""
+    f1 = tmp_path / "f1.py"
+    f1.write_text("a\nb\nc\n", encoding="utf-8")  # 3 lines
+
+    f2 = tmp_path / "f2.py"
+    f2.write_text("1\n2\n3\n4\n5\n", encoding="utf-8")  # 5 lines
+
+    # f2 が最大 (5行)
+    assert get_max_target_file_lines(str(tmp_path), ["f1.py", "f2.py", "nonexistent.py"]) == 5
+    # 未存在ファイルのみの場合は 0行
+    assert get_max_target_file_lines(str(tmp_path), ["nonexistent.py"]) == 0
+
+
+def test_resolve_effective_edit_format() -> None:
+    """hybrid モード時の行数閾値判定および明示指定時の挙動を検証する。"""
+    # hybrid モード: 閾値(100)未満は whole
+    assert resolve_effective_edit_format("hybrid", max_lines=50, threshold=100) == "whole"
+    assert resolve_effective_edit_format("hybrid", max_lines=99, threshold=100) == "whole"
+    # hybrid モード: 閾値(100)以上は diff
+    assert resolve_effective_edit_format("hybrid", max_lines=100, threshold=100) == "diff"
+    assert resolve_effective_edit_format("hybrid", max_lines=250, threshold=100) == "diff"
+
+    # 明示指定時: 行数に関わらずそのまま返る
+    assert resolve_effective_edit_format("whole", max_lines=500, threshold=100) == "whole"
+    assert resolve_effective_edit_format("diff", max_lines=10, threshold=100) == "diff"
+    assert resolve_effective_edit_format("udiff", max_lines=10, threshold=100) == "udiff"
+
+
+@patch("subprocess.run")
+def test_revert_working_tree_files(mock_run: MagicMock) -> None:
+    """revert_working_tree_files が git checkout -- target_files を呼び出すことを検証する。"""
+    mock_run.return_value.returncode = 0
+    revert_working_tree_files(".", ["foo.py", "bar.py"])
+    assert mock_run.called
+    first_call_args = mock_run.call_args_list[0][0][0]
+    assert first_call_args == ["git", "checkout", "--", "foo.py", "bar.py"]
+
+
+@patch("subprocess.run")
+def test_run_aider_hybrid_selects_whole_for_small_file(
+    mock_run: MagicMock, tmp_path: Path
+) -> None:
+    """行数が閾値未満のファイルに対して hybrid モードで whole が選択されることを検証する。"""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    small_file = tmp_path / "small.py"
+    small_file.write_text("\n".join([f"line_{i}" for i in range(50)]), encoding="utf-8")
+
+    res = run_aider(
+        "Edit small file",
+        ["small.py"],
+        cwd=str(tmp_path),
+        edit_format="hybrid",
+        hybrid_line_threshold=100,
+    )
+    assert res is True
+    aider_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "aider"]
+    assert len(aider_calls) == 1
+    cmd = aider_calls[0]
+    idx = cmd.index("--edit-format")
+    assert cmd[idx + 1] == "whole"
+
+
+@patch("subprocess.run")
+def test_run_aider_hybrid_selects_diff_for_large_file(
+    mock_run: MagicMock, tmp_path: Path
+) -> None:
+    """行数が閾値以上のファイルに対して hybrid モードで diff が選択されることを検証する。"""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    large_file = tmp_path / "large.py"
+    large_file.write_text("\n".join([f"line_{i}" for i in range(150)]), encoding="utf-8")
+
+    res = run_aider(
+        "Edit large file",
+        ["large.py"],
+        cwd=str(tmp_path),
+        edit_format="hybrid",
+        hybrid_line_threshold=100,
+    )
+    assert res is True
+    aider_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "aider"]
+    assert len(aider_calls) == 1
+    cmd = aider_calls[0]
+    idx = cmd.index("--edit-format")
+    assert cmd[idx + 1] == "diff"
+
+
+@patch("tools.aider_runner.revert_working_tree_files")
+@patch("subprocess.run")
+def test_run_aider_diff_falls_back_to_whole_on_failure(
+    mock_run: MagicMock, mock_revert: MagicMock, tmp_path: Path
+) -> None:
+    """diff 実行失敗時に revert が実行され whole モードでフォールバック再試行されることを検証する。"""
+    large_file = tmp_path / "large.py"
+    large_file.write_text("\n".join([f"line_{i}" for i in range(150)]), encoding="utf-8")
+
+    def side_effect(cmd: Any, *args: Any, **kwargs: Any) -> MagicMock:
+        if cmd[0] == "aider":
+            if "--edit-format" in cmd:
+                idx = cmd.index("--edit-format")
+                fmt = cmd[idx + 1]
+                if fmt == "diff":
+                    return MagicMock(returncode=1, stderr="diff failed to match context")
+                elif fmt == "whole":
+                    return MagicMock(returncode=0, stdout="Success", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    mock_run.side_effect = side_effect
+
+    res = run_aider(
+        "Edit file",
+        ["large.py"],
+        cwd=str(tmp_path),
+        edit_format="diff",
+        fallback_to_whole=True,
+    )
+    assert res is True
+
+    aider_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "aider"]
+    assert len(aider_calls) == 2
+
+    # 1回目の呼び出しは diff
+    idx1 = aider_calls[0].index("--edit-format")
+    assert aider_calls[0][idx1 + 1] == "diff"
+
+    # revert が呼ばれていること
+    mock_revert.assert_called_once_with(str(tmp_path), ["large.py"])
+
+    # 2回目の呼び出しは whole
+    idx2 = aider_calls[1].index("--edit-format")
+    assert aider_calls[1][idx2 + 1] == "whole"
+
+
+@patch("subprocess.run")
+def test_run_aider_diff_does_not_fallback_when_disabled(
+    mock_run: MagicMock, tmp_path: Path
+) -> None:
+    """fallback_to_whole=False の場合、diff 失敗時に再試行せず即座に例外を送出することを検証する。"""
+    def side_effect(cmd: Any, *args: Any, **kwargs: Any) -> MagicMock:
+        if cmd[0] == "aider":
+            return MagicMock(returncode=1, stderr="diff failed")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    mock_run.side_effect = side_effect
+
+    with pytest.raises(AiderRunError, match="returncode 1"):
+        run_aider(
+            "Edit file",
+            ["large.py"],
+            cwd=str(tmp_path),
+            edit_format="diff",
+            fallback_to_whole=False,
+        )
+
+    aider_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "aider"]
+    assert len(aider_calls) == 1
+
+
+@patch("tools.aider_runner.revert_working_tree_files")
+@patch("subprocess.run")
+def test_run_aider_diff_and_fallback_whole_both_fail(
+    mock_run: MagicMock, mock_revert: MagicMock, tmp_path: Path
+) -> None:
+    """diff と フォールバック whole の両方が失敗した場合、例外が送出されることを検証する。"""
+    def side_effect(cmd: Any, *args: Any, **kwargs: Any) -> MagicMock:
+        if cmd[0] == "aider":
+            return MagicMock(returncode=1, stderr="diff failed")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    mock_run.side_effect = side_effect
+
+    with pytest.raises(AiderRunError, match="returncode 1"):
+        run_aider(
+            "Edit file",
+            ["large.py"],
+            cwd=str(tmp_path),
+            edit_format="diff",
+            fallback_to_whole=True,
+        )
+
+    aider_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "aider"]
+    assert len(aider_calls) == 2
+    mock_revert.assert_called_once()
+

@@ -17,6 +17,8 @@ class AiderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     no_auto_commits: bool = True
     edit_format: Optional[str] = None
+    hybrid_line_threshold: int = 100
+    fallback_to_whole: bool = True
     timeout: int = 1200
     description: Optional[str] = None
 

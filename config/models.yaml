@@ -24,9 +24,11 @@ models:
 # Aider CLI 自動コード編集エンジン設定
 aider:
   description: "Aider 自動コード編集用モデル設定"
-  no_auto_commits: true  # オーケストレーター側で境界検証とアトミックコミットを統制するため無効化
-  edit_format: "whole"   # ローカル小型モデルでの SEARCH/REPLACE 破壊を防ぎ、ファイル全体置換を強制
-  timeout: 1200          # 複数ファイルの推論・編集を考慮し十分なタイムアウト (秒) を確保
+  no_auto_commits: true       # オーケストレーター側で境界検証とアトミックコミットを統制するため無効化
+  edit_format: "hybrid"       # whole / diff / udiff / hybrid (ファイル行数に応じた自動切替)
+  hybrid_line_threshold: 100  # 100行未満は安全な whole、100行以上は高速な diff を試行
+  fallback_to_whole: true     # diff 失敗時に安全に whole へ自動フォールバック
+  timeout: 1200               # 複数ファイルの推論・編集を考慮し十分なタイムアウト (秒) を確保
 
 # GPU 排他リースおよびバックエンドルーティング
 backend_execution:
