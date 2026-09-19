@@ -33,13 +33,13 @@
 ### 公開 API 関数
 ```python
 from tools.config_loader import (
-    get_config,              # 統合 AppConfig (models, prompt, tag)
-    load_model_config,       # ModelConfig (models.yaml)
-    load_prompt_config,      # PromptConfig (prompt.yaml)
-    load_tag_config,         # TagConfig (tag.yaml)
-    get_model_params,        # 特定ロール (planner/coder/reviewer) のパラメータ
+    get_config,  # 統合 AppConfig (models, prompt, tag)
+    load_model_config,  # ModelConfig (models.yaml)
+    load_prompt_config,  # PromptConfig (prompt.yaml)
+    load_tag_config,  # TagConfig (tag.yaml)
+    get_model_params,  # 特定ロール (planner/coder/reviewer) のパラメータ
     get_backend_execution_config,  # GPU リースおよびルーティング設定
-    get_aider_config,        # Aider 実行パラメータ
+    get_aider_config,  # Aider 実行パラメータ
 )
 ```
 
