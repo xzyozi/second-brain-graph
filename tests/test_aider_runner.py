@@ -416,3 +416,95 @@ def test_run_aider_diff_and_fallback_whole_both_fail(
     assert len(aider_calls) == 2
     mock_revert.assert_called_once()
 
+
+def test_get_max_target_file_lines_empty_and_unicode(tmp_path: Path) -> None:
+    """空ファイルおよびマルチバイト（日本語）ファイルの行数判定を検証する。"""
+    empty_file = tmp_path / "empty.py"
+    empty_file.write_text("", encoding="utf-8")
+
+    japanese_file = tmp_path / "japanese.py"
+    jp_content = "\n".join([f"# 日本語コメント行 {i}：テストデータ" for i in range(42)])
+    japanese_file.write_text(jp_content, encoding="utf-8")
+
+    assert get_max_target_file_lines(str(tmp_path), ["empty.py"]) == 0
+    assert get_max_target_file_lines(str(tmp_path), ["japanese.py"]) == 42
+    assert get_max_target_file_lines(str(tmp_path), ["empty.py", "japanese.py"]) == 42
+
+
+@patch("subprocess.run")
+def test_run_aider_hybrid_mixed_files_selects_diff(
+    mock_run: MagicMock, tmp_path: Path
+) -> None:
+    """小規模ファイルと大規模ファイルが混在する場合、最大行数が閾値以上であれば diff が選択されることを検証する。"""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    f1 = tmp_path / "small.py"
+    f1.write_text("\n".join([f"line_{i}" for i in range(20)]), encoding="utf-8")
+    f2 = tmp_path / "large.py"
+    f2.write_text("\n".join([f"line_{i}" for i in range(120)]), encoding="utf-8")
+
+    res = run_aider(
+        "Edit both files",
+        ["small.py", "large.py"],
+        cwd=str(tmp_path),
+        edit_format="hybrid",
+        hybrid_line_threshold=100,
+    )
+    assert res is True
+    aider_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][0] == "aider"]
+    assert len(aider_calls) == 1
+    cmd = aider_calls[0]
+    idx = cmd.index("--edit-format")
+    assert cmd[idx + 1] == "diff"
+
+
+@patch("subprocess.run")
+def test_run_aider_sanitizes_ollama_api_base_v1_slash_suffix(
+    mock_run: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OLLAMA_API_BASE に /v1/ (末尾スラッシュ付き) が指定された場合でもサニタイズされることを検証する。"""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://localhost:11434/v1/")
+
+    run_aider("Fix bug", ["test.py"])
+
+    assert mock_run.called
+    env_passed = mock_run.call_args[1]["env"]
+    assert env_passed["OLLAMA_API_BASE"] == "http://localhost:11434"
+
+
+@patch("tools.aider_runner.cleanup_unauthorized_aider_artifacts")
+@patch("tools.aider_runner.revert_working_tree_files")
+@patch("subprocess.run")
+def test_run_aider_fallback_cleans_up_artifacts(
+    mock_run: MagicMock,
+    mock_revert: MagicMock,
+    mock_cleanup: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """diff 実行失敗時に revert と cleanup が確実に呼び出されることを検証する。"""
+    large_file = tmp_path / "large.py"
+    large_file.write_text("\n".join([f"line_{i}" for i in range(150)]), encoding="utf-8")
+
+    def side_effect(cmd: Any, *args: Any, **kwargs: Any) -> MagicMock:
+        if cmd[0] == "aider":
+            if "--edit-format" in cmd:
+                idx = cmd.index("--edit-format")
+                if cmd[idx + 1] == "diff":
+                    return MagicMock(returncode=1, stderr="failed diff patch")
+                elif cmd[idx + 1] == "whole":
+                    return MagicMock(returncode=0, stdout="success")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    mock_run.side_effect = side_effect
+
+    res = run_aider(
+        "Edit large file",
+        ["large.py"],
+        cwd=str(tmp_path),
+        edit_format="diff",
+        fallback_to_whole=True,
+    )
+    assert res is True
+    mock_revert.assert_called_once_with(str(tmp_path), ["large.py"])
+    assert mock_cleanup.called
+
