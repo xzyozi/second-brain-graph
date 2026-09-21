@@ -22,6 +22,7 @@ if str(_JEV_SRC) not in sys.path and _JEV_SRC.exists():
 
 try:
     from jev import JudgePipeline, JudgeRequestDTO, JudgeResponseDTO
+
     _JEV_AVAILABLE = True
 except ImportError:
     _JEV_AVAILABLE = False
@@ -48,11 +49,7 @@ def get_jev_pipeline(
         return None
 
     if _PIPELINE_INSTANCE is None:
-        effective_model = (
-            model_name
-            or os.environ.get("JEV_MODEL")
-            or "qwen2.5:0.5b"
-        )
+        effective_model = model_name or os.environ.get("JEV_MODEL") or "qwen2.5:0.5b"
         effective_url = (
             ollama_base_url
             or os.environ.get("OLLAMA_API_BASE")

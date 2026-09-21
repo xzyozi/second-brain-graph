@@ -40,13 +40,17 @@
 │   │   ├── planner.md
 │   │   ├── coder.md
 │   │   └── reviewer.md
-│   ├── orchestrator_graph.py       # LangGraph本体 ＆ CLI
+│   ├── orchestrator_graph.py       # LangGraph本体 ＆ CLI (JEV計画適合性ゲート内包)
+│   ├── jev_adapter.py              # JEV (Zero-Decode判定エンジン) 連携アダプター
 │   ├── llm_client.py               # LiteLLMラッパー
 │   ├── aider_runner.py              # Aider自動制御モジュール
 │   ├── score-issues.py              # 全衛星横断タスクスコアリングスクリプト
 │   ├── check-blockers.py            # 依存関係ブロッキング検知スクリプト
 │   ├── notify.py                    # 通知バッチ (--event daily_summary)
 │   └── backup-second-brain.ps1      # 定期バックアップスクリプト
+│
+├── submodules/                     # 内部組み込みモジュール (Git Submodule)
+│   └── jev-localsystem/            # JEV Zero-Decodeローカル判定推論基盤
 │
 ├── metadata/                       # メタデータおよび台帳格納ディレクトリ（正本）
 │   ├── .project-registry.json      # 衛星中央台帳 (Issueプレフィックス -> パスマッピング)

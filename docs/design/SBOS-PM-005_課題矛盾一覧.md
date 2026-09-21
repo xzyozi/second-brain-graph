@@ -78,7 +78,7 @@
 | **PM-050** | DD / ORCH                                       | 🟠 中   | Ollama (localhost:11434) と llama-server (localhost:8080) のLLMバックエンド接続経路・起動方針が混在している         | `BackendExecutionCoordinator` を導入し、推論目的（intent）に応じた排他併用（Exclusive Co-usage）アーキテクチャへ移行                                                 | 🟢 解決済み                             |
 | **PM-051** | DD-003 §10.3                                    | 🔴 高   | LLM 送信プロンプト・実行履歴・Failure Report への機密情報漏洩リスク (Issue #20)                                      | `tools/sanitizer.py` を新設し、APIキー・トークン・秘密鍵・認証URL・パスワード・メール等の自動マスキングを全境界に統合 | 🟢 解決済み                             |
 | **PM-052** | DD-003 §10.4                                    | 🟡 低   | `orchestrator_graph.py` の肥大化およびステータス管理の型安全性欠如 (Issue #22)                                       | `tools/metadata_store.py` へ状態・履歴・排他ロック管理を独立分離し `TaskStatus` / `ErrorCategory` Enum を導入          | 🟢 解決済み                             |
-| **PM-053** | DD-003 §5.5, §5.7 / DD-006 §1.1                | 🔴 高   | `spec_draft_node` における実装計画の要件逸脱・スコープ超過（YAGNI違反）の自動検知欠如。Planner LLM が勝手な仕様追加や過剰設計を行っても検問ゲートがなく、Aider の無駄なコード生成と後段爆死を招く。 | Zero-Decode ローカル判定基盤 JEV (`NoulTask`) を導入し、`spec_draft_node` 直後に計画適合性ゲート（Defense 0: DoD Conformance Gate）を新設。YAGNI違反計画を 39ms で検知・即時再ドラフトさせる安全回路を構築。 | 🟡 進行中                               |
+| **PM-053** | DD-003 §5.5, §5.7 / DD-006 §1.1                | 🔴 高   | `spec_draft_node` における実装計画の要件逸脱・スコープ超過（YAGNI違反）の自動検知欠如。Planner LLM が勝手な仕様追加や過剰設計を行っても検問ゲートがなく、Aider の無駄なコード生成と後段爆死を招く。 | Zero-Decode ローカル判定基盤 JEV (`NoulTask`) を導入し、`spec_draft_node` 直後に計画適合性ゲート（Defense 0: DoD Conformance Gate）を新設。YAGNI違反計画を 39ms で検知・即時再ドラフトさせる安全回路を構築。 | 🟢 解決済み                             |
 
 ---
 
@@ -263,6 +263,11 @@
     - 適合 (`is_valid == True`): `code_node` へ進行。
     - 不適合 (`is_valid == False`): `retry_spec_draft` を発行。Planner に「前回の計画はYAGNI違反と判定された。不要な改修を削ぎ落として最小限の実装方針を再策定せよ」というフィードバック指示を注入して再計画。
     - リトライ上限（2回）到達時は `FAILED_B7` で安全停止。
+* **対応内容（実装完了）**:
+  1. `submodules/jev-localsystem` を Git Submodule として取り込み、Core SDK (`JudgePipeline`, `JudgeRequestDTO`) によるローカル Zero-Decode 推論環境を構築。
+  2. `tools/jev_adapter.py` を実装し、`verify_plan_conformance(issue_id, instruction, impl_plan, target_files)` により 39ms での適合判定とフェイルオープン安全回路を提供。
+  3. `tools/orchestrator_graph.py` の `GraphState` に `plan_conformance_status`, `plan_conformance_score`, `plan_conformance_round` を追加し、`spec_draft_node` 直後に検問ゲートを配置。YAGNI違反時はフィードバック付き `retry_spec_draft`、上限2回で `FAILED_B7` へ遷移するよう条件エッジを拡張。
+  4. `tests/test_jev_plan_conformance.py` にて単体・統合テスト全7件を実装し、全テスト合格（100% pass）を確認。
 
 ---
 
