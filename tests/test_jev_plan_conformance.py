@@ -115,7 +115,9 @@ def test_spec_draft_node_conformance_passed(mock_verify: MagicMock, mock_llm: Ma
 
 @patch("tools.llm_client.call_llm")
 @patch("tools.jev_adapter.verify_plan_conformance")
-def test_spec_draft_node_conformance_retry_and_b7(mock_verify: MagicMock, mock_llm: MagicMock) -> None:
+def test_spec_draft_node_conformance_retry_and_b7(
+    mock_verify: MagicMock, mock_llm: MagicMock
+) -> None:
     """spec_draft_node: 1回目は retry_spec_draft、2回目は FAILED_B7 に遷移すること。"""
     mock_llm.return_value = {"content": "1. Re-architect everything (YAGNI violation)"}
     mock_verify.return_value = (False, 0.85, "JEV Plan Conformance: REJECTED")
