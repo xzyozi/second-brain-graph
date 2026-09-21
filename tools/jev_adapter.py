@@ -85,7 +85,7 @@ PLAN_CONFORMANCE_POLICY = (
 def verify_plan_conformance(
     issue_id: str,
     instruction: str,
-    impl_plan: str,
+    impl_plan: Optional[str] = None,
     target_files: Optional[List[str]] = None,
     pipeline: Optional[Any] = None,
 ) -> Tuple[bool, float, str]:

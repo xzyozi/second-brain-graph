@@ -286,7 +286,7 @@ def spec_draft_node(state: GraphState) -> GraphState:
         is_valid, conf, detail = verify_plan_conformance(
             issue_id=state["issue_id"],
             instruction=instruction_text,
-            impl_plan=state["impl_plan"],
+            impl_plan=state.get("impl_plan") or "",
             target_files=state.get("target_files", []),
         )
         state["plan_conformance_score"] = conf

@@ -9,12 +9,12 @@ from tools.jev_adapter import (
 from tools.orchestrator_graph import GraphState, spec_draft_node
 
 
-def test_jev_available():
+def test_jev_available() -> None:
     """JEV Core SDK がサブモジュールから正常にインポート可能であることを確認。"""
     assert is_jev_available() is True
 
 
-def test_verify_plan_conformance_empty_plan():
+def test_verify_plan_conformance_empty_plan() -> None:
     """空の実装計画は即時不適合となること。"""
     is_valid, conf, detail = verify_plan_conformance(
         issue_id="TEST-001",
@@ -26,7 +26,7 @@ def test_verify_plan_conformance_empty_plan():
     assert "Empty" in detail
 
 
-def test_verify_plan_conformance_passed():
+def test_verify_plan_conformance_passed() -> None:
     """JEV パイプラインが Yes を返した場合、適合 (True) となること。"""
     mock_pipeline = MagicMock()
     mock_response = MagicMock()
@@ -50,7 +50,7 @@ def test_verify_plan_conformance_passed():
     assert mock_pipeline.judge.called
 
 
-def test_verify_plan_conformance_rejected():
+def test_verify_plan_conformance_rejected() -> None:
     """JEV パイプラインが No (YAGNI違反) を返した場合、不適合 (False) となること。"""
     mock_pipeline = MagicMock()
     mock_response = MagicMock()
@@ -73,7 +73,7 @@ def test_verify_plan_conformance_rejected():
     assert "REJECTED" in detail
 
 
-def test_verify_plan_conformance_fail_open_on_exception():
+def test_verify_plan_conformance_fail_open_on_exception() -> None:
     """JEV パイプライン実行中に例外が発生した場合、安全にフェイルオープン (True) すること。"""
     mock_pipeline = MagicMock()
     mock_pipeline.judge.side_effect = RuntimeError("Ollama connection refused")
@@ -93,7 +93,7 @@ def test_verify_plan_conformance_fail_open_on_exception():
 
 @patch("tools.llm_client.call_llm")
 @patch("tools.jev_adapter.verify_plan_conformance")
-def test_spec_draft_node_conformance_passed(mock_verify, mock_llm):
+def test_spec_draft_node_conformance_passed(mock_verify: MagicMock, mock_llm: MagicMock) -> None:
     """spec_draft_node: 計画が適合した場合、running ステータスで通過すること。"""
     mock_llm.return_value = {"content": "1. Minimal fix in src/calc.py"}
     mock_verify.return_value = (True, 0.92, "JEV Plan Conformance: PASSED")
@@ -115,7 +115,7 @@ def test_spec_draft_node_conformance_passed(mock_verify, mock_llm):
 
 @patch("tools.llm_client.call_llm")
 @patch("tools.jev_adapter.verify_plan_conformance")
-def test_spec_draft_node_conformance_retry_and_b7(mock_verify, mock_llm):
+def test_spec_draft_node_conformance_retry_and_b7(mock_verify: MagicMock, mock_llm: MagicMock) -> None:
     """spec_draft_node: 1回目は retry_spec_draft、2回目は FAILED_B7 に遷移すること。"""
     mock_llm.return_value = {"content": "1. Re-architect everything (YAGNI violation)"}
     mock_verify.return_value = (False, 0.85, "JEV Plan Conformance: REJECTED")
