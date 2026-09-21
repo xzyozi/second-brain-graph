@@ -233,12 +233,21 @@ class GraphState(TypedDict, total=False):
     history_summary: Optional[Dict[str, Any]]
     rdjson: Optional[Dict[str, Any]]
     boundary_warning: Optional[str]
+    plan_conformance_status: Optional[str]
+    plan_conformance_score: Optional[float]
+    plan_conformance_round: int
 
 
 def spec_draft_node(state: GraphState) -> GraphState:
-    """Issue に対する実装方針計画を策定し、impl_plan へ構造保存するノード (DD-003 §4)."""
+    """Issue に対する実装方針計画を策定し、impl_plan へ構造保存するノード (DD-003 §4).
+    JEV による計画適合性検問 (Defense 0: DoD Conformance Gate, PM-053) を実施し、
+    YAGNI違反・スコープ逸脱を検知した場合は再ドラフトを要求する。
+    """
     logger.info("Executing spec_draft_node")
+    from tools.jev_adapter import verify_plan_conformance
     from tools.llm_client import call_llm
+
+    state.setdefault("plan_conformance_round", 0)
 
     try:
         system_prompt = (
@@ -257,6 +266,10 @@ def spec_draft_node(state: GraphState) -> GraphState:
             f"Target Files in Repository: {target_files_str or 'None'}\n\n"
             f"Issue Specifications & Requirements:\n{instruction_text or 'No specific instructions provided.'}"
         )
+        # 過去の YAGNI 違反フィードバックがあれば注入
+        if state.get("plan_conformance_status") == "rejected" and state.get("aider_message"):
+            user_prompt += f"\n\n[PREVIOUS PLAN REJECTION FEEDBACK]\n{state['aider_message']}"
+
         res = call_llm(
             role="planner",
             intent="spec_draft",
@@ -268,6 +281,44 @@ def spec_draft_node(state: GraphState) -> GraphState:
         else:
             plan_str = str(res)
         state["impl_plan"] = plan_str.strip()
+
+        # --- JEV 計画適合性検問ゲート (Defense 0: DoD Conformance Gate, PM-053) ---
+        is_valid, conf, detail = verify_plan_conformance(
+            issue_id=state["issue_id"],
+            instruction=instruction_text,
+            impl_plan=state["impl_plan"],
+            target_files=state.get("target_files", []),
+        )
+        state["plan_conformance_score"] = conf
+
+        if is_valid:
+            state["plan_conformance_status"] = "passed"
+            state["status"] = "running"
+            state.pop("aider_message", None)
+        else:
+            state["plan_conformance_status"] = "rejected"
+            state["plan_conformance_round"] = state.get("plan_conformance_round", 0) + 1
+            logger.warning(
+                f"[{state['issue_id']}] Plan Conformance Check REJECTED (Round {state['plan_conformance_round']}/2): {detail}"
+            )
+
+            if state["plan_conformance_round"] >= 2:
+                logger.error(
+                    f"[{state['issue_id']}] Plan Conformance exceeded max retries (2). Escalating to FAILED_B7."
+                )
+                state["status"] = "FAILED_B7"
+                state["error_category"] = "REVIEW_REJECTED"
+                state["error"] = (
+                    f"Implementation plan repeatedly violated YAGNI / scope constraints ({detail})"
+                )
+            else:
+                state["status"] = "retry_spec_draft"
+                state["aider_message"] = (
+                    "【YAGNI VIOLATION FEEDBACK】\n"
+                    "前回の実装計画は要件逸脱または過剰設計（YAGNI違反）と判定されました。\n"
+                    "未要求の拡張や無関係なファイルへの変更をすべて削ぎ落とし、"
+                    "Issue要件を満たす最小限の実装計画を再策定してください。"
+                )
     except Exception as e:
         if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")):
             logger.warning(f"Timeout caught in spec_draft_node: {e}")
@@ -1623,7 +1674,7 @@ def execute_issue(
             workflow.set_entry_point("spec_draft")
 
             def route_after_spec(s: GraphState) -> str:
-                if s.get("status") == "FAILED_SYSTEM":
+                if s.get("status") in ["FAILED_SYSTEM", "FAILED_B7"]:
                     return "escalate_node"
                 if s.get("status") == "retry_spec_draft":
                     return "spec_draft"
