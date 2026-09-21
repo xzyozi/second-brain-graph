@@ -3,18 +3,33 @@
 | 項目 | 内容 |
 | --- | --- |
 | 文書名 | Second Brain OS - 品質ゲートおよびレビュー制御仕様 |
-| 版数 | Rev.1.0 |
-| 改訂日 | 2026年8月8日 |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計） |
-| 対象コンポーネント | `lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node`、`reviewdog` |
-| 役割 | コード生成後の静的解析、自動テスト、LLMによるコードレビュー、およびRDJSONフォーマットへの変換とエスカレーション処理 |
+| 版数 | Rev.1.1（Defense 0: JEV 計画適合性検問ゲートの追記） |
+| 改訂日 | 2026年9月21日 |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、PM-053 |
+| 対象コンポーネント | `spec_draft_node (JEV 計画適合性ゲート)`、`lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node`、`reviewdog` |
+| 役割 | 計画段階のYAGNI検問、コード生成後の静的解析、自動テスト、LLMによるコードレビュー、およびRDJSONフォーマットへの変換とエスカレーション処理 |
 
 ---
 
 ## 1. 概要と基本方針
 
-本仕様は、Aider等によるコード生成の直後に実行される「品質検証ループ」を定義する。
-品質検証ループは、Ruffによるフォーマットと構文チェック、pytestによる自動テスト、そしてLLM（Reviewer）による静的コードレビューの3段階で構成される。
+本仕様は、エージェントの自律実行ループにおける「多層防衛品質ゲート」を定義する。
+品質ゲートは、コード生成前の「計画適合性検問（Defense 0: JEV Plan Conformance）」、生成直後の「Ruff 静的解析（Defense 1）」、「pytest 自動テスト（Defense 2）」、および「LLM 静的コードレビュー（Defense 3）」の4段階で構成される。
+
+### 1.1 計画適合性検問ゲート (`spec_draft_node` / Defense 0: JEV Plan Conformance)
+
+* **目的**: Aider による本格的なコード生成に入る前に、Planner LLM が策定した `impl_plan`（Definition of Done / 実装方針計画）が Issue の要求仕様を逸脱・肥大化（YAGNI 違反・勝手な機能追加）させていないかを水際で検証し、GPU リソースの無駄な浪費と後段爆死を未然に防止する。
+* **判定方式**: Zero-Decode 高速判定基盤 JEV (`submodules/jev-localsystem`) の `NoulTask`（規程適合判定）による 39ms 1トークン推論。
+* **入力パラメータ**:
+  1. `instruction`: Issue 本文および要求仕様
+  2. `target_files`: 対象ファイル一覧
+  3. `impl_plan`: Planner LLM が策定した実装計画
+* **判定規程 (Policy)**:
+  「この実装計画は、Issue要件の範囲内に厳密に限定されており、要求されていない新機能追加、過剰な共通化、または無関係な設定ファイルの変更（YAGNI違反・Scope Creep）を含んでいないか？」
+* **状態遷移契約**:
+  * **適合 (`is_valid == True`)**: `plan_conformance_status = "passed"` を設定し、`code_node` へ進行。
+  * **不適合 (`is_valid == False`)**: `plan_conformance_status = "rejected"` を設定し、`plan_conformance_round` を加算。Planner への入力プロンプトに `【YAGNI VIOLATION FEEDBACK】前回の計画は要件逸脱（YAGNI違反）と判定されました。不要な改修を削ぎ落とし、Issue要件を満たす最小限の実装計画を再策定してください。` を注入し、`retry_spec_draft` で再ドラフトを要求する。
+  * **エスカレーション**: 再ドラフトが上限（2回）に達した場合は `FAILED_B7` として安全停止し、人間へのエスカレーションを行う。
 
 ## 2. 品質 Adapter (`lint_node` / `run_pytest_node`)
 
