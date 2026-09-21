@@ -31,6 +31,40 @@ except ImportError:
         "Make sure 'git submodule update --init' has been executed."
     )
 
+    class JudgeRequestDTO:  # type: ignore[no-redef]
+        """JEV Core SDK 未展開環境用のフォールバック DTO。"""
+
+        def __init__(
+            self,
+            task_type: str = "noul",
+            context_text: str = "",
+            rule_definition: str = "",
+            **kwargs: Any,
+        ) -> None:
+            self.task_type = task_type
+            self.context_text = context_text
+            self.rule_definition = rule_definition
+            self.extra = kwargs
+
+    class JudgeResponseDTO:  # type: ignore[no-redef]
+        """JEV Core SDK 未展開環境用のフォールバック DTO。"""
+
+        def __init__(
+            self,
+            status: str = "SUCCESS",
+            verdict: Optional[str] = None,
+            confidence: Optional[float] = None,
+            latency_ms: float = 0.0,
+            error_message: Optional[str] = None,
+        ) -> None:
+            self.status = status
+            self.verdict = verdict
+            self.confidence = confidence
+            self.latency_ms = latency_ms
+            self.error_message = error_message
+
+    JudgePipeline = None  # type: ignore[misc,assignment]
+
 _PIPELINE_INSTANCE: Optional[Any] = None
 
 

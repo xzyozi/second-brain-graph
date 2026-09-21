@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from tools.jev_adapter import (
+    _JEV_SRC,
     is_jev_available,
     verify_plan_conformance,
 )
@@ -10,8 +11,13 @@ from tools.orchestrator_graph import GraphState, spec_draft_node
 
 
 def test_jev_available() -> None:
-    """JEV Core SDK がサブモジュールから正常にインポート可能であることを確認。"""
-    assert is_jev_available() is True
+    """JEV Core SDK の検出状態を検証する（サブモジュール未展開環境ではFalse、配置環境ではTrue）。"""
+    available = is_jev_available()
+    assert isinstance(available, bool)
+    if (_JEV_SRC / "jev").exists():
+        assert available is True
+    else:
+        assert available is False
 
 
 def test_verify_plan_conformance_empty_plan() -> None:
