@@ -63,7 +63,15 @@ except ImportError:
             self.latency_ms = latency_ms
             self.error_message = error_message
 
-    JudgePipeline = None  # type: ignore[misc,assignment]
+    class JudgePipeline:  # type: ignore[no-redef]
+        """JEV Core SDK 未展開環境用のフォールバック Pipeline。"""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def judge(self, request: Any) -> Any:
+            raise RuntimeError("JEV Core SDK is not installed")
+
 
 _PIPELINE_INSTANCE: Optional[Any] = None
 
