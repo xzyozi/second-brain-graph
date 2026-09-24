@@ -902,49 +902,56 @@ def review_node(state: GraphState) -> GraphState:
         # Reviewer LLM が LGTM を返した場合のみ、JEV (Zero-Decode) で合否判定の裏取り検証を行う。
         jev_review_info: Optional[Dict[str, Any]] = None
         if verdict == "LGTM":
-            try:
-                from tools.jev_adapter import verify_review_conformance
-
-                # pytest 終了コードの取得 (0: 成功, それ以外: 失敗)
-                pytest_rc: Optional[int] = None
-                if isinstance(state.get("test_result"), dict):
-                    pytest_rc = state["test_result"].get("returncode")
-                elif isinstance(state.get("pytest_result"), dict):
-                    pytest_rc = state["pytest_result"].get("returncode")
-
-                is_valid, confidence, detail = verify_review_conformance(
-                    issue_id=state.get("issue_id", "UNKNOWN"),
-                    instruction=state.get("instruction", ""),
-                    diff_text=diff_text,
-                    impl_plan=state.get("impl_plan"),
-                    pytest_returncode=pytest_rc,
+            # cwd 未指定かつ diff も空の環境（モック単体テスト等）は安全にバイパス
+            if not cwd and not diff_text:
+                logger.info(
+                    f"[{state.get('issue_id')}] No cwd or diff available for JEV review. Bypassing."
                 )
+            else:
+                try:
+                    from tools.jev_adapter import verify_review_conformance
 
-                jev_review_info = {
-                    "is_valid": is_valid,
-                    "confidence": confidence,
-                    "detail": detail,
-                }
-                state["review_conformance_status"] = "passed" if is_valid else "rejected"
-                state["review_conformance_score"] = confidence
+                    # pytest 終了コードの取得 (0: 成功, それ以外: 失敗)
+                    pytest_rc: Optional[int] = None
+                    test_res = state.get("test_result")
+                    if isinstance(test_res, dict):
+                        rc_val = test_res.get("returncode")
+                        if isinstance(rc_val, int):
+                            pytest_rc = rc_val
 
-                if not is_valid:
+                    is_valid, confidence, detail = verify_review_conformance(
+                        issue_id=state.get("issue_id", "UNKNOWN"),
+                        instruction=state.get("instruction", ""),
+                        diff_text=diff_text,
+                        impl_plan=state.get("impl_plan"),
+                        pytest_returncode=pytest_rc,
+                    )
+
+                    jev_review_info = {
+                        "is_valid": is_valid,
+                        "confidence": confidence,
+                        "detail": detail,
+                    }
+                    state["review_conformance_status"] = "passed" if is_valid else "rejected"
+                    state["review_conformance_score"] = confidence
+
+                    if not is_valid:
+                        logger.warning(
+                            f"[{state.get('issue_id')}] JEV secondary review rejected LGTM verdict: {detail}"
+                        )
+                        verdict = "changes_requested"
+                        structured_comments.append(
+                            {
+                                "file": target_file,
+                                "line": 1,
+                                "message": f"【JEV REVIEW REJECTED】{detail}",
+                                "severity": "STRUCTURAL",
+                            }
+                        )
+                except Exception as jev_e:
                     logger.warning(
-                        f"[{state.get('issue_id')}] JEV secondary review rejected LGTM verdict: {detail}"
+                        f"[{state.get('issue_id')}] JEV review conformance verification failed ({jev_e}). Bypassing."
                     )
-                    verdict = "changes_requested"
-                    structured_comments.append(
-                        {
-                            "file": target_file,
-                            "line": 1,
-                            "message": f"【JEV REVIEW REJECTED】{detail}",
-                            "severity": "STRUCTURAL",
-                        }
-                    )
-            except Exception as jev_e:
-                logger.warning(
-                    f"[{state.get('issue_id')}] JEV review conformance verification failed ({jev_e}). Bypassing."
-                )
 
         rev_round = state.get("review_round", 0) + 1
         state["review_round"] = rev_round
