@@ -1,0 +1,4 @@
+[submodule "submodules/jev-localsystem"]
+	path = submodules/jev-localsystem
+	url = https://github.com/xzyozi/jev-localsystem.git
+	branch = develop

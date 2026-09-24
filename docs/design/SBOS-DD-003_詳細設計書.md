@@ -55,6 +55,7 @@ flowchart LR
 | `backend_coordinator.py` | `BackendExecutionCoordinator.execute()`          | intent の profile 解決、GPU リース、Backend Adapter 選択。             |
 | `llama_backend.py`       | `managed_llama_server()`                         | llama-server プロセスの起動、待機、終了、ポート解放確認。              |
 | `aider_runner.py`        | `run_aider()`、`get_git_diff()`                  | Aider CLI 実行と Git 差分取得。                                        |
+| `jev_adapter.py`         | `verify_plan_conformance()`                      | JEV Core SDK (NoulTask) を用いた Zero-Decode 計画適合性判定（DoD YAGNI検問）。 |
 | `run_task.py`            | `clean_satellite_repository()`、`main()`         | 排他ロック保護下でのクリーンアップおよびオーケストレーター起動ラッパー。 |
 
 ## 3. 設定モデルとルーティング
@@ -158,7 +159,7 @@ sequenceDiagram
 
 | 実行 node            | 成功時の status と次 node                                         | 再試行時の status と次 node                          | 終端・停止                                      |
 | :------------------- | :---------------------------------------------------------------- | :--------------------------------------------------- | :---------------------------------------------- |
-| `spec_draft_node`    | `running` → `code_node`                                           | `retry_spec_draft` → 同 node                         | `FAILED_SYSTEM` → `escalate_node`               |
+| `spec_draft_node`    | `running` (計画適合) → `code_node`                                | `retry_spec_draft` (timeout または YAGNI違反) → 同 node | `FAILED_B7` (計画不適合上限) / `FAILED_SYSTEM` → `escalate_node` |
 | `code_node`          | `code_completed` → `lint_node`                                    | `retry_code` → 同 node                               | `FAILED_SYSTEM` → `escalate_node`               |
 | `lint_node`          | `lint_passed` → `test_node`                                       | `retry_code` → `code_node`                           | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node` |
 | `run_pytest_node`    | `test_passed` → `review_node`                                     | テスト失敗 → `test_feedback_node`                    | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node` |
@@ -176,6 +177,10 @@ flowchart TD
     Timeout --> Limit{count >= 2?}
     Limit -->|No| RetryLLM[該当 node を再試行]
     Limit -->|Yes| System[FAILED_SYSTEM]
+    Type -->|計画適合性 YAGNI 違反| PlanRound[plan_conformance_round を加算]
+    PlanRound --> PlanLimit{round >= 2?}
+    PlanLimit -->|No| RetrySpec[retry_spec_draft で再計画]
+    PlanLimit -->|Yes| B7
     Type -->|lint / test / review の失敗| Round[対応する round を加算]
     Round --> RoundLimit{round >= max_round?}
     RoundLimit -->|No: lint/review| Code[code_node へ戻る]
@@ -189,13 +194,13 @@ flowchart TD
     PRFail --> Persist
 ```
 
-`llm_timeout_count` は planner、Aider、reviewer 間で共有される。異なる node の timeout も合算され、2回目で `FAILED_SYSTEM` となる。`escalate_node` は lint または test の上限到達時に敗因レポートの生成を試み、成功時は最終 status を `ESCALATED_NEEDS_REVISION` に更新する。
+`llm_timeout_count` は planner、Aider、reviewer 間で共有される。異なる node の timeout も合算され、2回目で `FAILED_SYSTEM` となる。`spec_draft_node` の計画適合性（DoD YAGNI検問）が不適合（`rejected`）となった場合、`plan_conformance_round` を加算して最大2回まで再ドラフトを試行し、上限到達時は `FAILED_B7` となる。`escalate_node` は lint または test の上限到達時に敗因レポートの生成を試み、成功時は最終 status を `ESCALATED_NEEDS_REVISION` に更新する。
 
 ### 5.7 Node 契約
 
 | Node                 | 成功時                                                                                                      | 再試行・エスカレーション                                                                               |
 | :------------------- | :---------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
-| `spec_draft_node`    | planner の出力を `impl_plan` へ保存する。                                                                   | timeout は初回 `retry_spec_draft`、2回目は `FAILED_SYSTEM`。その他例外は `SYSTEM_ERROR`。              |
+| `spec_draft_node`    | planner 出力を `impl_plan` へ保存し、JEV 計画適合性ゲートで検証。適合（`passed`）なら `code_node` へ進行。    | YAGNI違反は制約フィードバックを付与し初回 `retry_spec_draft`、2回目は `FAILED_B7`。timeout は初回再試行、2回目は `FAILED_SYSTEM`。その他例外は `SYSTEM_ERROR`。 |
 | `code_node`          | Aider 実行後、`.gitignore` の変更を戻し、Git 状態から変更済み Python ファイルを `target_files` に追加する。 | timeout は初回 `retry_code`、2回目は `FAILED_SYSTEM`。その他の Aider エラーは即時 `SYSTEM_ERROR`。     |
 | `lint_node`          | 対象 Python がなければ `lint_passed`。Ruff の最終 check 成功で `lint_passed`。                              | 失敗時は `LINT_ERROR` と `lint_round` を更新し、3回目で `FAILED_B7`。                                  |
 | `run_pytest_node`    | pytest の JSON report を解析し、成功なら `test_passed`。                                                    | 失敗時は `TEST_ERROR` と `test_round` を更新し、3回目で `FAILED_B7`。実行・解析例外は `SYSTEM_ERROR`。 |
