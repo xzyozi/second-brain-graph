@@ -2,10 +2,10 @@ name: Validate Mermaid diagrams
 
 on:
   push:
-    branches: [main, devlop]
+    branches: [main, develop, devlop]
     paths: ["docs/**/*.md"]
   pull_request:
-    branches: [main, devlop]
+    branches: [main, develop, devlop]
     paths: ["docs/**/*.md"]
   workflow_dispatch:
 
