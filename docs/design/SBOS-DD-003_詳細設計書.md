@@ -4,8 +4,8 @@
 | 項目     | 内容                                                                                                  |
 | :------- | :---------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                                                           |
-| 版数     | Rev.6.2（メタデータ分離[#22]および機密情報マスキング[#20]追随版）                                     |
-| 改訂日   | 2026年9月19日                                                                                         |
+| 版数     | Rev.6.3（JEV計画・レビュー適合性ゲート[#48, #50]追随版）                                             |
+| 改訂日   | 2026年9月24日                                                                                         |
 | 作成日   | 2026年7月28日                                                                                         |
 | 実装正本 | `tools/`、`config/models.yaml`、`metadata/.project-registry.json`、`metadata/projects/<PROJECT_KEY>/` |
 | 対象読者 | 実装担当エンジニア、運用担当者、テスト担当者                                                          |
@@ -205,7 +205,7 @@ flowchart TD
 | `lint_node`          | 対象 Python がなければ `lint_passed`。Ruff の最終 check 成功で `lint_passed`。                              | 失敗時は `LINT_ERROR` と `lint_round` を更新し、3回目で `FAILED_B7`。                                  |
 | `run_pytest_node`    | pytest の JSON report を解析し、成功なら `test_passed`。                                                    | 失敗時は `TEST_ERROR` と `test_round` を更新し、3回目で `FAILED_B7`。実行・解析例外は `SYSTEM_ERROR`。 |
 | `test_feedback_node` | reasoning LLM の助言を `test_feedback_instruction` と `aider_message` に保存する。                          | 助言作成失敗時も raw テスト出力を維持して `retry_code`。                                               |
-| `review_node`        | LLM 判定、構造化コメント、RDJSON、レビュー履歴を保存する。                                                  | timeout は初回 `retry_review`、2回目は `FAILED_SYSTEM`。指摘は最大3回まで `retry_code`。               |
+| `review_node`        | LLM 判定を実施し、`LGTM` の場合は JEV レビュー合否二次ゲート（`verify_review_conformance`）で検証。適合なら `review_lgtm` を確定して `done_node` へ進行。RDJSON・レビュー履歴を保存する。 | JEV 不適合時は `changes_requested` に上書きし `aider_message` を付与して `code_node` へ差し戻し。指摘は最大3回まで `retry_code`、超過時は `FAILED_B7`。timeout は初回 `retry_review`、2回目は `FAILED_SYSTEM`。 |
 | `done_node`          | 対象ファイルを stage・commit・push し PR を作成、または既存 PR を検出して `COMPLETED`。                     | Git/PR 操作失敗は `PR_FAILED` / `PR_ERROR`。                                                           |
 | `escalate_node`      | 最終状態を防御的に `FAILED_B7` または `FAILED_SYSTEM` とする。                                              | lint/test の上限到達時は敗因レポート生成を試み、成功時は `ESCALATED_NEEDS_REVISION` とする。           |
 

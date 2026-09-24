@@ -3,18 +3,18 @@
 | 項目 | 内容 |
 | --- | --- |
 | 文書名 | Second Brain OS - 品質ゲートおよびレビュー制御仕様 |
-| 版数 | Rev.1.1（Defense 0: JEV 計画適合性検問ゲートの追記） |
-| 改訂日 | 2026年9月21日 |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、PM-053 |
-| 対象コンポーネント | `spec_draft_node (JEV 計画適合性ゲート)`、`lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node`、`reviewdog` |
-| 役割 | 計画段階のYAGNI検問、コード生成後の静的解析、自動テスト、LLMによるコードレビュー、およびRDJSONフォーマットへの変換とエスカレーション処理 |
+| 版数 | Rev.1.2（Defense 3.1: JEV レビュー合否二次検問ゲートの追記） |
+| 改訂日 | 2026年9月24日 |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、PM-053、PM-054 |
+| 対象コンポーネント | `spec_draft_node (JEV 計画適合性ゲート)`、`lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node (JEV レビュー合否二次ゲート)`、`reviewdog` |
+| 役割 | 計画段階のYAGNI検問、コード生成後の静的解析、自動テスト、LLMによるコードレビューとJEV決定論的二次検問、およびRDJSONフォーマットへの変換とエスカレーション処理 |
 
 ---
 
 ## 1. 概要と基本方針
 
 本仕様は、エージェントの自律実行ループにおける「多層防衛品質ゲート」を定義する。
-品質ゲートは、コード生成前の「計画適合性検問（Defense 0: JEV Plan Conformance）」、生成直後の「Ruff 静的解析（Defense 1）」、「pytest 自動テスト（Defense 2）」、および「LLM 静的コードレビュー（Defense 3）」の4段階で構成される。
+品質ゲートは、コード生成前の「計画適合性検問（Defense 0: JEV Plan Conformance）」、生成直後の「Ruff 静的解析（Defense 1）」、「pytest 自動テスト（Defense 2）」、および「LLM 静的コードレビュー ＋ JEV 決定論的二次検問（Defense 3: JEV Review Conformance）」の多層防衛で構成される。
 
 ### 1.1 計画適合性検問ゲート (`spec_draft_node` / Defense 0: JEV Plan Conformance)
 
@@ -64,6 +64,24 @@
 * **フィードバックの反映**:
   * severityが `structural`、`major`、`error` 等の重大な指摘、または対象外ファイルへの指摘がある場合は、その内容を Aider への次回のフィードバック指示（`aider_message`）に優先的に追加する。
   * 修正要求（`changes_requested`）は最大3回まで `retry_code` で Aider に差し戻される。
+
+### 3.1.1 JEV レビュー合否二次検問ゲート (`review_node` / Defense 3.1: JEV Review Conformance)
+
+* **目的**: Reviewer LLM による JSON 出力の揺らぎや誤認識、パース不備による甘い合否判定を排除し、Reviewer LLM が `LGTM` と判定したコード差分に対して、JEV (Zero-Decode) による決定論的な裏取り検証（二次検問）を行う。未実装の要件や要求外の実装、テスト不整合を水際で遮断する。
+* **判定方式**: Zero-Decode 高速判定基盤 JEV (`submodules/jev-localsystem`) の `NoulTask`（規程適合判定）による 39ms 1トークン推論。
+* **入力パラメータ**:
+  1. `instruction`: Issue 本文および要求仕様
+  2. `impl_plan`: Planner LLM が策定した実装計画 (DoD)
+  3. `diff_text`: 対象ファイルの Git diff 全文
+  4. `pytest_returncode`: 直前の pytest 終了コード
+* **判定規程 (Policy)**:
+  「この Git 差分（diff）は、Issue の要求仕様（Requirements）および実装計画（DoD）を過不足なく満たしているかを判定せよ。未実装の要件、要求外の実装（YAGNI違反・過剰設計）、不整合、またはテスト失敗がある場合は不適合（No）とする。要求を過不足なく満たしている場合のみ適合（Yes）とする。」
+* **状態遷移契約**:
+  * **実行契機**: Reviewer LLM が `verdict == "LGTM"` を返した場合のみ実行（LLM が既に `changes_requested` とした場合は JEV をスキップしてそのまま差し戻す）。
+  * **適合 (`is_valid == True`)**: `state["review_lgtm"] = True` を確定し、`done_node` へ進行。
+  * **不適合 (`is_valid == False`)**: `verdict` を `"changes_requested"` に強制上書き。Aider への次回復帰メッセージ（`aider_message`）に `【JEV REVIEW REJECTED】JEV二次検問により不適合と判定されました: <理由>` を注入し、`retry_code` で差し戻す。
+  * **フェイルオープン契約**: JEV 未展開、初期化例外、モデル通信エラー等の異常時は安全にバイパス（`True`）し、Reviewer LLM の判定をそのまま採用してシステム停止を防ぐ。
+  * **監査ログ**: JEV の判定確信度（`confidence`）、レイテンシ、判定ステータスを `review_rounds` 履歴オブジェクトに記録する。
 
 ### 3.2 Reviewdog によるアノテーション
 * **実行内容**: 構造化されたLLMレビューコメントを RDJSON 形式に変換し、それを標準入力で渡して `reviewdog -f=rdjson -diff="git diff HEAD"` を実行する。
