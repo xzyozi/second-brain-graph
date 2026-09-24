@@ -236,6 +236,8 @@ class GraphState(TypedDict, total=False):
     plan_conformance_status: Optional[str]
     plan_conformance_score: Optional[float]
     plan_conformance_round: int
+    review_conformance_status: Optional[str]
+    review_conformance_score: Optional[float]
 
 
 def spec_draft_node(state: GraphState) -> GraphState:
@@ -896,6 +898,54 @@ def review_node(state: GraphState) -> GraphState:
             )
             verdict = "LGTM"
 
+        # JEV レビュー合否二次検問ゲート (Defense 1: JEV Review Conformance, Issue #50, PM-054)
+        # Reviewer LLM が LGTM を返した場合のみ、JEV (Zero-Decode) で合否判定の裏取り検証を行う。
+        jev_review_info: Optional[Dict[str, Any]] = None
+        if verdict == "LGTM":
+            try:
+                from tools.jev_adapter import verify_review_conformance
+
+                # pytest 終了コードの取得 (0: 成功, それ以外: 失敗)
+                pytest_rc: Optional[int] = None
+                if isinstance(state.get("test_result"), dict):
+                    pytest_rc = state["test_result"].get("returncode")
+                elif isinstance(state.get("pytest_result"), dict):
+                    pytest_rc = state["pytest_result"].get("returncode")
+
+                is_valid, confidence, detail = verify_review_conformance(
+                    issue_id=state.get("issue_id", "UNKNOWN"),
+                    instruction=state.get("instruction", ""),
+                    diff_text=diff_text,
+                    impl_plan=state.get("impl_plan"),
+                    pytest_returncode=pytest_rc,
+                )
+
+                jev_review_info = {
+                    "is_valid": is_valid,
+                    "confidence": confidence,
+                    "detail": detail,
+                }
+                state["review_conformance_status"] = "passed" if is_valid else "rejected"
+                state["review_conformance_score"] = confidence
+
+                if not is_valid:
+                    logger.warning(
+                        f"[{state.get('issue_id')}] JEV secondary review rejected LGTM verdict: {detail}"
+                    )
+                    verdict = "changes_requested"
+                    structured_comments.append(
+                        {
+                            "file": target_file,
+                            "line": 1,
+                            "message": f"【JEV REVIEW REJECTED】{detail}",
+                            "severity": "STRUCTURAL",
+                        }
+                    )
+            except Exception as jev_e:
+                logger.warning(
+                    f"[{state.get('issue_id')}] JEV review conformance verification failed ({jev_e}). Bypassing."
+                )
+
         rev_round = state.get("review_round", 0) + 1
         state["review_round"] = rev_round
         state["review_verdict"] = verdict
@@ -917,14 +967,15 @@ def review_node(state: GraphState) -> GraphState:
 
         # 全レビュー (LGTM を含む) を review_rounds に記録
         rounds = state.get("review_rounds", [])
-        rounds.append(
-            {
-                "review_round": rev_round,
-                "verdict": verdict,
-                "comments": structured_comments,
-                "rdjson": state["rdjson"],
-            }
-        )
+        round_entry: Dict[str, Any] = {
+            "review_round": rev_round,
+            "verdict": verdict,
+            "comments": structured_comments,
+            "rdjson": state["rdjson"],
+        }
+        if jev_review_info is not None:
+            round_entry["jev_review_conformance"] = jev_review_info
+        rounds.append(round_entry)
         state["review_rounds"] = rounds
 
         # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存 (オプショナル連携のため失敗時はログ警告のみで LLM レビューを継続)
