@@ -79,7 +79,7 @@
 | **PM-051** | DD-003 §10.3                                    | 🔴 高   | LLM 送信プロンプト・実行履歴・Failure Report への機密情報漏洩リスク (Issue #20)                                      | `tools/sanitizer.py` を新設し、APIキー・トークン・秘密鍵・認証URL・パスワード・メール等の自動マスキングを全境界に統合 | 🟢 解決済み                             |
 | **PM-052** | DD-003 §10.4                                    | 🟡 低   | `orchestrator_graph.py` の肥大化およびステータス管理の型安全性欠如 (Issue #22)                                       | `tools/metadata_store.py` へ状態・履歴・排他ロック管理を独立分離し `TaskStatus` / `ErrorCategory` Enum を導入          | 🟢 解決済み                             |
 | **PM-053** | DD-003 §5.5, §5.7 / DD-006 §1.1                | 🔴 高   | `spec_draft_node` における実装計画の要件逸脱・スコープ超過（YAGNI違反）の自動検知欠如。Planner LLM が勝手な仕様追加や過剰設計を行っても検問ゲートがなく、Aider の無駄なコード生成と後段爆死を招く。 | Zero-Decode ローカル判定基盤 JEV (`NoulTask`) を導入し、`spec_draft_node` 直後に計画適合性ゲート（Defense 0: DoD Conformance Gate）を新設。YAGNI違反計画を 39ms で検知・即時再ドラフトさせる安全回路を構築。 | 🟢 解決済み                             |
-| **PM-054** | DD-003 §5.5, §5.7 / DD-006 §3.1                | 🔴 高   | `review_node` における Reviewer LLM の合否判定（verdict）の非決定性とJSON出力揺らぎによる誤検知リスク (Issue #50)。 | `tools/jev_adapter.py` に `verify_review_conformance()` を新設し、LLM が LGTM を出した直後に JEV (Zero-Decode, noul) による二次検証ゲートを配置。未実装・要求外実装・テスト未通過を 39ms で検知し、changes_requested への上書き・差し戻しを行う。 | 🟡 進行中                               |
+| **PM-054** | DD-003 §5.5, §5.7 / DD-006 §3.1                | 🔴 高   | `review_node` における Reviewer LLM の合否判定（verdict）の非決定性とJSON出力揺らぎによる誤検知リスク (Issue #50)。 | `tools/jev_adapter.py` に `verify_review_conformance()` を新設し、LLM が LGTM を出した直後に JEV (Zero-Decode, noul) による二次検証ゲートを配置。未実装・要求外実装・テスト未通過を 39ms で検知し、changes_requested への上書き・差し戻しを行う。 | 🟢 解決済み                             |
 
 ---
 
@@ -287,6 +287,11 @@
     - **JEV = No**: `verdict` を `"changes_requested"` に強制上書きし、JEV の不適合判定詳細を Aider への修正指示（`aider_message`）に注入して `code_node` へ差し戻し。
     - **フェイルオープン**: JEV 未展開環境・モデル初期化失敗・推論例外時は既存 LLM の判定をそのまま採用（fail-open）。
     - **監査性**: JEV の確信度（`confidence`）を `review_rounds` 履歴に記録。
+* **対応内容（実装完了）**:
+  1. `tools/jev_adapter.py` に `verify_review_conformance()` およびポリシー正本 `REVIEW_CONFORMANCE_POLICY` を実装。
+  2. `tools/orchestrator_graph.py` の `review_node` にて、LLM が `LGTM` を返した場合のみ JEV による二次検問を実施し、不適合時は `changes_requested` へ上書き・Aider 差し戻しを行う制御を統合。
+  3. `review_rounds` 履歴オブジェクトに JEV の判定確信度（`confidence`）および判定結果ログを保存する監査仕様を実装。
+  4. `tests/test_jev_review_conformance.py` にて単体・統合テスト全8件を実装し、全テスト合格（全190件 100% pass）を確認。
 
 ---
 
