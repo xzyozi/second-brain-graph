@@ -12,6 +12,7 @@
   * `TEMPLATE_データ構造仕様書.md`: データ型・スキーマ・原子置換・排他制御用テンプレート
   * `README.md`: 設計ドキュメントの命名規則・執筆・更新運用ルール
 * **`docs/features/`**: 機能別の利用契約と運用手順
+  * [`aider_format_benchmark.md`](features/aider_format_benchmark.md): Aider edit_format 多角的実証ベンチマーク (`tools/benchmark_aider_formats.py`) 仕様書
   * [`coder_test_and_github_ci_pr_fixer.md`](features/coder_test_and_github_ci_pr_fixer.md): Coderモデル動作検証仕様・実績および GitHub CI PR Fixer 設計書
   * [`multi_language_verifiers.md`](features/multi_language_verifiers.md): 多言語対応コード品質・構文検証基盤 (`tools/lang/`, Tree-sitter) 仕様書
   * [`ollama_modelfile_profile_management.md`](features/ollama_modelfile_profile_management.md): GGUF向けQwen ModelfileのCLI入力契約・生成手順
