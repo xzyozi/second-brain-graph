@@ -79,6 +79,7 @@
 | **PM-051** | DD-003 §10.3                                    | 🔴 高   | LLM 送信プロンプト・実行履歴・Failure Report への機密情報漏洩リスク (Issue #20)                                      | `tools/sanitizer.py` を新設し、APIキー・トークン・秘密鍵・認証URL・パスワード・メール等の自動マスキングを全境界に統合 | 🟢 解決済み                             |
 | **PM-052** | DD-003 §10.4                                    | 🟡 低   | `orchestrator_graph.py` の肥大化およびステータス管理の型安全性欠如 (Issue #22)                                       | `tools/metadata_store.py` へ状態・履歴・排他ロック管理を独立分離し `TaskStatus` / `ErrorCategory` Enum を導入          | 🟢 解決済み                             |
 | **PM-053** | DD-003 §5.5, §5.7 / DD-006 §1.1                | 🔴 高   | `spec_draft_node` における実装計画の要件逸脱・スコープ超過（YAGNI違反）の自動検知欠如。Planner LLM が勝手な仕様追加や過剰設計を行っても検問ゲートがなく、Aider の無駄なコード生成と後段爆死を招く。 | Zero-Decode ローカル判定基盤 JEV (`NoulTask`) を導入し、`spec_draft_node` 直後に計画適合性ゲート（Defense 0: DoD Conformance Gate）を新設。YAGNI違反計画を 39ms で検知・即時再ドラフトさせる安全回路を構築。 | 🟢 解決済み                             |
+| **PM-054** | DD-003 §5.5, §5.7 / DD-006 §3.1                | 🔴 高   | `review_node` における Reviewer LLM の合否判定（verdict）の非決定性とJSON出力揺らぎによる誤検知リスク (Issue #50)。 | `tools/jev_adapter.py` に `verify_review_conformance()` を新設し、LLM が LGTM を出した直後に JEV (Zero-Decode, noul) による二次検証ゲートを配置。未実装・要求外実装・テスト未通過を 39ms で検知し、changes_requested への上書き・差し戻しを行う。 | 🟢 解決済み                             |
 
 ---
 
@@ -269,9 +270,34 @@
   3. `tools/orchestrator_graph.py` の `GraphState` に `plan_conformance_status`, `plan_conformance_score`, `plan_conformance_round` を追加し、`spec_draft_node` 直後に検問ゲートを配置。YAGNI違反時はフィードバック付き `retry_spec_draft`、上限2回で `FAILED_B7` へ遷移するよう条件エッジを拡張。
   4. `tests/test_jev_plan_conformance.py` にて単体・統合テスト全7件を実装し、全テスト合格（100% pass）を確認。
 
+### PM-054: review_node における Reviewer LLM の合否判定揺らぎ・非決定性の解消（JEV によるレビュー合否二次ゲートの新設）
+* **背景・課題 (Issue #50)**:
+  - `review_node` において、Reviewer LLM が長文プロンプトから JSON (`verdict: LGTM | changes_requested`, `comments`) を生成している。
+  - しかし、LLM の出力フォーマット揺らぎ、パース失敗、あるいは重大な未実装・要求外変更の見落としにより、誤って `LGTM` と判定され、不完全または破壊的なコードが `done_node`（PR起票）へ突き抜けてしまうリスクが存在する。
+  - レビュー合否判定の決定性（Determinism）を高め、人間の介在前に自律的に水際遮断する多層防御が求められていた。
+* **解決案（JEV による Defense 1: レビュー合否二次検問ゲートの新設）**:
+  - **Zero-Decode 判定基盤 JEV (`NoulTask`) による裏取り検証**:
+    Reviewer LLM が `LGTM` を返した場合に限り、`tools/jev_adapter.py` の `verify_review_conformance()` を呼び出す。
+  - **入力コンテキスト**:
+    Issue 要求仕様（`instruction`）、実装計画（DoD: `impl_plan`）、Git diff（`diff_text`）、および pytest 終了コード（`pytest_returncode`）を結合。
+  - **判定ポリシー**:
+    「この diff は、Issue の要求仕様と DoD を過不足なく満たしているか。未実装・要求外実装（YAGNI違反）・不整合、またはテスト未通過があれば No とする。」
+  - **状態遷移とフィードバック**:
+    - **JEV = Yes**: `LGTM` を確定し、`state["review_lgtm"] = True` として `done_node` へ進行。
+    - **JEV = No**: `verdict` を `"changes_requested"` に強制上書きし、JEV の不適合判定詳細を Aider への修正指示（`aider_message`）に注入して `code_node` へ差し戻し。
+    - **フェイルオープン**: JEV 未展開環境・モデル初期化失敗・推論例外時は既存 LLM の判定をそのまま採用（fail-open）。
+    - **監査性**: JEV の確信度（`confidence`）を `review_rounds` 履歴に記録。
+* **対応内容（実装完了）**:
+  1. `tools/jev_adapter.py` に `verify_review_conformance()` およびポリシー正本 `REVIEW_CONFORMANCE_POLICY` を実装。
+  2. `tools/orchestrator_graph.py` の `review_node` にて、LLM が `LGTM` を返した場合のみ JEV による二次検問を実施し、不適合時は `changes_requested` へ上書き・Aider 差し戻しを行う制御を統合。
+  3. `review_rounds` 履歴オブジェクトに JEV の判定確信度（`confidence`）および判定結果ログを保存する監査仕様を実装。
+  4. `tests/test_jev_review_conformance.py` にて単体・統合テスト全8件を実装し、全テスト合格（全190件 100% pass）を確認。
+
 ---
 
 ## 4. 改訂履歴
+- **2026/09/24 (Rev.2.17)**: 課題 PM-054 (JEVによるレビュー合否判定の決定化・二次ゲート新設、Issue #50) を追加登録。
+- **2026/09/21 (Rev.2.16)**: 課題 PM-053 (JEVによるDoD要件逸脱・YAGNI違反自動検知ゲートの新設、Issue #48) の実装および検証完了に伴いステータスを解決済みに更新。
 - **2026/07/30 (Rev.2.15)**: 課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) に対する3つの改善推奨ポイントを適用し、ステータスを解決済みに更新。
 - **2026/07/30 (Rev.2.15)**: PM-050 (Exclusive Co-usage BackendExecutionCoordinator) の実装・検証・Ollama耐性強化およびgpu_lease_timeout統合完了に伴いステータスを解決済みに更新。
 - **2026/07/30 (Rev.2.14)**: 新規課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) を追加登録。

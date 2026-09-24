@@ -194,3 +194,102 @@ def verify_plan_conformance(
             f"[{issue_id}] JEV execution failed ({e}). Bypassing plan conformance check."
         )
         return True, 1.0, f"Execution exception: {e} (bypassed)"
+
+
+# レビュー合否検問用ポリシー正本 (DD-006 §3.1.1, Issue #50)
+REVIEW_CONFORMANCE_POLICY = (
+    "実装差分（Git diff）が、要求仕様（Issue Specifications）および実装計画（DoD: Definition of Done）を"
+    "過不足なく満たしているかを判定せよ。\n"
+    "以下のいずれかに該当する場合は不適合（No）とする：\n"
+    "1. Issueで要求された必須の機能、修正、またはテストが未実装・欠落している\n"
+    "2. 要求されていない余計な機能や設定値が追加されている（YAGNI違反・過剰設計）\n"
+    "3. 自動テスト（pytest）が失敗している、またはテストコードが無意味に形骸化されている\n"
+    "4. 要求仕様やDoDと矛盾する実装方針となっている\n"
+    "Issue要求仕様およびDoDを過不足なく満たし、テストが成功している場合のみ適合（Yes）とする。"
+)
+
+
+def verify_review_conformance(
+    issue_id: str,
+    instruction: str,
+    diff_text: str,
+    impl_plan: Optional[str] = None,
+    pytest_returncode: Optional[int] = None,
+    pipeline: Optional[Any] = None,
+) -> Tuple[bool, float, str]:
+    """Reviewer LLM が LGTM と判定した差分に対し、JEV NoulTask で合否判定の裏取り検証（決定化）を行う (DD-006 §3.1.1, Issue #50).
+
+    Args:
+        issue_id: 対象 Issue ID (例: 'EC-001')
+        instruction: Issue の要求仕様記述
+        diff_text: 対象ファイルの Git diff 全文
+        impl_plan: Planner LLM が策定した実装計画 (Definition of Done)
+        pytest_returncode: 直前の pytest 終了コード (0: 成功, それ以外: 失敗)
+        pipeline: 明示的に指定する JudgePipeline (テスト・モック用)
+
+    Returns:
+        Tuple[is_valid, confidence, detail_msg]:
+            - is_valid: 適合 (True: LGTM確定) または 不適合 (False: changes_requested上書き)
+            - confidence: 判定の確信度 / 確率 (0.0〜1.0)
+            - detail_msg: 判定理由または詳細ログ
+    """
+    if not diff_text or not diff_text.strip():
+        return False, 0.0, "Empty diff: No code changes to review"
+
+    if pytest_returncode is not None and pytest_returncode != 0:
+        return False, 1.0, f"pytest failed with returncode {pytest_returncode}"
+
+    pipe = pipeline or get_jev_pipeline()
+    if pipe is None:
+        logger.warning(
+            f"[{issue_id}] JEV JudgePipeline unavailable. Bypassing review conformance check (fail-open)."
+        )
+        return True, 1.0, "JEV unavailable (bypassed)"
+
+    plan_str = impl_plan.strip() if impl_plan else "(None specified)"
+    pytest_str = "SUCCESS (0)" if pytest_returncode == 0 else f"Code: {pytest_returncode}"
+
+    # 長大な diff の場合は JEV の context 最大長（約 12,000 文字）を超えないように安全にクリップ
+    max_diff_len = 8000
+    effective_diff = diff_text.strip()
+    if len(effective_diff) > max_diff_len:
+        effective_diff = effective_diff[:max_diff_len] + "\n... [diff truncated for length]"
+
+    context_text = (
+        f"【Issue ID】: {issue_id}\n\n"
+        f"【要求仕様 (Issue Requirements)】:\n{instruction.strip()}\n\n"
+        f"【実装計画 (DoD)】:\n{plan_str}\n\n"
+        f"【自動テスト結果 (pytest)】:\n{pytest_str}\n\n"
+        f"【実装差分 (Git diff)】:\n{effective_diff}"
+    )
+
+    request = JudgeRequestDTO(
+        task_type="noul",
+        context_text=context_text,
+        rule_definition=REVIEW_CONFORMANCE_POLICY,
+    )
+
+    try:
+        response: JudgeResponseDTO = pipe.judge(request)
+        if response.status == "SUCCESS":
+            is_valid = response.verdict == "Yes"
+            confidence = response.confidence if response.confidence is not None else 1.0
+            detail = (
+                f"JEV Review Conformance: {'PASSED' if is_valid else 'REJECTED'} "
+                f"(verdict={response.verdict}, conf={confidence:.3f}, latency={response.latency_ms}ms)"
+            )
+            logger.info(f"[{issue_id}] {detail}")
+            return is_valid, confidence, detail
+        elif response.status == "INCONCLUSIVE":
+            logger.warning(f"[{issue_id}] JEV Review Conformance INCONCLUSIVE, bypassing.")
+            return True, 0.5, "Inconclusive verdict (bypassed)"
+        else:
+            logger.warning(
+                f"[{issue_id}] JEV Review Conformance ERROR: {response.error_message}. Bypassing."
+            )
+            return True, 1.0, f"JEV error: {response.error_message} (bypassed)"
+    except Exception as e:
+        logger.warning(
+            f"[{issue_id}] JEV review execution failed ({e}). Bypassing review conformance check."
+        )
+        return True, 1.0, f"Execution exception: {e} (bypassed)"
