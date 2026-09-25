@@ -30,9 +30,34 @@ logger = logging.getLogger(__name__)
 
 # Category definitions and associated keywords
 CATEGORY_MAP: Dict[str, List[str]] = {
-    "area:orch": ["orchestrator", "graph", "langgraph", "node", "review_node", "planner", "run_task"],
-    "area:jev": ["jev", "noul", "zero-decode", "logit", "confidence", "検問", "gate", "conformance"],
-    "area:ci": ["ci", "github actions", "actions", "workflow", "ci/ops", "automation", "regression"],
+    "area:orch": [
+        "orchestrator",
+        "graph",
+        "langgraph",
+        "node",
+        "review_node",
+        "planner",
+        "run_task",
+    ],
+    "area:jev": [
+        "jev",
+        "noul",
+        "zero-decode",
+        "logit",
+        "confidence",
+        "検問",
+        "gate",
+        "conformance",
+    ],
+    "area:ci": [
+        "ci",
+        "github actions",
+        "actions",
+        "workflow",
+        "ci/ops",
+        "automation",
+        "regression",
+    ],
     "area:safety": ["safety", "回帰テスト", "regression test", "defense", "yagni", "dod", "保証"],
     "area:docs": ["doc", "docs", "設計書", "仕様書", "markdown", "ドキュメント", "readme"],
 }
@@ -48,9 +73,30 @@ DUPLICATE_CHECK_POLICY = (
 def tokenize(text: str) -> Set[str]:
     """Simple alphanumeric and Japanese word tokenization for similarity comparison."""
     # Split by whitespace, punctuation, brackets
-    tokens = re.findall(r"[A-Za-z0-9_-]+|[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]{2,}", text.lower())
+    tokens = re.findall(
+        r"[A-Za-z0-9_-]+|[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]{2,}", text.lower()
+    )
     # Exclude common stopwords
-    stopwords = {"the", "a", "an", "is", "in", "to", "for", "of", "and", "or", "feat", "fix", "add", "issue", "こと", "ため", "追加", "実装"}
+    stopwords = {
+        "the",
+        "a",
+        "an",
+        "is",
+        "in",
+        "to",
+        "for",
+        "of",
+        "and",
+        "or",
+        "feat",
+        "fix",
+        "add",
+        "issue",
+        "こと",
+        "ため",
+        "追加",
+        "実装",
+    }
     return {t for t in tokens if t not in stopwords and len(t) >= 2}
 
 
@@ -99,7 +145,7 @@ def verify_duplicate_with_jev(
     try:
         response: JudgeResponseDTO = pipe.judge(request)
         if response.status == "SUCCESS":
-            is_dup = (response.verdict == "Yes")
+            is_dup = response.verdict == "Yes"
             conf = response.confidence if response.confidence is not None else 1.0
             return is_dup, conf
     except Exception as e:
@@ -234,7 +280,7 @@ def post_screening_results_to_issue(
             dup_tag = "【JEV 重複判定】" if d["is_jev_duplicate"] else ""
             body_lines.append(
                 f"  - {state_emoji} #{d['number']} `{d['title']}` "
-                f"(類似度: {int(d['lexical_similarity']*100)}%) {dup_tag}"
+                f"(類似度: {int(d['lexical_similarity'] * 100)}%) {dup_tag}"
             )
     else:
         body_lines.append("- **重複確認**: 類似・重複する過去の Issue は見つかりませんでした。")
@@ -269,9 +315,15 @@ def post_screening_results_to_issue(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Screen GitHub issues for duplicates and categories.")
-    parser.add_argument("--issue", type=int, default=None, help="Target specific issue number to screen")
-    parser.add_argument("--apply", action="store_true", help="Post results as comment and apply labels")
+    parser = argparse.ArgumentParser(
+        description="Screen GitHub issues for duplicates and categories."
+    )
+    parser.add_argument(
+        "--issue", type=int, default=None, help="Target specific issue number to screen"
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="Post results as comment and apply labels"
+    )
     parser.add_argument("--repo", type=str, default=None, help="GitHub repository (owner/repo)")
     args = parser.parse_args()
 
@@ -291,7 +343,10 @@ def main() -> None:
     else:
         # Default: screen open stage:ideation issues
         for iss in all_issues:
-            labels = [lbl.get("name", "") if isinstance(lbl, dict) else str(lbl) for lbl in iss.get("labels", [])]
+            labels = [
+                lbl.get("name", "") if isinstance(lbl, dict) else str(lbl)
+                for lbl in iss.get("labels", [])
+            ]
             if "stage:ideation" in labels and iss.get("state") == "OPEN":
                 target_issues.append(iss)
 

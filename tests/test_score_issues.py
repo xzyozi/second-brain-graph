@@ -183,4 +183,3 @@ def test_process_scoring_skips_ideation_tasks(tmp_path: pytest.TempPathFactory) 
     assert "TEST-0001" in candidate_ids
     assert "TEST-0002" not in candidate_ids
     assert "TEST-0003" not in candidate_ids
-
