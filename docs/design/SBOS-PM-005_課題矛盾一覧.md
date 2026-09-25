@@ -293,9 +293,26 @@
   3. `review_rounds` 履歴オブジェクトに JEV の判定確信度（`confidence`）および判定結果ログを保存する監査仕様を実装。
   4. `tests/test_jev_review_conformance.py` にて単体・統合テスト全8件を実装し、全テスト合格（全190件 100% pass）を確認。
 
+### PM-055: 最上流（壁打ち・構想フェーズ）の状態隔離欠如および JEV による重複・カテゴリ検知
+* **背景・課題**:
+  - Issue から `tasks.md` を生成して自律実装するパイプラインの前段において、アイデア出し・壁打ち・仕様精緻化を行う「最上流」の状態管理が未定義であった。
+  - 未確定なアイデアが `tasks.md` や `score_issues.py` に混入してエージェントが誤って実装に着手するリスクや、過去の全 Issue との重複起票、1ヶ月以上放置されたドラフト Issue の陳腐化が懸念されていた。
+* **解決案（Issue 壁打ちライフサイクル ＆ JEV スクリーニング）**:
+  1. **ラベルによる状態隔離**: `stage:ideation`（構想・壁打ち中：実装対象外）と `stage:ready`（仕様確定・着手可能）を定義。ユーザーが手動承認した Issue のみを開発キューに昇格。
+  2. **JEV 全 Issue スクリーニング**: 全 Issue（Open / Closed 双方）を取得し、JEV による重複・類似判定および領域カテゴリ自動推論を提供（`tools/screen_issues.py`）。
+  3. **30日放置 Issue の自動整理**: `stage:ideation` のまま 30 日未更新の Issue を警告なしで即座に Close するスクリプト（`tools/close_stale_issues.py`）および GitHub Actions ワークフロー（`cleanup-stale-ideation.yml`）を新設。
+  4. **開発キュー遮断**: `score_issues.py` および `project-orchestrator` スキルにて `stage:ready` 以外のタスクを厳格に除外。
+* **対応内容（実装完了）**:
+  1. `tools/screen_issues.py` を実装し、全 Issue の重複検知・領域判定および Issue への自動コメント・ラベル反映機能を提供。
+  2. `tools/close_stale_issues.py` を実装し、30日放置された `stage:ideation` の即時クローズ機能を提供。
+  3. `.github/workflows/cleanup-stale-ideation.yml` を作成し、毎日深夜に API キー不要で自動クリーンアップを実行可能に設定。
+  4. `tools/score_issues.py` に `stage` フィルタリングを追加し、`tests/test_close_stale_issues.py`, `tests/test_screen_issues.py`, `tests/test_score_issues.py` にて全テスト合格を確認。
+  5. 詳細仕様書 `docs/design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md` を作成。
+
 ---
 
 ## 4. 改訂履歴
+- **2026/09/25 (Rev.2.18)**: 課題 PM-055 (Issue壁打ちライフサイクル、JEV重複検知、30日放置自動クローズ) を解決済みに更新。
 - **2026/09/24 (Rev.2.17)**: 課題 PM-054 (JEVによるレビュー合否判定の決定化・二次ゲート新設、Issue #50) を追加登録。
 - **2026/09/21 (Rev.2.16)**: 課題 PM-053 (JEVによるDoD要件逸脱・YAGNI違反自動検知ゲートの新設、Issue #48) の実装および検証完了に伴いステータスを解決済みに更新。
 - **2026/07/30 (Rev.2.15)**: 課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) に対する3つの改善推奨ポイントを適用し、ステータスを解決済みに更新。
