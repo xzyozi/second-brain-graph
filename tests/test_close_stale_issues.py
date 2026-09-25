@@ -9,7 +9,7 @@ from tools.close_stale_issues import (
 )
 
 
-def test_is_stale_issue_not_stale():
+def test_is_stale_issue_not_stale() -> None:
     """Test that issue updated 10 days ago is not stale with 30 days threshold."""
     now_dt = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
     updated_str = "2026-09-15T12:00:00Z"  # 10 days ago
@@ -19,7 +19,7 @@ def test_is_stale_issue_not_stale():
     assert elapsed == 10
 
 
-def test_is_stale_issue_stale():
+def test_is_stale_issue_stale() -> None:
     """Test that issue updated 35 days ago is stale."""
     now_dt = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
     updated_str = "2026-08-20T12:00:00Z"  # 36 days ago
@@ -29,14 +29,14 @@ def test_is_stale_issue_stale():
     assert elapsed >= 35
 
 
-def test_is_stale_issue_invalid_date():
+def test_is_stale_issue_invalid_date() -> None:
     """Test handling of invalid timestamp string."""
     is_stale, elapsed = is_stale_issue("invalid-date")
     assert not is_stale
     assert elapsed == 0
 
 
-def test_process_stale_issues_dry_run():
+def test_process_stale_issues_dry_run() -> None:
     """Test process_stale_issues with mock issues and dry_run=True."""
     mock_issues = [
         {

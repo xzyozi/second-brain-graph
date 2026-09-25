@@ -10,13 +10,13 @@ from tools.screen_issues import (
 )
 
 
-def test_tokenize():
+def test_tokenize() -> None:
     """Test tokenization of English and Japanese text."""
     tokens = tokenize("[feat] レビュー合否ゲートをJEV(noul)で決定化する")
     assert "レビュー合否ゲートをjev" in tokens or any("jev" in t or "レビュー" in t for t in tokens)
 
 
-def test_calculate_jaccard_similarity():
+def test_calculate_jaccard_similarity() -> None:
     """Test Jaccard similarity between identical, similar, and distinct texts."""
     text1 = "review conformance gate with jev noul validation"
     text2 = "review conformance gate with jev noul verification"
@@ -29,7 +29,7 @@ def test_calculate_jaccard_similarity():
     assert sim_low == 0.0
 
 
-def test_infer_categories():
+def test_infer_categories() -> None:
     """Test category inference from keywords."""
     cats = infer_categories(
         title="[feat] レビュー合否ゲートをJEV(noul)で決定化する二次ゲートを追加",
@@ -40,7 +40,7 @@ def test_infer_categories():
     assert "area:safety" in cats
 
 
-def test_screen_single_issue_with_duplicate():
+def test_screen_single_issue_with_duplicate() -> None:
     """Test duplicate detection in screening."""
     target = {
         "number": 201,
