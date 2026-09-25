@@ -6,6 +6,12 @@
       "dir": "projects/test_file_grep",
       "meta": "metadata/projects/TFG",
       "registered_at": "2026-07-30T21:58:00Z"
+    },
+    "ENVB": {
+      "name": "env_builder",
+      "dir": "projects/env_builder",
+      "meta": "metadata/projects/ENVB",
+      "registered_at": "2026-09-25T23:05:00Z"
     }
   }
 }

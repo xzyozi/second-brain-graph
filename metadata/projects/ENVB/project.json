@@ -1,0 +1,11 @@
+{
+  "key": "ENVB",
+  "name": "env_builder",
+  "base_branch": "main",
+  "created_at": "2026-09-25T23:05:00Z",
+  "description": "手元PCから踏み台越しにSSH接続し、参照元(src)を参考に構築先(dst)の環境を整えてbuildを通すための作業基盤",
+  "constraints": {
+    "external_modules_forbidden": false,
+    "allowed_imports": []
+  }
+}
