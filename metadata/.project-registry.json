@@ -4,13 +4,13 @@
     "TFG": {
       "name": "test_file_grep",
       "dir": "projects/test_file_grep",
-      "meta": "metadata/projects/TFG",
+      "meta": "projects/test_file_grep/docs",
       "registered_at": "2026-07-30T21:58:00Z"
     },
     "ENVB": {
       "name": "env_builder",
       "dir": "projects/env_builder",
-      "meta": "metadata/projects/ENVB",
+      "meta": "projects/env_builder/docs",
       "registered_at": "2026-09-25T23:05:00Z"
     }
   }
