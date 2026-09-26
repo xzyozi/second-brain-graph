@@ -106,4 +106,3 @@ def test_extract_github_repo() -> None:
 def test_register_project_invalid_key_raises() -> None:
     with pytest.raises(ValueError):
         register_project(key="", name="Invalid Project")
-
