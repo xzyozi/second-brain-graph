@@ -325,9 +325,28 @@
   4. `tests/test_add_project.py` を母艦純化・サテライト帰属テストに最新化し、全199テスト合格を確認。
   5. `docs/design/SBOS-MULTI-001` の記述を更新。
 
+### PM-057: 配下リポジトリ専用Issue自動タグ付けワークフロー配備と母艦純化
+* **背景・課題**:
+  - Issueの壁打ち・スクリーニングライフサイクル（`stage:ideation` 等）の導入に伴い、母艦側に定期クリーンアップワークフローが配置されていたが、母艦側ではプロダクトIssueは扱わず不要であった。
+  - 一方、プロダクト開発を担う各サテライト（配下リポジトリ）側にIssue自動タグ付け（`stage:ideation` 等の初期付与）のGitHub Actionsワークフローが配備されておらず、新規プロジェクト登録ツール `tools/add_project.py` でもその配備やGitHubリポジトリ設定が行われていなかった。
+* **解決案**:
+  1. **母艦の純化**: 母艦から不要なIssue自動処理ワークフロー（`cleanup-stale-ideation.yml`）を削除。
+  2. **`tools/add_project.py` の拡張**:
+     - `--repo` から `github_repo`（owner/repo）を自動抽出し、`project.json` および `.project-registry.json` に設定・永続化。
+     - 配下リポジトリの `.github/workflows/issue-auto-tag.yml` を未存在時に自動生成・初期配備。
+     - オプション（`--setup-labels`）でGitHub標準ラベル（`stage:*`）の自動セットアップに対応。
+  3. **既存サテライトへの適用**: `projects/env_builder` および `projects/test_file_grep` の `.github/workflows/` に自動タグ付けワークフローを配置・コミット。
+* **対応内容（実装完了）**:
+  1. `.github/workflows/cleanup-stale-ideation.yml` を母艦から削除。
+  2. `tools/add_project.py` に `extract_github_repo`, `setup_satellite_workflow`, `setup_github_labels` を実装。
+  3. `tests/test_add_project.py` にワークフロー生成および `github_repo` 抽出テストを追加。
+  4. 既存配下リポジトリ（ENVB, TFG）にワークフローを配備しサテライト側でコミット完了。
+  5. `docs/design/SBOS-DD-007` をサテライト専用ワークフロー方針に更新。
+
 ---
 
 ## 4. 改訂履歴
+- **2026/09/26 (Rev.2.20)**: 課題 PM-057 (配下リポジトリ専用Issue自動タグ付けワークフロー配備と母艦純化) を解決済みに更新。
 - **2026/09/26 (Rev.2.19)**: 課題 PM-056 (母艦の完全純化とサテライトへの仕様・タスク帰属化の完全適用) を解決済みに更新。
 - **2026/09/25 (Rev.2.18)**: 課題 PM-055 (Issue壁打ちライフサイクル、JEV重複検知、30日放置自動クローズ) を解決済みに更新。
 - **2026/09/24 (Rev.2.17)**: 課題 PM-054 (JEVによるレビュー合否判定の決定化・二次ゲート新設、Issue #50) を追加登録。

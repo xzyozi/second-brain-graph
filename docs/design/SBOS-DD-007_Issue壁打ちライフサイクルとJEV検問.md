@@ -72,9 +72,13 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
   - `--days <N>`: 放置判定日数（デフォルト: 30）
   - `--dry-run`: 実際のクローズを行わずシミュレーション表示
 
-### 3.3 GitHub Actions 自動クリーンアップ (`.github/workflows/cleanup-stale-ideation.yml`)
-- **スケジュール**: 毎日深夜 UTC 00:00 (日本時間 09:00) 定期実行。手動実行（`workflow_dispatch`）にも対応。
+### 3.3 配下リポジトリ専用 GitHub Actions ワークフロー (`.github/workflows/issue-auto-tag.yml`)
+- **アーキテクチャ方針 (PM-057: 母艦純化 ＆ サテライトIssue自律運用)**:
+  - 母艦リポジトリ（`second-brain-graph`）はフレームワーク・基盤コードのみを管理し、プロダクト固有のIssue自動タグ付けワークフローは母艦には配置しない。
+  - プロダクト開発現場である各サテライト（配下リポジトリ `projects/<name>/`）の `.github/workflows/issue-auto-tag.yml` として配備し、Issue起票時に自動で `stage:ideation` およびカテゴリラベル（`enhancement`, `bug` 等）を付与する。
+  - 新規プロジェクト登録ツール `tools/add_project.py` により、未存在時に自動生成・初期配備される。
 - **認証**: 外部 API キー不要。標準の `GITHUB_TOKEN`（`issues: write`）のみで動作。
 
 ### 3.4 スコアリングフィルタ更新 (`tools/score_issues.py`)
 - `tasks.md` のメタデータに `stage:ideation` や `draft` が設定されている場合、`process_scoring` の候補選定から確実にスキップ除外するガードを追加。
+
