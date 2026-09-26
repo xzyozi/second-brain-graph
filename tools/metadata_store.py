@@ -137,10 +137,10 @@ def validate_project_consistency(
             f"Project key mismatch: Issue ID prefix '{prefix}' does not match project_key '{project_key}'."
         )
 
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent
+    if metadata_dir is None:
+        metadata_dir = project_root / "metadata"
 
     reg_file = metadata_dir / ".project-registry.json"
     if not reg_file.exists():
@@ -502,10 +502,10 @@ def resolve_project_context(
     サテライト本体 (docs/) を最優先として設定・タスクを読み込み、
     特定のファイル名にハードコードせず、任意の衛星リポジトリの対象ファイルを動的に検出・解決する (MULTI-001 §2③・§4)。
     """
-    if metadata_dir is None:
-        metadata_dir = Path(__file__).resolve().parent.parent / "metadata"
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent
+    if metadata_dir is None:
+        metadata_dir = project_root / "metadata"
 
     registry_file = metadata_dir / ".project-registry.json"
     if not registry_file.exists():
