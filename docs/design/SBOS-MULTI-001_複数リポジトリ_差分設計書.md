@@ -222,7 +222,7 @@ with open(reg_path) as f:
 registry.setdefault('projects', {})['NEW'] = {
     'name': '新規サービス',
     'dir': 'projects/new-service',
-    'meta': 'metadata/projects/NEW'
+    'meta': 'projects/new-service/docs'
 }
 with open(reg_path, 'w', encoding='utf-8') as f:
     json.dump(registry, f, indent=2, ensure_ascii=False)
@@ -236,4 +236,4 @@ uv run python tools/score_issues.py
 cat tools/.cache/priority-cache.json | python3 -m json.tool | grep NEW
 ```
 
-> **補足（実装済み）：** 上記ワンライナー相当の新規衛星登録は `tools/add_project.py` として正式にスクリプト化・実装済みである（PM-004 解決済み）。手打ちのワンライナーは参考として残すが、通常運用では `uv run python tools/add_project.py` を利用すること。テストは `tests/test_add_project.py` を参照。
+> **補足（実装済み・PM-056）：** 上記の新規衛星登録は `tools/add_project.py` として正式にスクリプト化・実装済みである。サテライト本体の `projects/<name>/docs/` 配下に `project.json`, `tasks.md`, `issues/` を初期配置し、母艦の `metadata/.project-registry.json` にのみ登録する（母艦純化仕様）。通常運用では `uv run python tools/add_project.py --key NEW --name "新規サービス" --dir projects/new-service` を利用すること。テストは `tests/test_add_project.py` を参照。

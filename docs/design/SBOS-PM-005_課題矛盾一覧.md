@@ -309,9 +309,26 @@
   4. `tools/score_issues.py` に `stage` フィルタリングを追加し、`tests/test_close_stale_issues.py`, `tests/test_screen_issues.py`, `tests/test_score_issues.py` にて全テスト合格を確認。
   5. 詳細仕様書 `docs/design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md` を作成。
 
+### PM-056: 母艦の完全純化とサテライトへの仕様・タスク帰属化の完全適用
+* **背景・課題**:
+  - 母艦の `.gitignore` にて `/projects/*` が完全遮断されているにもかかわらず、旧設計の遺産として `metadata/projects/` 配下にサテライトのタスク一覧（`tasks.md`）や仕様書がコミット追跡されたまま残っていた。
+  - さらに新規プロジェクト登録ツール `tools/add_project.py` が母艦側の `metadata/projects/<KEY>/` を作成する旧仕様のままであったため、母艦の Git 履歴汚染とサテライトの仕様孤児化（二重管理・境界矛盾）の根本原因となっていた。
+* **解決案（母艦純化の完全適用）**:
+  1. **`tools/add_project.py` のサテライト帰属化**: サテライト本体の `projects/<name>/docs/` 配下に `project.json`, `tasks.md`, `issues/` を直接初期配置し、母艦側には中央台帳 `metadata/.project-registry.json` のみを登録・更新する仕様へ改修。
+  2. **母艦 Git 追跡からのレガシー仕様除外**: 母艦の Git インデックスから `metadata/projects/` 配下の個別プロジェクト定義を完全に除外。
+  3. **母艦 `.gitignore` の多層防護**: `.gitignore` に `/metadata/projects/*` を明示追加し、今後サテライトの仕様・タスクが母艦に誤コミットされる事故を根絶。
+  4. **メタデータ探索エンジンの堅牢化**: `tools/metadata_store.py` にて `project_root` に連動した動的メタデータパス解決（モック・本番透過）を修正。
+* **対応内容（実装完了）**:
+  1. `tools/add_project.py` をサテライト docs/ 帰属化仕様に全面改修（`--repo` による git clone サポート追加）。
+  2. `metadata/projects/` 配下のレガシーファイルを母艦 Git から追跡解除し、`.gitignore` を強化。
+  3. `metadata/.project-registry.json` の `meta` パスをサテライト `projects/<name>/docs` に完全統一。
+  4. `tests/test_add_project.py` を母艦純化・サテライト帰属テストに最新化し、全199テスト合格を確認。
+  5. `docs/design/SBOS-MULTI-001` の記述を更新。
+
 ---
 
 ## 4. 改訂履歴
+- **2026/09/26 (Rev.2.19)**: 課題 PM-056 (母艦の完全純化とサテライトへの仕様・タスク帰属化の完全適用) を解決済みに更新。
 - **2026/09/25 (Rev.2.18)**: 課題 PM-055 (Issue壁打ちライフサイクル、JEV重複検知、30日放置自動クローズ) を解決済みに更新。
 - **2026/09/24 (Rev.2.17)**: 課題 PM-054 (JEVによるレビュー合否判定の決定化・二次ゲート新設、Issue #50) を追加登録。
 - **2026/09/21 (Rev.2.16)**: 課題 PM-053 (JEVによるDoD要件逸脱・YAGNI違反自動検知ゲートの新設、Issue #48) の実装および検証完了に伴いステータスを解決済みに更新。
