@@ -77,6 +77,7 @@ class ReviewItem:
     summary: str
     problem_detail: str
     suggested_solution: str
+    alternative_solution: str = ""
     keywords: list[str] = field(default_factory=list)
     related_issue_note: str = ""
 
@@ -286,7 +287,8 @@ def build_review_prompt(
       "severity": "High" | "Medium" | "Low",
       "summary": "問題の簡潔な要約（1〜2行）",
       "problem_detail": "何が起きているか、どのようなリスクがあるかの詳細説明",
-      "suggested_solution": "推奨される具体的な修正案やアプローチ、改善方針",
+      "suggested_solution": "案1（推奨）: 最小限・安全な改修アプローチとその理由",
+      "alternative_solution": "案2（代替）: 代替アプローチ（より堅牢な多層防御や設定化など）とその理由",
       "keywords": ["関連キーワード1", "キーワード2"]
     }}
   ]
@@ -325,6 +327,7 @@ def parse_agys_response(raw_output: str) -> list[ReviewItem]:
                 summary=r.get("summary", ""),
                 problem_detail=r.get("problem_detail", ""),
                 suggested_solution=r.get("suggested_solution", ""),
+                alternative_solution=r.get("alternative_solution", ""),
                 keywords=r.get("keywords", []),
             )
         )
@@ -460,6 +463,9 @@ def format_issue_body(item: ReviewItem, theme_key: str) -> str:
     theme_name = THEME_CONFIGS.get(theme_key, {}).get("name", theme_key)
     rel_note = item.related_issue_note or "該当なし"
 
+    sol_1 = item.suggested_solution or "最小限の安全な改修アプローチ"
+    sol_2 = item.alternative_solution or "入力検証の強化または多層防御アプローチ"
+
     body = f"""## 0. メタ情報 (Scope & Impact)
 - **検出テーマ**: {theme_name}
 - **重要度**: {item.severity}
@@ -473,8 +479,15 @@ def format_issue_body(item: ReviewItem, theme_key: str) -> str:
 {item.problem_detail}
 
 ## 2. 仕様および要求事項
-- [ ] 検出された課題に対する改善仕様・改修方針の策定
-- [ ] 単体テスト・検証手順の策定
+<!-- ※起票時は修正方針の選択肢（案1, 案2）を提示。方針決定時に採用案を下の [ ] チェックリストに展開する -->
+
+### 検討中の修正方針 (Proposed Approaches):
+- **案 1 (推奨)**: {sol_1}
+- **案 2**: {sol_2}
+
+### 確定実装タスク (Task Checklist):
+<!-- ※壁打ち完了時（stage:ready 昇格時）に、選ばれた案に基づいて確定チェックボックスが配置されます -->
+- [ ] （方針決定後に確定タスクが展開されます）
 
 ## 3. 段階的実装手順 (Step-by-step Execution)
 - **Phase 1 (Core Implementation)**: 対象箇所のロジック修正を最小限の変更で優先実装すること。
