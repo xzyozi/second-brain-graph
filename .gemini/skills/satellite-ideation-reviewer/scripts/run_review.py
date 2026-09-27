@@ -146,9 +146,7 @@ def validate_target_repo(repo_root: Path, target_name: str) -> Path:
 
     target_dir = repo_root / "projects" / target_name
     if not target_dir.is_dir():
-        raise FileNotFoundError(
-            f"指定されたサテライトディレクトリが存在しません: {target_dir}"
-        )
+        raise FileNotFoundError(f"指定されたサテライトディレクトリが存在しません: {target_dir}")
 
     return target_dir
 
@@ -179,8 +177,7 @@ def fetch_existing_issues(target_dir: Path) -> list[ExistingIssue]:
         issues: list[ExistingIssue] = []
         for item in data:
             labels = [
-                lbl["name"] if isinstance(lbl, dict) else str(lbl)
-                for lbl in item.get("labels", [])
+                lbl["name"] if isinstance(lbl, dict) else str(lbl) for lbl in item.get("labels", [])
             ]
             issues.append(
                 ExistingIssue(
@@ -191,14 +188,10 @@ def fetch_existing_issues(target_dir: Path) -> list[ExistingIssue]:
                     labels=labels,
                 )
             )
-        logger.info(
-            f"既存 Issue {len(issues)} 件を取得しました（Open/Closed 全件照合用）"
-        )
+        logger.info(f"既存 Issue {len(issues)} 件を取得しました（Open/Closed 全件照合用）")
         return issues
     except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning(
-            f"既存 Issue の取得に失敗しました（GitHub 連携未設定または offline）: {e}"
-        )
+        logger.warning(f"既存 Issue の取得に失敗しました（GitHub 連携未設定または offline）: {e}")
         return []
 
 
@@ -270,9 +263,9 @@ def build_review_prompt(
 ファイルの新規作成、編集、削除、シェルコマンドの実行など、作業ツリーを変更する操作は一切禁止されています。
 コードの読み取りのみを行ってください。
 
-【レビューテーマ: {theme_info['name']}】
+【レビューテーマ: {theme_info["name"]}】
 以下の観点に厳密に集中してコードを分析し、潜在的な不具合、リスク、改善点を検出してください:
-{theme_info['guidelines']}
+{theme_info["guidelines"]}
 
 【対象ファイル候補】
 {files_str}
@@ -387,7 +380,9 @@ def run_agys_review(
             timeout=180,  # 3分タイムアウト
         )
         if proc.returncode != 0:
-            logger.error(f"agys の実行がエラー終了しました (exit code {proc.returncode}): {proc.stderr}")
+            logger.error(
+                f"agys の実行がエラー終了しました (exit code {proc.returncode}): {proc.stderr}"
+            )
             return []
 
         raw_output = proc.stdout.strip()
@@ -425,16 +420,12 @@ def check_duplicates(
 
             # タイトルの主要キーワードが複数一致、またはファイルパスが一致かつタイトルが類似
             file_match = item_file and item_file in ex.body.lower()
-            keyword_match = len(overlap) >= 3 or (
-                len(overlap) >= 2 and file_match
-            )
+            keyword_match = len(overlap) >= 3 or (len(overlap) >= 2 and file_match)
 
             if keyword_match:
                 if ex.state == "OPEN":
                     is_duplicate_open = True
-                    logger.info(
-                        f"スキップ（既存 Open Issue #{ex.number} と重複）: {item.title}"
-                    )
+                    logger.info(f"スキップ（既存 Open Issue #{ex.number} と重複）: {item.title}")
                     break
                 elif ex.state == "CLOSED" and matched_closed_issue is None:
                     matched_closed_issue = ex
@@ -457,14 +448,10 @@ def check_duplicates(
     return filtered
 
 
-def filter_and_cap_issues(
-    items: list[ReviewItem], max_issues: int
-) -> list[ReviewItem]:
+def filter_and_cap_issues(items: list[ReviewItem], max_issues: int) -> list[ReviewItem]:
     """重要度順にソートし、最大起票件数（Cap）で切り詰める."""
     severity_order = {"High": 0, "Medium": 1, "Low": 2}
-    sorted_items = sorted(
-        items, key=lambda x: severity_order.get(x.severity, 1)
-    )
+    sorted_items = sorted(items, key=lambda x: severity_order.get(x.severity, 1))
     return sorted_items[:max_issues]
 
 
@@ -494,9 +481,7 @@ def format_issue_body(item: ReviewItem, theme_key: str) -> str:
     return body
 
 
-def ensure_satellite_labels(
-    target_dir: Path, theme_key: str, dry_run: bool = False
-) -> None:
+def ensure_satellite_labels(target_dir: Path, theme_key: str, dry_run: bool = False) -> None:
     """対象サテライトリポジトリに必要な GitHub ラベル（stage:ideation, theme:<theme>）が存在することを保証する."""
     needed_labels = ["stage:ideation", f"theme:{theme_key}"]
     if dry_run:
@@ -544,9 +529,7 @@ def ensure_satellite_labels(
                 logger.warning(f"ラベル '{lbl}' の自動作成に失敗しました: {e}")
 
 
-def create_github_issue(
-    target_dir: Path, item: ReviewItem, theme_key: str, dry_run: bool
-) -> bool:
+def create_github_issue(target_dir: Path, item: ReviewItem, theme_key: str, dry_run: bool) -> bool:
     """GitHub Issue を作成する（stage:ideation, theme:<theme> ラベル付き）."""
     body = format_issue_body(item, theme_key)
     labels = ["stage:ideation", f"theme:{theme_key}"]
@@ -604,9 +587,7 @@ def main(args: list[str] | None = None) -> int:
         logger.error(str(e))
         return 1
 
-    logger.info(
-        f"ターゲット: {opts.target} | テーマ: {opts.theme} | 上限: {opts.max_issues} 件"
-    )
+    logger.info(f"ターゲット: {opts.target} | テーマ: {opts.theme} | 上限: {opts.max_issues} 件")
 
     # 1. 既存 Issue 取得（Open/Closed 全件）
     existing_issues = fetch_existing_issues(target_dir)
@@ -614,9 +595,7 @@ def main(args: list[str] | None = None) -> int:
     # 2. 対象ファイル収集
     target_files = collect_target_files(target_dir, opts.path)
     if not target_files:
-        logger.warning(
-            f"対象となるコードファイルが見つかりませんでした: {opts.target}"
-        )
+        logger.warning(f"対象となるコードファイルが見つかりませんでした: {opts.target}")
         return 0
     logger.info(f"レビュー対象コードファイル数: {len(target_files)} 件")
 

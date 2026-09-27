@@ -168,7 +168,9 @@ def test_format_issue_body() -> None:
     assert "stage:ideation" in body
 
 
-def test_main_dry_run_with_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_dry_run_with_mock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """main の結合テスト（dry-run + mock-response）."""
     # サテライト環境を疑似作成
     sat_dir = tmp_path / "projects" / "mock_satellite"
@@ -193,19 +195,20 @@ def test_main_dry_run_with_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     """
 
     # validate_target_repo の探索元 repo_root を tmp_path に向ける
-    monkeypatch.setattr(
-        run_review, "validate_target_repo", lambda root, target: sat_dir
-    )
-    monkeypatch.setattr(
-        run_review, "fetch_existing_issues", lambda target: []
-    )
+    monkeypatch.setattr(run_review, "validate_target_repo", lambda root, target: sat_dir)
+    monkeypatch.setattr(run_review, "fetch_existing_issues", lambda target: [])
 
-    exit_code = run_review.main([
-        "--target", "mock_satellite",
-        "--theme", "security",
-        "--dry-run",
-        "--mock-response", mock_json,
-    ])
+    exit_code = run_review.main(
+        [
+            "--target",
+            "mock_satellite",
+            "--theme",
+            "security",
+            "--dry-run",
+            "--mock-response",
+            mock_json,
+        ]
+    )
     assert exit_code == 0
 
     captured = capsys.readouterr()
@@ -213,7 +216,9 @@ def test_main_dry_run_with_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     assert "[Labels]: stage:ideation, theme:security" in captured.out
 
 
-def test_ensure_satellite_labels_creates_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_ensure_satellite_labels_creates_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """不足しているラベルが自動作成されることを検証する."""
     calls: list[list[str]] = []
 
@@ -233,4 +238,3 @@ def test_ensure_satellite_labels_creates_missing(monkeypatch: pytest.MonkeyPatch
     created_labels = [c[3] for c in calls if len(c) > 3 and c[1] == "label" and c[2] == "create"]
     assert "stage:ideation" in created_labels
     assert "theme:security" in created_labels
-
