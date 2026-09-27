@@ -331,6 +331,26 @@ def parse_agys_response(raw_output: str) -> list[ReviewItem]:
     return items
 
 
+def resolve_agy_executable() -> str:
+    """agy.exe の実行可能ファイルパスを解決する."""
+    import shutil
+
+    for candidate in ("agy.exe", "agy"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+
+    known_paths = [
+        Path.home() / "AppData" / "Local" / "agy" / "bin" / "agy.exe",
+        Path.home() / ".cargo" / "bin" / "agy.exe",
+    ]
+    for p in known_paths:
+        if p.is_file():
+            return str(p)
+
+    return "agy"
+
+
 def run_agys_review(
     target_dir: Path,
     prompt: str,
@@ -346,9 +366,10 @@ def run_agys_review(
             content = mock_response
         return parse_agys_response(content)
 
-    # agys コマンド（agys.cmd / agys.ps1 / agy）の呼び出し
-    logger.info("agys（Antigravity CLI ヘッドレス）を起動して自律レビューを実行中...")
-    cmd = ["agys.cmd", "-p", prompt]
+    agy_exe = resolve_agy_executable()
+    logger.info(f"agys（Antigravity CLI ヘッドレス: {agy_exe}）を起動して自律レビューを実行中...")
+    cmd = [agy_exe, "--dangerously-skip-permissions", "-p", prompt]
+
     try:
         proc = subprocess.run(
             cmd,
@@ -359,31 +380,20 @@ def run_agys_review(
             timeout=180,  # 3分タイムアウト
         )
         if proc.returncode != 0:
-            logger.error(f"agys の実行がエラー終了しました: {proc.stderr}")
+            logger.error(f"agys の実行がエラー終了しました (exit code {proc.returncode}): {proc.stderr}")
             return []
-        return parse_agys_response(proc.stdout)
-    except FileNotFoundError:
-        # agys.cmd が見つからない場合は agy -p を試行
-        logger.warning("agys.cmd が見つかりません。agy -p を試行します...")
-        try:
-            cmd = ["agy", "--dangerously-skip-permissions", "-p", prompt]
-            proc = subprocess.run(
-                cmd,
-                cwd=target_dir,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=180,
-            )
-            return parse_agys_response(proc.stdout)
-        except Exception as e:
-            logger.error(f"agy の呼び出しにも失敗しました: {e}")
+
+        raw_output = proc.stdout.strip()
+        if not raw_output:
+            logger.warning(f"agys の出力が空でした。stderr: {proc.stderr}")
             return []
+
+        return parse_agys_response(raw_output)
     except subprocess.TimeoutExpired:
         logger.error("agys のレビュー処理がタイムアウトしました (180s)")
         return []
     except Exception as e:
-        logger.error(f"agys 応答の解析に失敗しました: {e}")
+        logger.error(f"agys 実行または応答解析に失敗しました: {e}")
         return []
 
 
