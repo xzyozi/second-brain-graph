@@ -82,3 +82,17 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
 ### 3.4 スコアリングフィルタ更新 (`tools/score_issues.py`)
 - `tasks.md` のメタデータに `stage:ideation` や `draft` が設定されている場合、`process_scoring` の候補選定から確実にスキップ除外するガードを追加。
 
+### 3.5 agys サテライト自律レビュー＆Issue起票スキル (`satellite-ideation-reviewer`)
+- **アーキテクチャ方針 (PM-058: 独立スキル化と完全自動起票)**:
+  - Antigravity CLI ヘッドレス実行（`agys` / `agy -p`）を活用し、サテライトリポジトリ（`projects/<name>/`）のコードをテーマ別（セキュリティ、エッジケース処理、関心事の分離）に自律レビューする独立スキル（`.gemini/skills/satellite-ideation-reviewer/`）を新設。
+  - **母艦保護**: 母艦自身（`second-brain-graph`）はレビュー対象外として厳格に遮断。
+  - **Read-only 担保**: プロンプト制約と JSON 構造化出力パースにより作業ツリーへの変更を完全防止。
+  - **ステータス不問の重複チェック**: `gh issue list --state all` で全件照合。Open 重複はスキップ、Closed 重複は再発注記を付与して例外起票。
+  - **tasks.md 影響隔離**: 起票する Issue には必ず `stage:ideation` を付与し、オーケストレーターの開発キュー（`tasks.md`）には混入させず安全に保留。
+  - **起票上限 (Cap)**: 重要度順（High > Medium > Low）にソートし、1実行あたり最大3件（設定可能）に制限。
+
+### 3.6 サテライト初期化時のラベル自動同期と自己修復ガード (`tools/add_project.py`, `run_review.py`)
+- **プロジェクト登録時の自動同期**: `tools/add_project.py` の `setup_labels` をデフォルト有効化（`True`）とし、サテライト初期化時に GitHub 上へ標準ステージラベル（`stage:*`）およびテーマラベル（`theme:*`）を自動作成。
+- **自己修復（Ensure Labels）ガード**: `run_review.py` において、Issue 起票直前にリポジトリ側のラベル実在を確認し、未登録の場合は即座に `gh label create` を自動実行して起票失敗を 100% 防止。
+
+

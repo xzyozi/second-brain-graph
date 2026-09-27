@@ -61,6 +61,10 @@
 │           ├── project.json        # 衛星識別メタデータ
 │           └── tasks.md            # タスク定義ファイル
 │
+├── .gemini/                        # エージェント連携・自律スキル群
+│   └── skills/
+│       └── satellite-ideation-reviewer/ # agysによるサテライトコード自律レビュー＆Issue起票スキル
+│
 └── projects/                       # 衛星プロダクト格納ディレクトリ（ソースコード専用・Git完全隔離）
     └── <project-name>/             # 各衛星プロダクト (個別のGitリポジトリ)
 ```
@@ -101,12 +105,19 @@ uv run python tools/orchestrator_graph.py orchestrate
 uv run python tools/orchestrator_graph.py execute --issue-id EC-012
 ```
 
+### Step 4: サテライトコードの自律レビュー＆Issue起票 (agys スキル)
+```bash
+# サテライトのセキュリティレビュー（ドライラン）
+uv run python .gemini/skills/satellite-ideation-reviewer/scripts/run_review.py --target env_builder --theme security --dry-run
+```
+
 ---
 
 ## 4. ドキュメント体系
 
 仕様および設計の詳細については、[docs/README.md](docs/README.md) をご参照ください。
 
+- **[自律レビュー＆Issue起票仕様書](docs/features/satellite_ideation_reviewer.md)**: `agys` によるサテライトコードレビューと完全自動起票
 - **[基本設計書 (SBOS-BD-002)](docs/design/SBOS-BD-002_基本設計書.md)**: システムアーキテクチャと全体方針
 - **[詳細設計書 (SBOS-DD-003)](docs/design/SBOS-DD-003_詳細設計書.md)**: LangGraph / LiteLLM / Aider の内部構造
 - **[オーケストレイト設計書 (SBOS-ORCH-001)](docs/design/SBOS-ORCH-001_オーケストレイト設計書.md)**: 自律実行ループと依存関係解決

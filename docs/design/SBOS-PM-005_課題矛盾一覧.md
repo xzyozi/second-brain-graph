@@ -1,8 +1,8 @@
-# 課題・矛盾点一覧 (Problem Management) Rev.2.20
+# 課題・矛盾点一覧 (Problem Management) Rev.2.21
 
 文書番号: SBOS-PM-005  
-版数: Rev.2.20（PM-053 JEV計画適合性検問ゲート新設 課題起票）
-改訂日: 2026年9月21日  
+版数: Rev.2.21（PM-058 自律Issue起票機能の独立スキル化とサテライトラベル自動同期・自己修復ガード 解決反映）
+改訂日: 2026年9月27日  
 作成日: 2026年6月25日  
 対象読者: 全開発・運用メンバー  
 関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-DD-004, SBOS-DD-005, SBOS-DD-006, SBOS-DD-007, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
@@ -10,6 +10,8 @@
 ---
 
 ## 更新履歴
+- **2026/09/27 (Rev.2.21)**: PM-058 (自律Issue起票機能の独立スキル化とサテライトラベル自動同期・自己修復ガード) の実装・検証完了に伴いステータスを解決済みに更新。
+- **2026/09/26 (Rev.2.20)**: PM-057 (配下リポジトリ専用Issue自動タグ付けワークフロー配備と母艦純化) を解決済みに更新。
 - **2026/09/21 (Rev.2.20)**: PM-053 (DD-003 §5.5, §5.7 / DD-006 §1.1 spec_draftにおけるDoD要件逸脱・YAGNI違反自動検知ゲートのJEV統合) を新規課題として起票。
 - **2026/09/19 (Rev.2.19)**: PM-051 (DD-003 §10.3 / Issue #20 機密情報マスキング) および PM-052 (DD-003 §10.4 / Issue #22 メタデータ分離・Status Enum化) の実装完了を反映し、解決済みへ更新。
 - **2026/09/16 (Rev.2.18)**: 実装実体（`tools/score_issues.py`, `tools/add_project.py`）と突き合わせて課題ステータスを整合。PM-039（ブロッカー除外ハードリミット）を実装完了として解決済みへ更新。PM-004 に対応する `tools/add_project.py` が実装済みであることを踏まえ SBOS-MULTI-001 §5 の「未実装・対象範囲外」記述を実装済みへ修正し、Step 5 の `score-issues.py` 表記を実体の `score_issues.py` に統一。サマリ表が二重化し PM-025〜PM-039 が重複・PM-024 行が破損していた不整合を除去し、単一の表に正規化。
@@ -343,9 +345,29 @@
   4. 既存配下リポジトリ（ENVB, TFG）にワークフローを配備しサテライト側でコミット完了。
   5. `docs/design/SBOS-DD-007` をサテライト専用ワークフロー方針に更新。
 
+### PM-058: 自律Issue起票機能（#52）の独立スキル化とサテライトラベル自動同期・自己修復ガード
+* **背景・課題**:
+  - 定期巡回バッチや対話ログからの自律 Issue 起票機能（Issue #52）において、母艦コードへロジックを密結合させず、Antigravity の独立スキルとして自律的にコードレビュー・問題点抽出・Issue 起票を行う仕組みが求められていた。
+  - さらに、サテライトリポジトリ側で GitHub ラベル（`stage:ideation`, `theme:*` 等）が事前作成されていない場合、起票時や Actions 実行時にエラーで失敗する構造的リスクがあった（`add_project.py` の `--setup-labels` がデフォルト False だったため未作成になりがちだった）。
+* **解決案**:
+  1. **独立スキル化 (`satellite-ideation-reviewer`)**:
+     - `.gemini/skills/satellite-ideation-reviewer/` 配下にスキル定義（`SKILL.md`）および実行スクリプト（`run_review.py`）を新設。
+     - 母艦保護（母艦はレビュー禁止）、Read-only 担保、テーマ別レビュー（security, edge_cases, architecture）、Open/Closed 全件重複チェック、Cap 制御（最大3件）、`stage:ideation` による `tasks.md` への隔離を実装。
+  2. **サテライト登録時のラベル自動同期のデフォルト化**:
+     - `tools/add_project.py` の `setup_labels` をデフォルト有効（`True`）に変更し、テーマ別ラベル（`theme:security`, `theme:edge_cases`, `theme:architecture`）を追加。
+  3. **起票スクリプトの自己修復（Ensure Labels）ガード**:
+     - `run_review.py` で起票前にリポジトリのラベル実在を確認し、未登録の場合は即座に `gh label create` を自動実行して起票失敗を防止。
+* **対応内容（実装完了）**:
+  1. `.gemini/skills/satellite-ideation-reviewer/`（`SKILL.md`, `run_review.py`）を実装。
+  2. `tools/add_project.py` にテーマラベル追加＆デフォルト有効化。
+  3. `tests/test_satellite_ideation_reviewer.py` 全9件の単体テストを作成し合格確認。
+  4. 既存サテライト `env_builder` に標準ラベル全7種を一括配備・同期完了。
+  5. `docs/features/satellite_ideation_reviewer.md`, `SBOS-DD-007`, `SBOS-MULTI-001`, `README.md` を更新。
+
 ---
 
 ## 4. 改訂履歴
+- **2026/09/27 (Rev.2.21)**: 課題 PM-058 (自律Issue起票機能の独立スキル化とサテライトラベル自動同期・自己修復ガード) を解決済みに更新。
 - **2026/09/26 (Rev.2.20)**: 課題 PM-057 (配下リポジトリ専用Issue自動タグ付けワークフロー配備と母艦純化) を解決済みに更新。
 - **2026/09/26 (Rev.2.19)**: 課題 PM-056 (母艦の完全純化とサテライトへの仕様・タスク帰属化の完全適用) を解決済みに更新。
 - **2026/09/25 (Rev.2.18)**: 課題 PM-055 (Issue壁打ちライフサイクル、JEV重複検知、30日放置自動クローズ) を解決済みに更新。

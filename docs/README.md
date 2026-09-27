@@ -16,6 +16,7 @@
   * [`coder_test_and_github_ci_pr_fixer.md`](features/coder_test_and_github_ci_pr_fixer.md): Coderモデル動作検証仕様・実績および GitHub CI PR Fixer 設計書
   * [`multi_language_verifiers.md`](features/multi_language_verifiers.md): 多言語対応コード品質・構文検証基盤 (`tools/lang/`, Tree-sitter) 仕様書
   * [`ollama_modelfile_profile_management.md`](features/ollama_modelfile_profile_management.md): GGUF向けQwen ModelfileのCLI入力契約・生成手順
+  * [`satellite_ideation_reviewer.md`](features/satellite_ideation_reviewer.md): `agys` によるサテライトコード自律レビュー＆Issue自動起票スキル仕様書
   * [`yaml_configuration_system.md`](features/yaml_configuration_system.md): YAMLベース共通設定基盤仕様書 (`models.yaml`, `prompt.yaml`)
 * **`docs/how-to/`**: 開発・運用の操作手順ガイド
   * [`ollama_gguf_registration.md`](how-to/ollama_gguf_registration.md): 独立GGUFファイルのOllamaローカルモデル登録手順
