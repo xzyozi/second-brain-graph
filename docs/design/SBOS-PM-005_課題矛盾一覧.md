@@ -394,6 +394,8 @@
   2. `tools/add_project.py` に `load_master_issue_template` を実装し、母艦マスターテンプレートとの自動同期・整合を完了。
   3. `satellite-ideation-reviewer`（`run_review.py`）の `format_issue_body` を 0〜8章完全準拠に改修し、単体テストを更新・パス確認。
   4. `SBOS-DD-007` §3.7（標準スキーマと責務分離）および §3.8（CI運用指針）を追記・正本化。
+  5. `metadata/templates/issue_template.md` および `SBOS-DD-007` §3.9 に修正方針の選択肢提示と 2 段階壁打ちフロー（Tier 1: Issue内完結 / Tier 2: チャット個別フォロー）を規定。
+
 
 ---
 
