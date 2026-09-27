@@ -77,6 +77,7 @@ class ReviewItem:
     summary: str
     problem_detail: str
     suggested_solution: str
+    alternative_solution: str = ""
     keywords: list[str] = field(default_factory=list)
     related_issue_note: str = ""
 
@@ -286,7 +287,8 @@ def build_review_prompt(
       "severity": "High" | "Medium" | "Low",
       "summary": "問題の簡潔な要約（1〜2行）",
       "problem_detail": "何が起きているか、どのようなリスクがあるかの詳細説明",
-      "suggested_solution": "推奨される具体的な修正案やアプローチ、改善方針",
+      "suggested_solution": "案1（推奨）: 最小限・安全な改修アプローチとその理由",
+      "alternative_solution": "案2（代替）: 代替アプローチ（より堅牢な多層防御や設定化など）とその理由",
       "keywords": ["関連キーワード1", "キーワード2"]
     }}
   ]
@@ -325,6 +327,7 @@ def parse_agys_response(raw_output: str) -> list[ReviewItem]:
                 summary=r.get("summary", ""),
                 problem_detail=r.get("problem_detail", ""),
                 suggested_solution=r.get("suggested_solution", ""),
+                alternative_solution=r.get("alternative_solution", ""),
                 keywords=r.get("keywords", []),
             )
         )
@@ -456,24 +459,63 @@ def filter_and_cap_issues(items: list[ReviewItem], max_issues: int) -> list[Revi
 
 
 def format_issue_body(item: ReviewItem, theme_key: str) -> str:
-    """起票用 Issue 本文の Markdown を生成する."""
+    """起票用 Issue 本文の Markdown を生成する (母艦の 0〜8章標準スキーマ完全準拠)."""
     theme_name = THEME_CONFIGS.get(theme_key, {}).get("name", theme_key)
     rel_note = item.related_issue_note or "該当なし"
 
-    body = f"""## 検出テーマ: {theme_name}
-- **対象ファイル**: `{item.target_file}`
-- **重要度**: {item.severity}
+    sol_1 = item.suggested_solution or "最小限の安全な改修アプローチ"
+    sol_2 = item.alternative_solution or "入力検証の強化または多層防御アプローチ"
 
-### 課題・懸念点 (What & Why)
+    body = f"""## 0. メタ情報 (Scope & Impact)
+- **検出テーマ**: {theme_name}
+- **重要度**: {item.severity}
+- **関連Issue**: {rel_note}
+- **起票ステータス**: `stage:ideation` (agys 自律レビュー起票)
+
+## 1. 概要・背景
 {item.summary}
 
+### 課題詳細 (Problem Detail)
 {item.problem_detail}
 
-### 改善提案 (Suggested Approach)
+## 2. 仕様および要求事項
+<!-- ※起票時は修正方針の選択肢（案1, 案2）を提示。方針決定時に採用案を下の [ ] チェックリストに展開する -->
+
+### 検討中の修正方針 (Proposed Approaches):
+- **案 1 (推奨)**: {sol_1}
+- **案 2**: {sol_2}
+
+### 確定実装タスク (Task Checklist):
+<!-- ※壁打ち完了時（stage:ready 昇格時）に、選ばれた案に基づいて確定チェックボックスが配置されます -->
+- [ ] （方針決定後に確定タスクが展開されます）
+
+## 3. 段階的実装手順 (Step-by-step Execution)
+- **Phase 1 (Core Implementation)**: 対象箇所のロジック修正を最小限の変更で優先実装すること。
+- **Phase 2 (Test Implementation & Refinement)**: 検証コードを作成・実行し、問題が解消されたことを確認すること。
+
+## 4. 編集対象ファイル (Target Files)
+- `{item.target_file}`
+
+## 5. ドメイン知識・技術上の落とし穴 (Domain Knowledge & Technical Pitfalls)
+### 推奨実装パターン (Recommended Patterns)
 {item.suggested_solution}
 
-### 過去の関連 Issue
-- {rel_note}
+## 6. 設計制約・アンチパターンの禁止 (Architecture Constraints & Forbidden Actions)
+- 単一責任と一方向のデータフローを維持すること。
+- ハック的な例外揉み消しや場当たり的なパッチを避け、根本原因に対処すること。
+- 既存の公開 API シグネチャや他機能への破壊的変更を行わないこと。
+
+## 7. 対象外 (Non-Goals)
+- 本課題と直接無関係なリファクタリングや機能拡張はスコープ外。
+
+## 8. 完了定義 (Definition of Done)
+- [ ] 指摘された課題・脆弱性が解消され、意図通りに動作すること。
+- [ ] 動作確認・検証手順（テストまたはスクリプト実行）を実施し、正常終了すること。
+- [ ] 意図しない既存機能の破壊や、不要なコード（YAGNI違反）が含まれていないこと。
+
+### 【CI・自動検査に関する運用指針】
+- **CI / 静的解析が未整備のプロジェクト**: 手動の動作確認やローカルの検証スクリプトの正常終了をもって完了とする。
+- **CI / 静的解析が整備済みのプロジェクト**: 単体テスト・Linter（エラー0件）・CI Checks (All Green) の通過を必須とする。
 
 ---
 *※ 本 Issue は `agys` 自律レビューにより自動起票されました（`stage:ideation`）。壁打ち・検討後に `stage:ready` へ昇格してください。*

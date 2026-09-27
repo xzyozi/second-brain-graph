@@ -106,3 +106,42 @@ def test_extract_github_repo() -> None:
 def test_register_project_invalid_key_raises() -> None:
     with pytest.raises(ValueError):
         register_project(key="", name="Invalid Project")
+
+
+def test_register_project_loads_master_issue_template(tmp_path: pytest.TempPathFactory) -> None:
+    root_dir = str(tmp_path)
+    # 1. Test fallback when master template not in root_dir
+    register_project(
+        key="FALL",
+        name="Fallback App",
+        directory="projects/fallback",
+        root_dir=root_dir,
+    )
+    fallback_tpl = os.path.join(root_dir, "projects", "fallback", "docs", "issues", "_template.md")
+    assert os.path.exists(fallback_tpl)
+    with open(fallback_tpl, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "# [FALL-XXXX]" in content
+    assert "## 0. メタ情報 (Scope & Impact)" in content
+    assert "## 4. 編集対象ファイル (Target Files)" in content
+    assert "## 8. 完了定義 (Definition of Done)" in content
+    assert "CI・自動検査に関する運用指針" in content
+
+    # 2. Test master template loading when present
+    tpl_dir = os.path.join(root_dir, "metadata", "templates")
+    os.makedirs(tpl_dir, exist_ok=True)
+    master_file = os.path.join(tpl_dir, "issue_template.md")
+    with open(master_file, "w", encoding="utf-8") as f:
+        f.write("# [{key}-9999] Custom Master Template\n\n## Custom Section\n")
+
+    register_project(
+        key="CUST",
+        name="Custom App",
+        directory="projects/custom",
+        root_dir=root_dir,
+    )
+    custom_tpl = os.path.join(root_dir, "projects", "custom", "docs", "issues", "_template.md")
+    with open(custom_tpl, "r", encoding="utf-8") as f:
+        content2 = f.read()
+    assert "# [CUST-9999] Custom Master Template" in content2
+    assert "## Custom Section" in content2

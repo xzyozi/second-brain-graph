@@ -19,18 +19,82 @@ from typing import Any, Dict, Optional
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-ISSUE_TEMPLATE_CONTENT = """# [{key}-XXXX] Issueタイトル
 
-## 概要・目的
+def load_master_issue_template(root_dir: str = ".", key: str = "KEY") -> str:
+    """母艦の metadata/templates/issue_template.md を読み込み、プロジェクトキーを置換して返す.
+    存在しない場合は標準の0〜8章テンプレートにフォールバックする。
+    """
+    master_path = os.path.join(root_dir, "metadata", "templates", "issue_template.md")
+    if os.path.exists(master_path):
+        try:
+            with open(master_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            return content.replace("{key}", key)
+        except Exception as e:
+            logger.warning(f"Failed to read master template from {master_path}: {e}")
 
-## 要求仕様
+    # フォールバック用標準テンプレート (0〜8章完全準拠)
+    return f"""# [{key}-XXXX] タスクタイトル
 
-## 受入条件 (Acceptance Criteria)
-- [ ]
+## 0. メタ情報 (Scope & Impact)
+- **影響範囲**: サンドボックス限定 / 本番影響あり（要レビュー） のいずれかを明記
+- **既存コードへの依存**: なし（新規ファイルのみ） / あり（既存関数を変更）
+- **関連Issue**: なし / #XXXX の後続タスク
 
-## 変更対象想定ファイル
--
+## 1. 概要・背景
+（タスクの背景や目的、解決すべき課題を記述します。オーケストレーターがPR本文サマリーとしても抽出します）
+
+## 2. 仕様および要求事項
+<!-- ※起票時は修正方針の選択肢（案1, 案2）を提示。方針決定時に採用案を下の [ ] チェックリストに展開する -->
+
+### 検討中の修正方針 (Proposed Approaches):
+- **案 1 (推奨)**: [最小限・安全な改修アプローチ。理由: 互換性が高く影響が最小]
+- **案 2**: [代替アプローチ。理由: より堅牢だが影響範囲や前提条件に注意が必要]
+
+### 確定実装タスク (Task Checklist):
+<!-- ※壁打ち完了時（stage:ready 昇格時）に、選ばれた案に基づいて確定チェックボックスが配置されます -->
+- [ ] （方針決定後に確定タスクが展開されます）
+
+## 3. 段階的実装手順 (Step-by-step Execution)
+- **Phase 1 (Core Implementation)**: まず本体モジュール・主要ロジック・例外クラスのみを最小変更で優先実装すること。
+- **Phase 2 (Test Implementation & Refinement)**: 本体実装完了後、テストコード・検証スクリプトを作成・修正し、動作確認を行うこと。
+
+## 4. 編集対象ファイル (Target Files)
+- `path/to/file.py`（新規作成 / 既存編集）
+- `tests/path/to/test_file.py`
+
+## 5. ドメイン知識・技術上の落とし穴 (Domain Knowledge & Technical Pitfalls)
+- 使用ライブラリ・仕様
+- 典型的な落とし穴 (Pitfalls)
+- 推奨実装パターン (Recommended Patterns)
+- **検証用データ・環境の準備方針**:
+  - テスト用フィクスチャや実機環境（踏み台接続、環境変数等）の前提条件を明記。
+
+## 6. 設計制約・アンチパターンの禁止 (Architecture Constraints & Forbidden Actions)
+安定した品質を維持するため、以下のアーキテクチャ原則を厳守すること：
+- **単一責任と一方向のデータフロー**: 関数やクラス間で「相互呼び出し（循環依存・無限再帰）」となる設計を絶対に行わないこと。
+- **ハック的なフロー制御の禁止**: ループや再帰の停止条件として不自然なフラグ変数や場当たり的な実装を用いないこと。
+- **堅牢な解析ロジック**: 外部データやファイル構造のパース処理において、脆弱なハードコーディングを行わないこと。
+- **既存の破壊禁止**: 無関係な設定ファイルや既存の公開 API シグネチャを破壊しないこと。
+
+## 7. 対象外 (Non-Goals)
+- 本Issueでは〇〇の実装は行わない（別Issueで対応予定）
+
+## 8. 完了定義 (Definition of Done)
+- [ ] すべての要求仕様（セクション2）が実装され、責務が適切に分離されたクリーンな設計になっていること。
+- [ ] 動作確認・検証手順（テストまたはスクリプト実行）を実施し、正常終了すること。
+- [ ] 意図しない既存機能の破壊や、不要なコード（YAGNI違反）が含まれていないこと。
+
+### 【CI・自動検査に関する運用指針】
+- **CI / 静的解析が未整備のプロジェクト**:
+  - 自動検査ツール（Ruff等）の実行は強制せず、ローカルでの動作確認コマンドや手動検証スクリプトの正常終了をもって完了とする。
+- **CI / 静的解析が整備済みのプロジェクト**:
+  - プロジェクト側の CI 設定（GitHub Actions / `pyproject.toml` 等）に準拠し、以下の項目を完了条件として適用する：
+    - - [ ] 単体テスト / 回帰テストがすべて通過すること（`pytest` 等）。
+    - - [ ] プロジェクト規定の静的解析（Linter / 型検査）エラーが 0 件であること。
+    - - [ ] GitHub Actions CI チェックが All Green であること。
 """
+
 
 ISSUE_AUTO_TAG_WORKFLOW = """name: Auto Label Issues
 
@@ -231,8 +295,9 @@ def register_project(
     os.makedirs(issues_dir, exist_ok=True)
     template_path = os.path.join(issues_dir, "_template.md")
     if not os.path.exists(template_path):
+        template_content = load_master_issue_template(root_dir=root_dir, key=key)
         with open(template_path, "w", encoding="utf-8") as f:
-            f.write(ISSUE_TEMPLATE_CONTENT.format(key=key))
+            f.write(template_content)
         logger.info(f"Initialized issue template at {template_path}")
 
     # 6. Ensure satellite has issue auto-tagging workflow (.github/workflows/issue-auto-tag.yml)
