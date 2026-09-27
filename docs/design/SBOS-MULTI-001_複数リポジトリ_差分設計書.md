@@ -236,4 +236,5 @@ uv run python tools/score_issues.py
 cat tools/.cache/priority-cache.json | python3 -m json.tool | grep NEW
 ```
 
-> **補足（実装済み・PM-056）：** 上記の新規衛星登録は `tools/add_project.py` として正式にスクリプト化・実装済みである。サテライト本体の `projects/<name>/docs/` 配下に `project.json`, `tasks.md`, `issues/` を初期配置し、母艦の `metadata/.project-registry.json` にのみ登録する（母艦純化仕様）。通常運用では `uv run python tools/add_project.py --key NEW --name "新規サービス" --dir projects/new-service` を利用すること。テストは `tests/test_add_project.py` を参照。
+> **補足（実装済み・PM-056, PM-058）：** 上記の新規衛星登録は `tools/add_project.py` として正式にスクリプト化・実装済みである。サテライト本体の `projects/<name>/docs/` 配下に `project.json`, `tasks.md`, `issues/` を初期配置し、母艦の `metadata/.project-registry.json` にのみ登録する（母艦純化仕様）。さらに PM-058 により、サテライト登録時に GitHub 上へ標準ステージラベル（`stage:*`）およびテーマラベル（`theme:*`）を自動作成・同期する機能がデフォルト有効（`setup_labels=True`）化されている。通常運用では `uv run python tools/add_project.py --key NEW --name "新規サービス" --dir projects/new-service` を利用すること。テストは `tests/test_add_project.py` を参照。
+
