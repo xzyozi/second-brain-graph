@@ -168,7 +168,7 @@ def test_format_issue_body() -> None:
     assert "## 1. 概要・背景" in body
     assert "入力検証がありません" in body
     assert "### 検討中の修正方針 (Proposed Approaches):" in body
-    assert "**案 1 (推奨)**: 正規表現でバリデーションを行ってください" in body
+    assert "- [ ] **案 1 (推奨)**: 正規表現でバリデーションを行ってください" in body
     assert "## 4. 編集対象ファイル (Target Files)" in body
     assert "`src/main.py#L10`" in body
     assert "## 8. 完了定義 (Definition of Done)" in body
