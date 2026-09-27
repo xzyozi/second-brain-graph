@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -209,4 +210,27 @@ def test_main_dry_run_with_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 
     captured = capsys.readouterr()
     assert "[DRY-RUN] 起票対象: [security] mock vulnerability" in captured.out
-    assert "[Labels]: stage:ideation" in captured.out
+    assert "[Labels]: stage:ideation, theme:security" in captured.out
+
+
+def test_ensure_satellite_labels_creates_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """不足しているラベルが自動作成されることを検証する."""
+    calls: list[list[str]] = []
+
+    def mock_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        if cmd[1] == "label" and cmd[2] == "list":
+            # 既存は bug のみと仮定
+            return subprocess.CompletedProcess(cmd, 0, stdout='[{"name": "bug"}]', stderr="")
+        elif cmd[1] == "label" and cmd[2] == "create":
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
+    run_review.ensure_satellite_labels(tmp_path, theme_key="security", dry_run=False)
+
+    created_labels = [c[3] for c in calls if len(c) > 3 and c[1] == "label" and c[2] == "create"]
+    assert "stage:ideation" in created_labels
+    assert "theme:security" in created_labels
+

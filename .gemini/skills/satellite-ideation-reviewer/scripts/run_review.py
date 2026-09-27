@@ -59,6 +59,13 @@ THEME_CONFIGS: dict[str, dict[str, str]] = {
     },
 }
 
+REQUIRED_LABELS: dict[str, tuple[str, str]] = {
+    "stage:ideation": ("cfd3d7", "構想・壁打ち中（実装対象外）"),
+    "theme:security": ("d93f0b", "セキュリティ脆弱性・安全対策"),
+    "theme:edge_cases": ("e99695", "エッジケース・異常系堅牢化"),
+    "theme:architecture": ("bfd4f2", "関心事の分離・構造改善"),
+}
+
 
 @dataclass
 class ReviewItem:
@@ -487,16 +494,67 @@ def format_issue_body(item: ReviewItem, theme_key: str) -> str:
     return body
 
 
+def ensure_satellite_labels(
+    target_dir: Path, theme_key: str, dry_run: bool = False
+) -> None:
+    """対象サテライトリポジトリに必要な GitHub ラベル（stage:ideation, theme:<theme>）が存在することを保証する."""
+    needed_labels = ["stage:ideation", f"theme:{theme_key}"]
+    if dry_run:
+        logger.debug(f"[DRY-RUN] ラベル存在確認・自動作成をスキップ: {needed_labels}")
+        return
+
+    existing: set[str] = set()
+    try:
+        res = subprocess.run(
+            ["gh", "label", "list", "--json", "name"],
+            cwd=target_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding="utf-8",
+        )
+        existing = {item.get("name", "") for item in json.loads(res.stdout)}
+    except Exception as e:
+        logger.warning(f"既存ラベルの確認に失敗しました: {e}")
+
+    for lbl in needed_labels:
+        if lbl not in existing:
+            color, desc = REQUIRED_LABELS.get(lbl, ("ededed", "Auto-generated label"))
+            try:
+                subprocess.run(
+                    [
+                        "gh",
+                        "label",
+                        "create",
+                        lbl,
+                        "--color",
+                        color,
+                        "--description",
+                        desc,
+                        "--force",
+                    ],
+                    cwd=target_dir,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    encoding="utf-8",
+                )
+                logger.info(f"ラベル '{lbl}' を自動作成・同期しました")
+            except Exception as e:
+                logger.warning(f"ラベル '{lbl}' の自動作成に失敗しました: {e}")
+
+
 def create_github_issue(
     target_dir: Path, item: ReviewItem, theme_key: str, dry_run: bool
 ) -> bool:
-    """GitHub Issue を作成する（stage:ideation ラベル付き）."""
+    """GitHub Issue を作成する（stage:ideation, theme:<theme> ラベル付き）."""
     body = format_issue_body(item, theme_key)
+    labels = ["stage:ideation", f"theme:{theme_key}"]
 
     if dry_run:
         print("\n" + "=" * 60)
         print(f"[DRY-RUN] 起票対象: {item.title}")
-        print("[Labels]: stage:ideation")
+        print(f"[Labels]: {', '.join(labels)}")
         print("-" * 60)
         print(body.strip())
         print("=" * 60 + "\n")
@@ -511,7 +569,9 @@ def create_github_issue(
         "--body",
         body,
         "--label",
-        "stage:ideation",
+        labels[0],
+        "--label",
+        labels[1],
     ]
     try:
         res = subprocess.run(
@@ -579,6 +639,9 @@ def main(args: list[str] | None = None) -> int:
     logger.info(f"起票対象項目数（Cap 適用後）: {len(final_items)} 件")
 
     # 7. Issue 起票（またはドライラン）
+    if final_items:
+        ensure_satellite_labels(target_dir, opts.theme, opts.dry_run)
+
     success_count = 0
     for item in final_items:
         if create_github_issue(target_dir, item, opts.theme, opts.dry_run):
