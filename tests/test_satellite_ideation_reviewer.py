@@ -149,7 +149,7 @@ def test_filter_and_cap_issues() -> None:
 
 
 def test_format_issue_body() -> None:
-    """起票用 Issue 本文の Markdown 構造を検証する."""
+    """起票用 Issue 本文の Markdown 構造（0〜8章標準スキーマ）を検証する."""
     item = ReviewItem(
         title="[security] 検証不備",
         target_file="src/main.py#L10",
@@ -161,10 +161,16 @@ def test_format_issue_body() -> None:
     )
 
     body = run_review.format_issue_body(item, theme_key="security")
-    assert "## 検出テーマ: セキュリティ" in body
-    assert "`src/main.py#L10`" in body
+    assert "## 0. メタ情報 (Scope & Impact)" in body
+    assert "**検出テーマ**: セキュリティ" in body
     assert "**重要度**: High" in body
     assert "過去の Issue #5 (Closed) の再発確認" in body
+    assert "## 1. 概要・背景" in body
+    assert "入力検証がありません" in body
+    assert "## 4. 編集対象ファイル (Target Files)" in body
+    assert "`src/main.py#L10`" in body
+    assert "## 8. 完了定義 (Definition of Done)" in body
+    assert "CI・自動検査に関する運用指針" in body
     assert "stage:ideation" in body
 
 
