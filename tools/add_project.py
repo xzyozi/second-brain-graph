@@ -74,6 +74,9 @@ STANDARD_STAGE_LABELS = [
     ("stage:ready", "0e8a16", "仕様確定・着手可能（tasks.md対象）"),
     ("stage:in-progress", "fbca04", "エージェント実装・作業中"),
     ("stage:done", "1d76db", "完了・マージ済み"),
+    ("theme:security", "d93f0b", "セキュリティ脆弱性・安全対策"),
+    ("theme:edge_cases", "e99695", "エッジケース・異常系堅牢化"),
+    ("theme:architecture", "bfd4f2", "関心事の分離・構造改善"),
 ]
 
 
@@ -155,7 +158,7 @@ def register_project(
     description: str = "",
     repo_url: Optional[str] = None,
     github_repo: Optional[str] = None,
-    setup_labels: bool = False,
+    setup_labels: bool = True,
     root_dir: str = ".",
 ) -> Dict[str, Any]:
     """Register a new satellite project into Second Brain OS."""
@@ -302,8 +305,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--setup-labels",
-        action="store_true",
-        help="Setup standard stage labels on the satellite GitHub repository via gh CLI",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Setup standard stage and theme labels on the satellite GitHub repository via gh CLI (default: True)",
     )
 
     args = parser.parse_args()
