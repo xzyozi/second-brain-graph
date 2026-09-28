@@ -14,6 +14,13 @@
       "meta": "projects/env_builder/docs",
       "registered_at": "2026-09-26T03:27:55Z",
       "github_repo": "xzyozi/env_builder"
+    },
+    "CW": {
+      "name": "clip_watcher",
+      "dir": "projects/clip_watcher",
+      "meta": "projects/clip_watcher/docs",
+      "registered_at": "2026-09-28T02:35:14Z",
+      "github_repo": "xzyozi/Clip_Watcher"
     }
   }
 }
