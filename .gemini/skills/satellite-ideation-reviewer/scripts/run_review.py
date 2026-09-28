@@ -121,6 +121,12 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="サテライト内の特定サブディレクトリやファイルにスコープを限定（相対パス）",
     )
     parser.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="agys レビュー実行のタイムアウト秒数（デフォルト: 180）",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="実際の Issue 起票を行わず、検知結果とプレビューを出力する",
@@ -358,6 +364,7 @@ def run_agys_review(
     target_dir: Path,
     prompt: str,
     mock_response: str | None = None,
+    timeout: int = 180,
 ) -> list[ReviewItem]:
     """agys を呼び出してレビュー結果を取得する."""
     if mock_response:
@@ -380,7 +387,7 @@ def run_agys_review(
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=180,  # 3分タイムアウト
+            timeout=timeout,
         )
         if proc.returncode != 0:
             logger.error(
@@ -395,7 +402,7 @@ def run_agys_review(
 
         return parse_agys_response(raw_output)
     except subprocess.TimeoutExpired:
-        logger.error("agys のレビュー処理がタイムアウトしました (180s)")
+        logger.error(f"agys のレビュー処理がタイムアウトしました ({timeout}s)")
         return []
     except Exception as e:
         logger.error(f"agys 実行または応答解析に失敗しました: {e}")
@@ -640,7 +647,9 @@ def main(args: list[str] | None = None) -> int:
     prompt = build_review_prompt(opts.theme, target_files, existing_issues)
 
     # 4. agys 実行（またはモック実行）
-    raw_items = run_agys_review(target_dir, prompt, opts.mock_response)
+    raw_items = run_agys_review(
+        target_dir, prompt, opts.mock_response, timeout=opts.timeout
+    )
     logger.info(f"agys レビュー検知項目数: {len(raw_items)} 件")
 
     if not raw_items:
