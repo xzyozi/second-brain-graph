@@ -68,18 +68,13 @@ def test_generate_promoted_body() -> None:
         concrete_tasks=["タスク1を実行する", "テストコードを作成する"],
     )
 
-    assert "`stage:ready` (方針確定・実装準備完了)" in promoted
-    assert "### 採用された修正方針:" in promoted
-    assert "アプローチ1のタイトル" in promoted
-    assert "- [ ] タスク1を実行する" in promoted
-    assert "- [ ] テストコードを作成する" in promoted
-    assert "アプローチ2のタイトル" in promoted
+    assert "`stage:ready` (方針確定・tasks.md 登録完了)" in promoted
+    assert "- [x] **案 1 (推奨): アプローチ1のタイトル**" in promoted
+    assert "- [ ] **案 2: アプローチ2のタイトル**" in promoted
+    assert "### 確定実装タスク" not in promoted
     assert "## 7. 対象外 (Non-Goals)" in promoted
-    assert (
-        "案2を採用したため今回はスコープ外" in promoted
-        or "案1を採用したため今回はスコープ外" in promoted
-    )
-    assert "壁打ちにより案1が採用され、stage:ready（実装可能）に昇格しました" in promoted
+    assert "**案 2 (アプローチ2のタイトル)**: 案1を採用したため今回はスコープ外" in promoted
+    assert "tasks.md に登録されて stage:ready に昇格しました" in promoted
 
 
 def test_sync_to_tasks_md(tmp_path: Path) -> None:

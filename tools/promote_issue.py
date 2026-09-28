@@ -142,7 +142,7 @@ def generate_promoted_body(
     approaches: Dict[int, Dict[str, Any]],
     concrete_tasks: Optional[List[str]] = None,
 ) -> str:
-    """採用案を展開し、非採用案を退避した stage:ready 用の Issue 本文を生成する."""
+    """採用案を [x] にし、非採用案を退避した stage:ready 用の Issue 本文を生成する."""
     sel = approaches.get(selected_approach)
     if not sel:
         raise ValueError(f"アプローチ 案{selected_approach} の情報が見つかりません。")
@@ -153,61 +153,49 @@ def generate_promoted_body(
     # 1. 起票ステータス更新
     body_updated = re.sub(
         r"-\s*\*\*起票ステータス\*\*:\s*.*",
-        "- **起票ステータス**: `stage:ready` (方針確定・実装準備完了)",
+        "- **起票ステータス**: `stage:ready` (方針確定・tasks.md 登録完了)",
         body,
     )
 
-    # 2. セクション2の修正方針・タスクリストの置換
-    tasks_md = ""
-    if concrete_tasks:
-        for t in concrete_tasks:
-            tasks_md += f"- [ ] {t}\n"
-    else:
-        # デフォルトは選ばれた案に基づく基本チェック項目
-        tasks_md = (
-            f"- [ ] 選定方針（案 {selected_approach}: {sel['title']}）に基づくモジュール実装\n"
+    # 2. セクション2のチェックボックス更新（採用案を [x] に置換）
+    for num in [1, 2]:
+        chk_char = "x" if num == selected_approach else " "
+        body_updated = re.sub(
+            rf"^-\s*\[[ xX]\]\s*(\*\*案\s*{num}.*)$",
+            rf"- [{chk_char}] \1",
+            body_updated,
+            flags=re.MULTILINE,
         )
-        tasks_md += "- [ ] 単体テスト・検証手順の作成および実行確認\n"
 
-    sel_text = f"""### 採用された修正方針:
-- **案 {selected_approach}{" (推奨)" if selected_approach == 1 else ""}: {sel["title"]}**
-{sel["detail"]}
-
-### 確定実装タスク (Task Checklist):
-{tasks_md.rstrip()}"""
-
-    # 既存の ## 2. 仕様および要求事項 から ## 3. までのブロックを置換
-    sec2_pattern = re.compile(
-        r"(## 2\. 仕様および要求事項.*?\n)(?=## 3\. 段階的実装手順)",
-        re.DOTALL,
+    # 3. 確定実装タスク枠が存在する場合は削除（tasks.md に一元化）
+    body_updated = re.sub(
+        r"\n*### 確定実装タスク \(Task Checklist\):.*?(?=\n## 3|\Z)",
+        "",
+        body_updated,
+        flags=re.DOTALL,
     )
-    if sec2_pattern.search(body_updated):
-        body_updated = sec2_pattern.sub(f"## 2. 仕様および要求事項\n\n{sel_text}\n\n", body_updated)
 
-    # 3. セクション7（対象外）に不採用案を退避
-    non_goal_entry = ""
+    # 4. セクション7（対象外）に不採用案を退避
     if rej:
         non_goal_entry = f"- **案 {rejected_approach} ({rej['title']})**: 案{selected_approach}を採用したため今回はスコープ外。"
-
-    sec7_pattern = re.compile(
-        r"(## 7\. 対象外 \(Non-Goals\).*?\n)(?=## 8\. 完了定義)",
-        re.DOTALL,
-    )
-    if sec7_pattern.search(body_updated):
-        cur_sec7 = sec7_pattern.search(body_updated).group(1)
-        # プレースホルダーの削除
-        cleaned_sec7 = re.sub(
-            r"- （※壁打ちで採用されなかった代替アプローチはここに記録してスコープ外を明確化）\n?",
-            "",
-            cur_sec7,
+        sec7_pattern = re.compile(
+            r"(## 7\. 対象外 \(Non-Goals\).*?\n)(?=## 8\. 完了定義)",
+            re.DOTALL,
         )
-        if non_goal_entry and non_goal_entry not in cleaned_sec7:
-            cleaned_sec7 = cleaned_sec7.rstrip() + f"\n{non_goal_entry}\n\n"
-        body_updated = sec7_pattern.sub(cleaned_sec7, body_updated)
+        if sec7_pattern.search(body_updated):
+            cur_sec7 = sec7_pattern.search(body_updated).group(1)
+            cleaned_sec7 = re.sub(
+                r"- （※壁打ちで採用されなかった代替アプローチはここに記録してスコープ外を明確化）\n?",
+                "",
+                cur_sec7,
+            )
+            if non_goal_entry not in cleaned_sec7:
+                cleaned_sec7 = cleaned_sec7.rstrip() + f"\n{non_goal_entry}\n\n"
+            body_updated = sec7_pattern.sub(cleaned_sec7, body_updated)
 
-    # 4. フッターの更新
+    # 5. フッターの更新
     footer_pattern = re.compile(r"---*\s*\n\*※ 本 Issue は.*?\*\s*$", re.DOTALL)
-    new_footer = f"---\n*※ 本 Issue は壁打ちにより案{selected_approach}が採用され、stage:ready（実装可能）に昇格しました。*"
+    new_footer = f"---\n*※ 本 Issue は壁打ちにより案{selected_approach}が採用され、tasks.md に登録されて stage:ready に昇格しました。*"
     if footer_pattern.search(body_updated):
         body_updated = footer_pattern.sub(new_footer, body_updated)
     else:
