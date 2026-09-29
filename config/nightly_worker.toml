@@ -1,0 +1,62 @@
+# ==============================================================================
+# 自律夜間バッチ（Nightly Task Worker）設定ファイル
+# ==============================================================================
+
+version = "1.0"
+
+# バッチ実行自体の有効/無効（false にすると即座に安全停止）
+enabled = true
+
+# 1回のバッチ実行で実装する最大タスク数（※暴走・リソース枯渇防止のため通常は 1 を推奨）
+max_tasks_per_run = 1
+
+# 対象サテライト名リスト（["all"] で全サテライト巡回、または ["clip_watcher"] 等で限定）
+target_projects = ["all"]
+
+[loop]
+# 自己ループ（OS非依存の常駐デーモン）モードの有効化
+# false の場合は1回実行して終了（ワンショット実行）
+# true または CLI で --loop を指定すると終了せず常駐ループ待機
+enabled = false
+
+# ループ方式: "daily"（毎日指定時刻に実行）または "interval"（一定秒数ごとの定期巡回）
+mode = "daily"
+
+# mode = "daily" の場合の実行時刻（"HH:MM" 形式）
+daily_time = "03:00"
+
+# mode = "interval" の場合の待機秒数（デフォルト: 3600 = 1時間）
+interval_seconds = 3600
+
+# 待機ループ中の設定ファイル (TOML) 変更の自動再読み込み（ホットリロード）
+hot_reload = true
+
+[task_selection]
+# 実装対象とする必須ラベル（※壁打ち未済の誤実装を防ぐため stage:ready を必須とする）
+require_label = "stage:ready"
+
+# タスク選定の優先順位（"priority_score": 重要度スコア順、または "added_date": 登録日順）
+sort_by = "priority_score"
+
+# 他のタスクにブロック（依存）されている Issue をスキップするか
+skip_blocked = true
+
+[execution]
+# 実装完了時に Draft PR（下書きPR）を自動起票するか（false の場合はブランチ作成のみ）
+create_draft_pr = true
+
+# 作業ツリーに未コミットの変更がある場合に自動 stash で退避するか
+auto_stash = true
+
+# 1タスクあたりの最大実行タイムアウト秒数（Aider コーディング + テスト自己修復）
+timeout_seconds = 600
+
+# テスト不合格時のエスカレーション前に試行する最大リトライ回数
+max_retries = 1
+
+[logging]
+# 実行ログの保存先ディレクトリ（母艦ルートからの相対パス）
+log_dir = "logs/nightly"
+
+# 実装失敗時に詳細レポート（failure_report.md）を保存してエスカレーションするか
+save_failure_reports = true
