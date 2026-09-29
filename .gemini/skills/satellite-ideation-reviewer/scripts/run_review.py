@@ -127,17 +127,6 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="agys レビュー実行のタイムアウト秒数（デフォルト: 180）",
     )
     parser.add_argument(
-        "--sync-tasks-md",
-        action="store_true",
-        help="Issue 起票時にサテライトの docs/tasks.md にもタスク（バックログ）を自動同期する",
-    )
-    parser.add_argument(
-        "--files",
-        nargs="*",
-        default=None,
-        help="レビュー対象の特定ファイル群（相対パス、スペース区切り）。差分レビュー時に指定。",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="実際の Issue 起票を行わず、検知結果とプレビューを出力する",
@@ -213,12 +202,12 @@ def fetch_existing_issues(target_dir: Path) -> list[ExistingIssue]:
         return []
 
 
-def collect_target_files(
-    target_dir: Path,
-    subpath: str = "",
-    files: list[str] | None = None,
-) -> list[str]:
+def collect_target_files(target_dir: Path, subpath: str = "") -> list[str]:
     """レビュー対象となるソースコードファイルの相対パス一覧を収集する."""
+    base_path = target_dir / subpath if subpath else target_dir
+    if base_path.is_file():
+        return [str(base_path.relative_to(target_dir)).replace("\\", "/")]
+
     valid_extensions = {
         ".py",
         ".ts",
@@ -246,26 +235,10 @@ def collect_target_files(
         "docs",
     }
 
-    if files:
-        collected_files: list[str] = []
-        for f in files:
-            p = (target_dir / f).resolve()
-            if p.is_file() and p.suffix.lower() in valid_extensions:
-                try:
-                    rel = str(p.relative_to(target_dir)).replace("\\", "/")
-                    collected_files.append(rel)
-                except ValueError:
-                    continue
-        return sorted(list(set(collected_files)))
-
-    base_path = target_dir / subpath if subpath else target_dir
-    if base_path.is_file():
-        return [str(base_path.relative_to(target_dir)).replace("\\", "/")]
-
     collected: list[str] = []
-    for root, dirs, files_in_dir in os.walk(base_path):
+    for root, dirs, files in os.walk(base_path):
         dirs[:] = [d for d in dirs if d not in ignore_dirs]
-        for f in files_in_dir:
+        for f in files:
             p = Path(root) / f
             if p.suffix.lower() in valid_extensions:
                 rel = str(p.relative_to(target_dir)).replace("\\", "/")
@@ -600,69 +573,7 @@ def ensure_satellite_labels(target_dir: Path, theme_key: str, dry_run: bool = Fa
                 logger.warning(f"ラベル '{lbl}' の自動作成に失敗しました: {e}")
 
 
-def resolve_project_key(target_dir: Path) -> str:
-    """target_dir の docs/project.json 等から project_key を解決する."""
-    proj_json = target_dir / "docs" / "project.json"
-    if proj_json.is_file():
-        try:
-            data = json.loads(proj_json.read_text(encoding="utf-8"))
-            if "key" in data and data["key"]:
-                return data["key"]
-        except Exception:
-            pass
-    return target_dir.name.upper()[:4]
-
-
-def sync_review_to_tasks_md(
-    target_dir: Path,
-    item: ReviewItem,
-    theme_key: str,
-    issue_num: int,
-) -> bool:
-    """サテライトの docs/tasks.md に新規レビュー課題を追記する."""
-    tasks_path = target_dir / "docs" / "tasks.md"
-    if not tasks_path.exists():
-        tasks_path.parent.mkdir(parents=True, exist_ok=True)
-        tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
-
-    content = tasks_path.read_text(encoding="utf-8")
-    issue_tag = f"issue:#{issue_num}"
-    if issue_tag in content:
-        return False
-
-    project_key = resolve_project_key(target_dir)
-    existing_nums = [
-        int(m.group(1))
-        for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)
-    ]
-    next_num = max(existing_nums, default=0) + 1
-    task_id = f"{project_key}-{next_num:04d}"
-
-    priority = item.severity.lower()
-    import datetime
-    today = datetime.date.today().isoformat()
-    new_line = (
-        f"- [ ] [{task_id}] {item.title} "
-        f"<!-- priority:{priority} {issue_tag} theme:{theme_key} stage:ideation added:{today} -->\n"
-    )
-
-    if content.endswith("\n"):
-        updated = content + new_line
-    else:
-        updated = content + "\n" + new_line
-
-    tasks_path.write_text(updated, encoding="utf-8")
-    logger.info(f"tasks.md に自動追加しました: [{task_id}] {item.title} ({issue_tag})")
-    return True
-
-
-def create_github_issue(
-    target_dir: Path,
-    item: ReviewItem,
-    theme_key: str,
-    dry_run: bool,
-    sync_tasks_md: bool = False,
-) -> bool:
+def create_github_issue(target_dir: Path, item: ReviewItem, theme_key: str, dry_run: bool) -> bool:
     """GitHub Issue を作成する（stage:ideation, theme:<theme> ラベル付き）."""
     body = format_issue_body(item, theme_key)
     labels = ["stage:ideation", f"theme:{theme_key}"]
@@ -671,9 +582,6 @@ def create_github_issue(
         print("\n" + "=" * 60)
         print(f"[DRY-RUN] 起票対象: {item.title}")
         print(f"[Labels]: {', '.join(labels)}")
-        if sync_tasks_md:
-            project_key = resolve_project_key(target_dir)
-            print(f"[DRY-RUN] tasks.md 追記予定: [{project_key}-XXXX] {item.title}")
         print("-" * 60)
         print(body.strip())
         print("=" * 60 + "\n")
@@ -703,13 +611,6 @@ def create_github_issue(
         )
         issue_url = res.stdout.strip()
         logger.info(f"Issue 起票完了: {issue_url}")
-
-        if sync_tasks_md:
-            m = re.search(r"/issues/(\d+)", issue_url)
-            if m:
-                issue_num = int(m.group(1))
-                sync_review_to_tasks_md(target_dir, item, theme_key, issue_num)
-
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Issue 起票に失敗しました ({item.title}): {e.stderr}")
@@ -736,7 +637,7 @@ def main(args: list[str] | None = None) -> int:
     existing_issues = fetch_existing_issues(target_dir)
 
     # 2. 対象ファイル収集
-    target_files = collect_target_files(target_dir, opts.path, files=opts.files)
+    target_files = collect_target_files(target_dir, opts.path)
     if not target_files:
         logger.warning(f"対象となるコードファイルが見つかりませんでした: {opts.target}")
         return 0
@@ -768,13 +669,7 @@ def main(args: list[str] | None = None) -> int:
 
     success_count = 0
     for item in final_items:
-        if create_github_issue(
-            target_dir,
-            item,
-            opts.theme,
-            opts.dry_run,
-            sync_tasks_md=opts.sync_tasks_md,
-        ):
+        if create_github_issue(target_dir, item, opts.theme, opts.dry_run):
             success_count += 1
 
     logger.info(
