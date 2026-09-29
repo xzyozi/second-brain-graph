@@ -22,9 +22,9 @@ def test_load_config_valid_toml(tmp_path: Path) -> None:
 
     [loop]
     enabled = true
-    mode = "interval"
+    mode = "daily"
+    daily_times = ["03:00", "12:00"]
     interval_seconds = 1800
-    daily_time = "04:00"
 
     [task_selection]
     require_label = "stage:ready"
@@ -42,8 +42,8 @@ def test_load_config_valid_toml(tmp_path: Path) -> None:
     assert config["enabled"] is True
     assert config["max_tasks_per_run"] == 2
     assert config["loop"]["enabled"] is True
-    assert config["loop"]["mode"] == "interval"
-    assert config["loop"]["interval_seconds"] == 1800
+    assert config["loop"]["mode"] == "daily"
+    assert config["loop"]["daily_times"] == ["03:00", "12:00"]
     assert config["task_selection"]["require_label"] == "stage:ready"
     assert config["execution"]["timeout_seconds"] == 300
 
@@ -120,20 +120,61 @@ def test_select_best_task_cap(tmp_path: Path) -> None:
     assert best_two[1].task_id == "T1"
 
 
-def test_calculate_sleep_seconds_until() -> None:
-    """指定時刻 (HH:MM) までの秒数計算ロジックを検証する."""
-    # 現在時刻が 10:00 の場合、11:30 までは 1時間30分 = 5400 秒
+def test_normalize_daily_times() -> None:
+    """時刻指定文字列やリストの正規化を検証する."""
+    # 単一文字列
+    assert nightly_task_worker.normalize_daily_times("03:00") == ["03:00"]
+    # カンマ区切り
+    assert nightly_task_worker.normalize_daily_times("12:00, 03:00") == ["03:00", "12:00"]
+    # リスト形式（ソート＆重複排除）
+    assert nightly_task_worker.normalize_daily_times(["18:00", "03:00", "12:00", "03:00"]) == [
+        "03:00",
+        "12:00",
+        "18:00",
+    ]
+    # 空値フォールバック
+    assert nightly_task_worker.normalize_daily_times([]) == ["03:00"]
+
+    # フォーマット異常は ValueError
+    with pytest.raises(ValueError):
+        nightly_task_worker.normalize_daily_times("25:00")
+    with pytest.raises(ValueError):
+        nightly_task_worker.normalize_daily_times("12:60")
+    with pytest.raises(ValueError):
+        nightly_task_worker.normalize_daily_times("invalid")
+
+
+def test_get_next_target_time_multiple_schedules() -> None:
+    """複数断面から直近の目標時刻と待機秒数が正しく算出されることを検証する."""
+    base_times = ["03:00", "12:00", "18:00"]
+
+    # 1. 現在時刻が 10:00 の場合 -> 直近断面は 12:00 (差分 2時間 = 7200秒)
+    now_10am = datetime.datetime(2026, 9, 30, 10, 0, 0)
+    wait_secs, next_time = nightly_task_worker.get_next_target_time(base_times, now=now_10am)
+    assert next_time == "12:00"
+    assert wait_secs == pytest.approx(7200.0)
+
+    # 2. 現在時刻が 15:30 の場合 -> 直近断面は 18:00 (差分 2.5時間 = 9000秒)
+    now_330pm = datetime.datetime(2026, 9, 30, 15, 30, 0)
+    wait_secs, next_time = nightly_task_worker.get_next_target_time(base_times, now=now_330pm)
+    assert next_time == "18:00"
+    assert wait_secs == pytest.approx(9000.0)
+
+    # 3. 現在時刻が 22:00 の場合（本日分終了） -> 直近断面は翌日の 03:00 (差分 5時間 = 18000秒)
+    now_10pm = datetime.datetime(2026, 9, 30, 22, 0, 0)
+    wait_secs, next_time = nightly_task_worker.get_next_target_time(base_times, now=now_10pm)
+    assert next_time == "03:00"
+    assert wait_secs == pytest.approx(18000.0)
+
+
+def test_calculate_sleep_seconds_until_backward_compatible() -> None:
+    """単一時刻指定に対する calculate_sleep_seconds_until の後方互換性を検証する."""
     base_time = datetime.datetime(2026, 9, 30, 10, 0, 0)
     secs = nightly_task_worker.calculate_sleep_seconds_until("11:30", now=base_time)
     assert secs == pytest.approx(5400.0)
 
-    # 現在時刻が 10:00 の場合、03:00 は翌日のため 17 時間 = 61200 秒
     secs_next_day = nightly_task_worker.calculate_sleep_seconds_until("03:00", now=base_time)
     assert secs_next_day == pytest.approx(17 * 3600.0)
-
-    # フォーマット異常は ValueError
-    with pytest.raises(ValueError):
-        nightly_task_worker.calculate_sleep_seconds_until("invalid_time")
 
 
 def test_interruptible_sleep() -> None:

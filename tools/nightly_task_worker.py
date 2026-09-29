@@ -7,6 +7,7 @@
 
 OSスケジューラ（Windowsタスクスケジューラやcron）に依存せず、
 Pythonプロセス単体でクロスプラットフォームに常駐待機する「自己ループ（Daemon）モード」を備えています。
+1日に複数の実行時刻（複数断面、例: 03:00, 12:00）を柔軟にスケジュール指定可能です。
 """
 
 from __future__ import annotations
@@ -88,12 +89,14 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--loop-mode",
         choices=["daily", "interval"],
         default=None,
-        help="自己ループ方式（daily: 毎日指定時刻, interval: 一定秒数待機）",
+        help="自己ループ方式（daily: 指定時刻断面, interval: 一定秒数待機）",
     )
     parser.add_argument(
         "--daily-time",
+        "--daily-times",
+        dest="daily_time",
         default=None,
-        help="daily モード時の実行時刻（例: 03:00）",
+        help="daily モード時の実行時刻（単一 '03:00' またはカンマ区切り '03:00,12:00'）",
     )
     parser.add_argument(
         "--interval",
@@ -290,24 +293,75 @@ def execute_autonomous_task(
         return False
 
 
+def normalize_daily_times(raw_times: Any) -> list[str]:
+    """設定や引数の時刻指定を昇順にソートされた HH:MM 文字列リストに正規化する."""
+    candidates: list[str] = []
+    if isinstance(raw_times, str):
+        candidates = [t.strip() for t in raw_times.split(",") if t.strip()]
+    elif isinstance(raw_times, (list, tuple)):
+        candidates = [str(t).strip() for t in raw_times if str(t).strip()]
+    elif raw_times is not None:
+        candidates = [str(raw_times).strip()]
+
+    if not candidates:
+        return ["03:00"]
+
+    time_pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    times_set: set[str] = set()
+    for cand in candidates:
+        if not time_pattern.match(cand):
+            raise ValueError(
+                f"時刻フォーマットが不正です（期待値: 00:00〜23:59 の HH:MM 形式）: {cand}"
+            )
+        times_set.add(cand)
+
+    return sorted(list(times_set))
+
+
+def get_next_target_time(
+    target_time_or_times: str | list[str],
+    now: datetime.datetime | None = None,
+) -> tuple[float, str]:
+    """指定された時刻（単一または複数断面）の中で最も直近の次回予定までの待機秒数と目標時刻を計算する.
+
+    Returns:
+        tuple[float, str]: (待機秒数, 目標時刻 "HH:MM")
+    """
+    current = now or datetime.datetime.now()
+    times = normalize_daily_times(target_time_or_times)
+
+    upcoming: list[tuple[datetime.datetime, str]] = []
+    tomorrow_times: list[tuple[datetime.datetime, str]] = []
+
+    for t_str in times:
+        parts = t_str.split(":")
+        hour, minute = int(parts[0]), int(parts[1])
+        target_today = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        if target_today > current:
+            upcoming.append((target_today, t_str))
+        else:
+            target_tomorrow = target_today + datetime.timedelta(days=1)
+            tomorrow_times.append((target_tomorrow, t_str))
+
+    if upcoming:
+        upcoming.sort(key=lambda x: x[0])
+        next_dt, next_time_str = upcoming[0]
+    else:
+        tomorrow_times.sort(key=lambda x: x[0])
+        next_dt, next_time_str = tomorrow_times[0]
+
+    wait_seconds = max(0.0, (next_dt - current).total_seconds())
+    return wait_seconds, next_time_str
+
+
 def calculate_sleep_seconds_until(
-    target_time_str: str,
+    target_time_or_times: str | list[str],
     now: datetime.datetime | None = None,
 ) -> float:
-    """指定時刻 (HH:MM) までの待機秒数を計算する."""
-    current = now or datetime.datetime.now()
-    parts = target_time_str.split(":")
-    if len(parts) != 2:
-        raise ValueError(f"時刻フォーマットが不正です（期待値: HH:MM）: {target_time_str}")
-
-    hour, minute = int(parts[0]), int(parts[1])
-    target = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-    # 既に本日の指定時刻を過ぎている場合は翌日の同時刻
-    if target <= current:
-        target += datetime.timedelta(days=1)
-
-    return max(0.0, (target - current).total_seconds())
+    """指定時刻（単一または複数断面）までの最短待機秒数を計算する（後方互換用）."""
+    wait_seconds, _ = get_next_target_time(target_time_or_times, now=now)
+    return wait_seconds
 
 
 def interruptible_sleep(seconds: float, check_interval: float = 1.0) -> bool:
@@ -435,7 +489,6 @@ def run_loop(
         signal.signal(signal.SIGINT, handle_signal)
         signal.signal(signal.SIGTERM, handle_signal)
     except Exception:
-        # Windowsや一部スレッド環境でのフォールバック
         pass
 
     while not stop_requested:
@@ -452,7 +505,11 @@ def run_loop(
 
         loop_cfg = config.get("loop", {})
         mode = opts.loop_mode or loop_cfg.get("mode", "daily")
-        daily_time = opts.daily_time or loop_cfg.get("daily_time", "03:00")
+        daily_time_cfg = (
+            opts.daily_time
+            if opts.daily_time is not None
+            else loop_cfg.get("daily_times", loop_cfg.get("daily_time", "03:00"))
+        )
         interval_seconds = (
             opts.interval if opts.interval is not None else loop_cfg.get("interval_seconds", 3600)
         )
@@ -468,11 +525,13 @@ def run_loop(
 
         # 次回実行までの待機秒数を算出
         if mode == "daily":
-            wait_seconds = calculate_sleep_seconds_until(daily_time)
+            wait_seconds, next_target_str = get_next_target_time(daily_time_cfg)
             next_run_dt = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
+            normalized_list = normalize_daily_times(daily_time_cfg)
             logger.info(
                 f"次回実行予定: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S')} "
-                f"({daily_time} に実行、待機時間: 約 {wait_seconds / 3600:.1f} 時間 / {int(wait_seconds)} 秒)"
+                f"(設定断面: {', '.join(normalized_list)} -> 次回断面: {next_target_str}, "
+                f"待機時間: 約 {wait_seconds / 3600:.1f} 時間 / {int(wait_seconds)} 秒)"
             )
         else:
             wait_seconds = float(interval_seconds)

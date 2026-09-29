@@ -19,10 +19,14 @@ target_projects = ["all"]
 # true または CLI で --loop を指定すると終了せず常駐ループ待機
 enabled = false
 
-# ループ方式: "daily"（毎日指定時刻に実行）または "interval"（一定秒数ごとの定期巡回）
+# ループ方式: "daily"（指定時刻断面に実行）または "interval"（一定秒数ごとの定期巡回）
 mode = "daily"
 
-# mode = "daily" の場合の実行時刻（"HH:MM" 形式）
+# mode = "daily" の場合の実行時刻断面リスト
+# 単一の ["03:00"] だけでなく、["03:00", "12:00", "21:00"] 等の複数断面を指定可能
+daily_times = ["03:00", "12:00"]
+
+# （後方互換用）単一時刻指定
 daily_time = "03:00"
 
 # mode = "interval" の場合の待機秒数（デフォルト: 3600 = 1時間）
