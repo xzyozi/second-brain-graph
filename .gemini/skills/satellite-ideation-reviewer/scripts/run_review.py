@@ -631,15 +631,13 @@ def sync_review_to_tasks_md(
         return False
 
     project_key = resolve_project_key(target_dir)
-    existing_nums = [
-        int(m.group(1))
-        for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)
-    ]
+    existing_nums = [int(m.group(1)) for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)]
     next_num = max(existing_nums, default=0) + 1
     task_id = f"{project_key}-{next_num:04d}"
 
     priority = item.severity.lower()
     import datetime
+
     today = datetime.date.today().isoformat()
     new_line = (
         f"- [ ] [{task_id}] {item.title} "
@@ -746,9 +744,7 @@ def main(args: list[str] | None = None) -> int:
     prompt = build_review_prompt(opts.theme, target_files, existing_issues)
 
     # 4. agys 実行（またはモック実行）
-    raw_items = run_agys_review(
-        target_dir, prompt, opts.mock_response, timeout=opts.timeout
-    )
+    raw_items = run_agys_review(target_dir, prompt, opts.mock_response, timeout=opts.timeout)
     logger.info(f"agys レビュー検知項目数: {len(raw_items)} 件")
 
     if not raw_items:

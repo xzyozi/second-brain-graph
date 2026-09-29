@@ -42,9 +42,7 @@ def test_sync_issue_statuses_to_tasks_md_closed_and_ready(
         {"number": 101, "title": "Task 1", "state": "CLOSED", "labels": []},
         {"number": 102, "title": "Task 2", "state": "OPEN", "labels": [{"name": "stage:ready"}]},
     ]
-    monkeypatch.setattr(
-        periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues
-    )
+    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
 
     updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
         tasks_path, "mock/repo", "TEST", dry_run=False
@@ -72,11 +70,14 @@ def test_sync_issue_statuses_to_tasks_md_in_progress(
     )
 
     mock_issues = [
-        {"number": 101, "title": "Task 1", "state": "OPEN", "labels": [{"name": "stage:in_progress"}]},
+        {
+            "number": 101,
+            "title": "Task 1",
+            "state": "OPEN",
+            "labels": [{"name": "stage:in_progress"}],
+        },
     ]
-    monkeypatch.setattr(
-        periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues
-    )
+    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
 
     updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
         tasks_path, "mock/repo", "TEST", dry_run=False
@@ -97,12 +98,20 @@ def test_sync_issue_statuses_to_tasks_md_import_new_issues(
     tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
 
     mock_issues = [
-        {"number": 105, "title": "New Issue A", "state": "OPEN", "labels": [{"name": "stage:ready"}, {"name": "theme:security"}]},
-        {"number": 106, "title": "New Issue B", "state": "CLOSED", "labels": [{"name": "theme:edge_cases"}]},
+        {
+            "number": 105,
+            "title": "New Issue A",
+            "state": "OPEN",
+            "labels": [{"name": "stage:ready"}, {"name": "theme:security"}],
+        },
+        {
+            "number": 106,
+            "title": "New Issue B",
+            "state": "CLOSED",
+            "labels": [{"name": "theme:edge_cases"}],
+        },
     ]
-    monkeypatch.setattr(
-        periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues
-    )
+    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
 
     updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
         tasks_path, "mock/repo", "TEST", dry_run=False
@@ -111,8 +120,14 @@ def test_sync_issue_statuses_to_tasks_md_import_new_issues(
     assert added == 2
 
     content = tasks_path.read_text(encoding="utf-8")
-    assert "- [ ] [TEST-0001] New Issue A <!-- priority:medium issue:#105 theme:security stage:ready" in content
-    assert "- [x] [TEST-0002] New Issue B <!-- priority:medium issue:#106 theme:edge_cases stage:ideation completed:" in content
+    assert (
+        "- [ ] [TEST-0001] New Issue A <!-- priority:medium issue:#105 theme:security stage:ready"
+        in content
+    )
+    assert (
+        "- [x] [TEST-0002] New Issue B <!-- priority:medium issue:#106 theme:edge_cases stage:ideation completed:"
+        in content
+    )
 
 
 def test_main_status_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -136,7 +151,11 @@ def test_main_status_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: [])
 
     # root_dir を tmp_path に向ける
-    monkeypatch.setattr(Path, "resolve", lambda p: tmp_path / "tools" / "dummy.py" if "periodic_review_runner.py" in str(p) else p)
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda p: tmp_path / "tools" / "dummy.py" if "periodic_review_runner.py" in str(p) else p,
+    )
 
     exit_code = periodic_review_runner.main(["--status-only", "--dry-run"])
     assert exit_code == 0

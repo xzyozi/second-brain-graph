@@ -257,7 +257,9 @@ def test_collect_target_files_with_files_arg(tmp_path: Path) -> None:
     f3 = tmp_path / "utils.py"
     f3.write_text("def helper(): pass", encoding="utf-8")
 
-    result = run_review.collect_target_files(tmp_path, files=["app.py", "readme.txt", "nonexistent.py"])
+    result = run_review.collect_target_files(
+        tmp_path, files=["app.py", "readme.txt", "nonexistent.py"]
+    )
     assert result == ["app.py"]
 
 

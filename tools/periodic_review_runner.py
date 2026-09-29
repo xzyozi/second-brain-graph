@@ -144,9 +144,7 @@ def get_current_head_commit(repo_dir: Path) -> str:
         return ""
 
 
-def detect_code_diff_files(
-    repo_dir: Path, last_commit: str, current_head: str
-) -> list[str]:
+def detect_code_diff_files(repo_dir: Path, last_commit: str, current_head: str) -> list[str]:
     """2つのコミット間の差分からコードファイルのみを抽出する."""
     if not last_commit or last_commit == current_head:
         return []
@@ -160,7 +158,9 @@ def detect_code_diff_files(
             check=True,
             encoding="utf-8",
         )
-        diff_lines = [line.strip().replace("\\", "/") for line in res.stdout.splitlines() if line.strip()]
+        diff_lines = [
+            line.strip().replace("\\", "/") for line in res.stdout.splitlines() if line.strip()
+        ]
         code_files = [f for f in diff_lines if Path(f).suffix.lower() in CODE_EXTENSIONS]
         return sorted(code_files)
     except subprocess.CalledProcessError as e:
@@ -172,7 +172,19 @@ def fetch_remote_issues(repo: str) -> list[dict[str, Any]]:
     """GitHub から全 Issue（Open/Closed）を取得する."""
     try:
         res = subprocess.run(
-            ["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", "number,title,state,labels"],
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--limit",
+                "200",
+                "--json",
+                "number,title,state,labels",
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -255,10 +267,7 @@ def sync_issue_statuses_to_tasks_md(
         new_lines.append(new_line)
 
     # 3. 未登録の既存 Issue を tasks.md にバックログとして追記
-    existing_nums = [
-        int(m.group(1))
-        for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)
-    ]
+    existing_nums = [int(m.group(1)) for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)]
     next_task_num = max(existing_nums, default=0) + 1
     added_count = 0
 
@@ -300,7 +309,9 @@ def sync_issue_statuses_to_tasks_md(
             f"tasks.md を更新しました ({tasks_path.name}): 更新 {updated_count} 件, 新規追加 {added_count} 件"
         )
     elif dry_run and (updated_count > 0 or added_count > 0):
-        logger.info(f"[DRY-RUN] tasks.md 更新予定: 更新 {updated_count} 件, 新規追加 {added_count} 件")
+        logger.info(
+            f"[DRY-RUN] tasks.md 更新予定: 更新 {updated_count} 件, 新規追加 {added_count} 件"
+        )
 
     return updated_count, added_count
 
@@ -394,28 +405,34 @@ def process_satellite(
     sat_state = cache_state.get(sat_name, {})
     last_commit = sat_state.get("last_reviewed_commit", "")
 
-    logger.info(f"[{sat_name}] HEAD: {current_head[:8]} | 前回レビュー: {last_commit[:8] or '(初回)'}")
+    logger.info(
+        f"[{sat_name}] HEAD: {current_head[:8]} | 前回レビュー: {last_commit[:8] or '(初回)'}"
+    )
 
     diff_files: list[str] = []
     if last_commit and not force:
         if last_commit == current_head:
-            logger.info(f"[{sat_name}] コミットに変更はありません。新規レビューをスキップします (0秒)。")
+            logger.info(
+                f"[{sat_name}] コミットに変更はありません。新規レビューをスキップします (0秒)。"
+            )
             return
         diff_files = detect_code_diff_files(sat_dir, last_commit, current_head)
         if not diff_files:
-            logger.info(f"[{sat_name}] コミットは進みましたがコードファイルの変更はありません。ハッシュを更新します。")
+            logger.info(
+                f"[{sat_name}] コミットは進みましたがコードファイルの変更はありません。ハッシュを更新します。"
+            )
             if not dry_run:
                 sat_state["last_reviewed_commit"] = current_head
                 sat_state["last_reviewed_at"] = datetime.datetime.now().isoformat()
                 cache_state[sat_name] = sat_state
             return
 
-        logger.info(f"[{sat_name}] 変更コードファイルを検知しました ({len(diff_files)} 件): {', '.join(diff_files[:5])}")
+        logger.info(
+            f"[{sat_name}] 変更コードファイルを検知しました ({len(diff_files)} 件): {', '.join(diff_files[:5])}"
+        )
 
     # Step 3: レビュー実行
-    themes_to_run = (
-        ["security", "edge_cases", "architecture"] if theme == "all" else [theme]
-    )
+    themes_to_run = ["security", "edge_cases", "architecture"] if theme == "all" else [theme]
 
     review_success = True
     for th in themes_to_run:
