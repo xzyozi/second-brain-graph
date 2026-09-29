@@ -1,0 +1,44 @@
+# ==============================================================================
+# 自律夜間バッチ（Nightly Task Worker）設定ファイル
+# ==============================================================================
+
+version = "1.0"
+
+# バッチ実行自体の有効/無効（false にすると即座に安全停止）
+enabled = true
+
+# 1回のバッチ実行で実装する最大タスク数（※暴走・リソース枯渇防止のため通常は 1 を推奨）
+max_tasks_per_run = 1
+
+# 対象サテライト名リスト（["all"] で全サテライト巡回、または ["clip_watcher"] 等で限定）
+target_projects = ["all"]
+
+[task_selection]
+# 実装対象とする必須ラベル（※壁打ち未済の誤実装を防ぐため stage:ready を必須とする）
+require_label = "stage:ready"
+
+# タスク選定の優先順位（"priority_score": 重要度スコア順、または "added_date": 登録日順）
+sort_by = "priority_score"
+
+# 他のタスクにブロック（依存）されている Issue をスキップするか
+skip_blocked = true
+
+[execution]
+# 実装完了時に Draft PR（下書きPR）を自動起票するか（false の場合はブランチ作成のみ）
+create_draft_pr = true
+
+# 作業ツリーに未コミットの変更がある場合に自動 stash で退避するか
+auto_stash = true
+
+# 1タスクあたりの最大実行タイムアウト秒数（Aider コーディング + テスト自己修復）
+timeout_seconds = 600
+
+# テスト不合格時のエスカレーション前に試行する最大リトライ回数
+max_retries = 1
+
+[logging]
+# 実行ログの保存先ディレクトリ（母艦ルートからの相対パス）
+log_dir = "logs/nightly"
+
+# 実装失敗時に詳細レポート（failure_report.md）を保存してエスカレーションするか
+save_failure_reports = true
