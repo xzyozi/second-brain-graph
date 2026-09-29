@@ -182,8 +182,9 @@ def generate_promoted_body(
             r"(## 7\. 対象外 \(Non-Goals\).*?\n)(?=## 8\. 完了定義)",
             re.DOTALL,
         )
-        if sec7_pattern.search(body_updated):
-            cur_sec7 = sec7_pattern.search(body_updated).group(1)
+        sec7_match = sec7_pattern.search(body_updated)
+        if sec7_match:
+            cur_sec7 = sec7_match.group(1)
             cleaned_sec7 = re.sub(
                 r"- （※壁打ちで採用されなかった代替アプローチはここに記録してスコープ外を明確化）\n?",
                 "",
