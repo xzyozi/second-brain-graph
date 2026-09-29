@@ -4,6 +4,9 @@
 外部 TOML 設定ファイル (config/nightly_worker.toml) を読み込み、
 サテライトの tasks.md から stage:ready の未着手タスクを優先度順にスキャンし、
 設定された上限件数（デフォルト: 1件）のみを安全に自律実装パイプライン (run_task.py) へ投入します。
+
+OSスケジューラ（Windowsタスクスケジューラやcron）に依存せず、
+Pythonプロセス単体でクロスプラットフォームに常駐待機する「自己ループ（Daemon）モード」を備えています。
 """
 
 from __future__ import annotations
@@ -13,8 +16,10 @@ import datetime
 import json
 import logging
 import re
+import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,7 +55,7 @@ class CandidateTask:
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """CLI 引数をパースする."""
     parser = argparse.ArgumentParser(
-        description="自律夜間バッチ（Nightly Task Worker）: stage:ready タスクを優先度順に1件自律実装"
+        description="自律夜間バッチ（Nightly Task Worker）: stage:ready タスクを優先度順に自律実装"
     )
     parser.add_argument(
         "--config",
@@ -62,7 +67,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--max-tasks",
         type=int,
         default=None,
-        help="実行最大タスク数（設定ファイルの max_tasks_per_run をオーバーライド）",
+        help="1回あたりの最大実行タスク数（設定ファイルの max_tasks_per_run をオーバーライド）",
     )
     parser.add_argument(
         "--target",
@@ -73,6 +78,34 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="実際のコード実装や PR 作成を行わず、選定タスクのプレビューのみを出力する",
+    )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="OS非依存の自己ループ（常駐デーモン）モードで起動する",
+    )
+    parser.add_argument(
+        "--loop-mode",
+        choices=["daily", "interval"],
+        default=None,
+        help="自己ループ方式（daily: 毎日指定時刻, interval: 一定秒数待機）",
+    )
+    parser.add_argument(
+        "--daily-time",
+        default=None,
+        help="daily モード時の実行時刻（例: 03:00）",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        help="interval モード時の待機秒数（例: 3600）",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="自己ループモード時の最大周回数（テスト・検証用。省略時は無制限）",
     )
     parser.add_argument(
         "--verbose",
@@ -257,31 +290,62 @@ def execute_autonomous_task(
         return False
 
 
-def main(args: list[str] | None = None) -> int:
-    """メイン実行フロー."""
-    opts = parse_args(args)
-    if opts.verbose:
-        logger.setLevel(logging.DEBUG)
+def calculate_sleep_seconds_until(
+    target_time_str: str,
+    now: datetime.datetime | None = None,
+) -> float:
+    """指定時刻 (HH:MM) までの待機秒数を計算する."""
+    current = now or datetime.datetime.now()
+    parts = target_time_str.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"時刻フォーマットが不正です（期待値: HH:MM）: {target_time_str}")
 
-    root_dir = Path(__file__).resolve().parents[1]
-    config_path = (
-        (root_dir / opts.config).resolve() if not opts.config.is_absolute() else opts.config
-    )
+    hour, minute = int(parts[0]), int(parts[1])
+    target = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-    try:
-        config = load_config(config_path)
-    except Exception as e:
-        logger.error(f"設定ファイルのロードに失敗しました: {e}")
-        return 1
+    # 既に本日の指定時刻を過ぎている場合は翌日の同時刻
+    if target <= current:
+        target += datetime.timedelta(days=1)
 
+    return max(0.0, (target - current).total_seconds())
+
+
+def interruptible_sleep(seconds: float, check_interval: float = 1.0) -> bool:
+    """Ctrl+C や中断シグナルに即座に応答できる安全なスリープ関数.
+
+    Args:
+        seconds: 待機秒数
+        check_interval: 割り込みチェック間隔（秒）
+
+    Returns:
+        bool: 正常待機完了なら True, 中断された場合は False
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        remaining = deadline - time.time()
+        sleep_dur = min(check_interval, max(0.05, remaining))
+        time.sleep(sleep_dur)
+    return True
+
+
+def run_batch_cycle(
+    root_dir: Path,
+    config: dict[str, Any],
+    opts: argparse.Namespace,
+) -> int:
+    """1 回分のバッチ巡回・タスク抽出・実行を行う.
+
+    Returns:
+        int: 実行完了したタスク数
+    """
     # 1. 有効フラグのチェック
     if not config.get("enabled", True):
-        logger.info("設定ファイルで enabled = false が指定されているため、バッチを停止します。")
+        logger.info("設定ファイルで enabled = false が指定されているため、バッチをスキップします。")
         return 0
 
     # 2. 上限タスク数の決定
     max_tasks = opts.max_tasks if opts.max_tasks is not None else config.get("max_tasks_per_run", 1)
-    logger.info(f"自律夜間バッチ起動: 最大実行タスク数 = {max_tasks} 件")
+    logger.info(f"バッチサイクル開始: 最大実行タスク数 = {max_tasks} 件")
 
     # 3. 対象プロジェクトの選定
     registry = load_project_registry(root_dir)
@@ -290,7 +354,6 @@ def main(args: list[str] | None = None) -> int:
 
     selected_projects: dict[str, Any] = {}
     if opts.target:
-        # CLI で個別指定された場合
         for k, v in registered_projects.items():
             if v.get("name") == opts.target or k == opts.target:
                 selected_projects[k] = v
@@ -332,7 +395,7 @@ def main(args: list[str] | None = None) -> int:
     logger.info(f"スキャン完了: 実装候補タスク ({require_label}) = {len(all_candidates)} 件")
 
     if not all_candidates:
-        logger.info("実行可能な stage:ready タスクはありませんでした。安全に終了します。")
+        logger.info("実行可能な stage:ready タスクはありませんでした。")
         return 0
 
     # 6. 最優先タスクの選定
@@ -346,9 +409,117 @@ def main(args: list[str] | None = None) -> int:
             success_count += 1
 
     logger.info(
-        f"自律夜間バッチ終了: {success_count}/{len(tasks_to_execute)} 件完了 (dry_run={opts.dry_run})"
+        f"バッチサイクル終了: {success_count}/{len(tasks_to_execute)} 件完了 (dry_run={opts.dry_run})"
     )
+    return success_count
+
+
+def run_loop(
+    root_dir: Path,
+    config_path: Path,
+    opts: argparse.Namespace,
+) -> int:
+    """OS非依存の自己ループ（常駐デーモン）処理."""
+    logger.info("【自己ループモード稼働開始】OS非依存の常駐バッチワーカーを起動しました。")
+    logger.info("停止するには Ctrl+C を押してください。")
+
+    iteration = 0
+    stop_requested = False
+
+    def handle_signal(sig: int, frame: Any) -> None:
+        nonlocal stop_requested
+        logger.info(f"停止シグナル ({sig}) を検知しました。ループを安全に終了します...")
+        stop_requested = True
+
+    try:
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+    except Exception:
+        # Windowsや一部スレッド環境でのフォールバック
+        pass
+
+    while not stop_requested:
+        iteration += 1
+
+        # 設定ファイルのロード（ホットリロード対応）
+        try:
+            config = load_config(config_path)
+        except Exception as e:
+            logger.error(f"設定ファイル読み込みエラー: {e}。5秒後に再試行します。")
+            if not interruptible_sleep(5.0):
+                break
+            continue
+
+        loop_cfg = config.get("loop", {})
+        mode = opts.loop_mode or loop_cfg.get("mode", "daily")
+        daily_time = opts.daily_time or loop_cfg.get("daily_time", "03:00")
+        interval_seconds = (
+            opts.interval if opts.interval is not None else loop_cfg.get("interval_seconds", 3600)
+        )
+
+        logger.info(f"--- ループ周回 #{iteration} 開始 (方式: {mode}) ---")
+        run_batch_cycle(root_dir, config, opts)
+
+        if opts.max_iterations is not None and iteration >= opts.max_iterations:
+            logger.info(
+                f"指定された最大周回数 ({opts.max_iterations}) に達したため、ループを終了します。"
+            )
+            break
+
+        # 次回実行までの待機秒数を算出
+        if mode == "daily":
+            wait_seconds = calculate_sleep_seconds_until(daily_time)
+            next_run_dt = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
+            logger.info(
+                f"次回実行予定: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S')} "
+                f"({daily_time} に実行、待機時間: 約 {wait_seconds / 3600:.1f} 時間 / {int(wait_seconds)} 秒)"
+            )
+        else:
+            wait_seconds = float(interval_seconds)
+            next_run_dt = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
+            logger.info(
+                f"次回実行予定: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S')} "
+                f"(待機間隔: {int(wait_seconds)} 秒)"
+            )
+
+        # 中断可能なスリープ
+        try:
+            interrupted = not interruptible_sleep(wait_seconds)
+            if interrupted or stop_requested:
+                break
+        except KeyboardInterrupt:
+            logger.info("ユーザー割り込み (Ctrl+C) を検知しました。安全に停止します。")
+            break
+
+    logger.info("【自己ループモード正常終了】ワーカープロセスを停止しました。")
     return 0
+
+
+def main(args: list[str] | None = None) -> int:
+    """メイン実行フロー."""
+    opts = parse_args(args)
+    if opts.verbose:
+        logger.setLevel(logging.DEBUG)
+
+    root_dir = Path(__file__).resolve().parents[1]
+    config_path = (
+        (root_dir / opts.config).resolve() if not opts.config.is_absolute() else opts.config
+    )
+
+    try:
+        config = load_config(config_path)
+    except Exception as e:
+        logger.error(f"設定ファイルのロードに失敗しました: {e}")
+        return 1
+
+    # ループモードの判定: CLI 引数 --loop または 設定ファイル [loop].enabled
+    is_loop = opts.loop or config.get("loop", {}).get("enabled", False)
+
+    if is_loop:
+        return run_loop(root_dir, config_path, opts)
+    else:
+        run_batch_cycle(root_dir, config, opts)
+        return 0
 
 
 if __name__ == "__main__":
