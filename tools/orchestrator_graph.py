@@ -184,9 +184,7 @@ def resolve_target_files_against_cwd(
             tf_name = tf_p.name
             tf_stem = tf_p.stem
             is_tf_test = (
-                tf_name.startswith("test_")
-                or "tests" in tf_p.parts
-                or "test" in tf_p.parts
+                tf_name.startswith("test_") or "tests" in tf_p.parts or "test" in tf_p.parts
             )
             clean_tf_stem = tf_stem.replace("test_", "").strip("_")
             matched_file: Optional[str] = None

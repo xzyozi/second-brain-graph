@@ -1389,7 +1389,6 @@ def test_resolve_target_files_prevents_cross_type_mismapping(tmp_path: Path) -> 
     assert "history.py" in resolved
 
 
-
 def test_resolve_target_files_rejects_path_traversal(tmp_path: Path) -> None:
     """衛星リポジトリ外を指す target_files（../ 等）が拒否されることを検証する（#23 path traversal）。"""
     from tools.orchestrator_graph import resolve_target_files_against_cwd

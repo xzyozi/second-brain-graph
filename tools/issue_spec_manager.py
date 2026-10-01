@@ -196,6 +196,8 @@ def self_heal_missing_specs(
         healed_tasks.append(task_id)
 
     if healed_tasks:
-        logger.info(f"自己修復完了: 合計 {len(healed_tasks)} 件の仕様書を配置しました: {healed_tasks}")
+        logger.info(
+            f"自己修復完了: 合計 {len(healed_tasks)} 件の仕様書を配置しました: {healed_tasks}"
+        )
 
     return healed_tasks

@@ -195,4 +195,3 @@ def test_sync_issue_statuses_self_heals_missing_specs(tmp_path: Path, monkeypatc
     content = spec_file.read_text(encoding="utf-8")
     assert "# [TP-0001] タスク1" in content
     assert "タスク1の詳細仕様" in content
-

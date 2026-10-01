@@ -172,4 +172,3 @@ def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch) -> None:
     assert "stage:ready" in spec_content
     assert "- [x] **案 1 (推奨): 推奨方針**" in spec_content
     assert "**案 2 (代替方針)**: 案1を採用したため今回はスコープ外" in spec_content
-
