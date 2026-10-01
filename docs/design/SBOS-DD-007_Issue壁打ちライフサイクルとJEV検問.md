@@ -135,6 +135,21 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
   - **Tier 2 (個別フォロー・複雑/例外タスク)**:
     - 選択肢に該当しない要望や、根本的な設計方針の変更・アーキテクチャ再検討が必要な場合のみ、チャット（IDE/CLI環境）で人間とエージェントが個別に対話して仕様を詰める。
 
+### 3.10 サテライトタスク仕様書 (docs/issues/<TASK_ID>.md) のライフサイクル自動同期と自己修復
+- **アーキテクチャ方針 (PM-060: tasks.md / docs/issues / GitHub Issue の 3 者 1:1 同期保証)**:
+  - 自律実装パイプラインにおいて、オーケストレーターがタスクの要件・編集対象ファイル（Target Files）を正確に把握できるよう、サテライトの `docs/issues/<TASK_ID>.md` をローカル作業ツリーに永続化する。
+  - これにより、夜間バッチ実行時に LLM が推測で無関係なファイル（`ports.py`, `history.py` 等）をルート直下に捏造（ハルシネーション）して空ファイルを作成する問題を恒久遮断する。
+- **ライフサイクル連携ポイント**:
+  1. **起票時 (`run_review.py`)**:
+     - agys レビューによる Issue 起票および `tasks.md` 追記と同時に、初期仕様書（案1/案2含む）を `docs/issues/<TASK_ID>.md` として自動初期配置。
+  2. **壁打ち昇格時 (`promote_issue.py`)**:
+     - 採用案（案1）の確定仕様・確定タスク・Target Files を反映した最新本文で `docs/issues/<TASK_ID>.md` を自動更新。
+  3. **定周期巡回時 (`periodic_review_runner.py`)**:
+     - `tasks.md` 内に記載された全タスクを走査し、`docs/issues/<TASK_ID>.md` が欠落しているタスクを検知した場合、GitHub API から Issue 本文を取得して自動インポート（欠落自己修復）。
+  4. **Target Files パス解決ガード (`orchestrator_graph.py`)**:
+     - `resolve_target_files_against_cwd` において、ファイル名（拡張子込み）完全一致、ステム完全一致を最優先とし、非テストファイルがテストファイル（`tests/test_...`）へ安易に部分一致マッピングされる誤爆を厳格に防止。
+
+
 
 
 
