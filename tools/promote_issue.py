@@ -12,6 +12,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from tools.issue_spec_manager import get_task_id_from_tasks_md, write_issue_spec
+
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("promote_issue")
 
@@ -297,6 +299,15 @@ def promote_issue(
         print(new_body)
         print("=" * 60)
         logger.info(f"[DRY-RUN] tasks.md 追記プレビュー: priority={priority}, theme={theme}")
+        if project_dir and project_key:
+            write_issue_spec(
+                project_dir=project_dir,
+                task_id=f"{project_key}-XXXX",
+                title=title,
+                body=new_body,
+                overwrite=True,
+                dry_run=True,
+            )
         return True
 
     # 1. GitHub Issue の更新
@@ -323,13 +334,27 @@ def promote_issue(
         if tmp_path.exists():
             tmp_path.unlink()
 
-    # 2. サテライトの tasks.md への同期
+    # 2. サテライトの tasks.md への同期および docs/issues/<TASK_ID>.md の生成・更新
     if project_dir and project_key:
         tasks_path = project_dir / "docs" / "tasks.md"
         sync_to_tasks_md(tasks_path, project_key, issue_num, title, priority)
+        task_id = get_task_id_from_tasks_md(tasks_path, issue_num)
+        if task_id:
+            write_issue_spec(
+                project_dir=project_dir,
+                task_id=task_id,
+                title=title,
+                body=new_body,
+                overwrite=True,
+            )
+            logger.info(f"仕様書を自動同期しました: docs/issues/{task_id}.md")
+        else:
+            logger.warning(
+                f"task_id を特定できなかったため仕様書生成をスキップしました: Issue #{issue_num}"
+            )
     else:
         logger.warning(
-            "サテライトディレクトリまたはプロジェクトキーが解決できなかったため、tasks.md 同期をスキップしました。"
+            "サテライトディレクトリまたはプロジェクトキーが解決できなかったため、tasks.md 同期および仕様書生成をスキップしました。"
         )
 
     return True

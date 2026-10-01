@@ -111,3 +111,65 @@ def test_sync_to_tasks_md(tmp_path: Path) -> None:
     assert success_2 is True
     content2 = tasks_file.read_text(encoding="utf-8")
     assert "- [ ] [TEST-0002] テストIssue2 <!-- priority:medium issue:#11 -->" in content2
+
+
+def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch) -> None:
+    # 擬似リポジトリとサテライトディレクトリ作成
+    root_dir = tmp_path / "root"
+    sat_dir = root_dir / "projects" / "test_proj"
+    sat_dir.mkdir(parents=True)
+    (sat_dir / "docs").mkdir()
+
+    # モックの設定
+    mock_issue = {
+        "number": 42,
+        "title": "機能改善",
+        "body": """## 0. メタ情報
+- **重要度**: High
+
+## 2. 仕様および要求事項
+- [ ] **案 1 (推奨): 推奨方針**
+  - 詳細1
+- [ ] **案 2: 代替方針**
+  - 詳細2
+
+## 7. 対象外 (Non-Goals)
+- 本課題と無関係な修正
+- （※壁打ちで採用されなかった代替アプローチはここに記録してスコープ外を明確化）
+
+## 8. 完了定義 (Definition of Done)
+- [ ] 完了
+""",
+        "labels": [{"name": "stage:ideation"}, {"name": "theme:architecture"}],
+    }
+
+    monkeypatch.setattr(
+        promote_issue,
+        "resolve_project_info",
+        lambda _root, _p: ("TP", sat_dir, "xzyozi/test_proj"),
+    )
+    monkeypatch.setattr(promote_issue, "fetch_issue", lambda _repo, _num: mock_issue)
+    monkeypatch.setattr(promote_issue.subprocess, "run", lambda *a, **kw: None)
+
+    success = promote_issue.promote_issue(
+        root_dir=root_dir,
+        target_project="test_proj",
+        issue_num=42,
+        approach=1,
+    )
+    assert success is True
+
+    # tasks.md の確認
+    tasks_file = sat_dir / "docs" / "tasks.md"
+    assert tasks_file.exists()
+    assert "- [ ] [TP-0001] 機能改善" in tasks_file.read_text(encoding="utf-8")
+
+    # docs/issues/TP-0001.md の確認
+    spec_file = sat_dir / "docs" / "issues" / "TP-0001.md"
+    assert spec_file.exists()
+    spec_content = spec_file.read_text(encoding="utf-8")
+    assert "# [TP-0001] 機能改善" in spec_content
+    assert "stage:ready" in spec_content
+    assert "- [x] **案 1 (推奨): 推奨方針**" in spec_content
+    assert "**案 2 (代替方針)**: 案1を採用したため今回はスコープ外" in spec_content
+
