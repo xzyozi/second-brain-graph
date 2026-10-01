@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import datetime
+import logging
+import signal
+import threading
 from pathlib import Path
 
 import pytest
@@ -179,17 +182,31 @@ def test_calculate_sleep_seconds_until_backward_compatible() -> None:
 
 def test_interruptible_sleep() -> None:
     """interruptible_sleep が指定短時間で安全に終了することを検証する."""
-    result = nightly_task_worker.interruptible_sleep(0.05, check_interval=0.01)
+    stop_event = threading.Event()
+    result = nightly_task_worker.interruptible_sleep(0.05, stop_event, check_interval=0.01)
     assert result is True
 
 
-def test_main_disabled_config(tmp_path: Path) -> None:
+def test_interruptible_sleep_returns_false_when_stop_event_is_set() -> None:
+    """停止イベントが設定済みなら待機せず False を返すことを検証する."""
+    stop_event = threading.Event()
+    stop_event.set()
+
+    result = nightly_task_worker.interruptible_sleep(60.0, stop_event)
+
+    assert result is False
+
+
+def test_main_disabled_config(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """enabled = false の設定時に即座に 0 終了することを検証する."""
     cfg_file = tmp_path / "disabled_config.toml"
     cfg_file.write_text("enabled = false\n", encoding="utf-8")
 
-    exit_code = nightly_task_worker.main(["--config", str(cfg_file)])
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(["--config", str(cfg_file)])
+
     assert exit_code == 0
+    assert "ワンショットモード終了理由 (Exit Reason): disabled" in caplog.text
 
 
 def test_main_dry_run_with_no_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,7 +220,11 @@ def test_main_dry_run_with_no_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert exit_code == 0
 
 
-def test_run_loop_with_max_iterations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_loop_with_max_iterations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """自己ループモードが max_iterations の指定回数で安全終了することを検証する."""
     cfg_file = tmp_path / "loop_config.toml"
     cfg_content = """
@@ -230,18 +251,156 @@ def test_run_loop_with_max_iterations(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", mock_cycle)
 
-    exit_code = nightly_task_worker.main(
-        [
-            "--config",
-            str(cfg_file),
-            "--loop",
-            "--loop-mode",
-            "interval",
-            "--interval",
-            "0",
-            "--max-iterations",
-            "3",
-        ]
-    )
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(
+            [
+                "--config",
+                str(cfg_file),
+                "--loop",
+                "--loop-mode",
+                "interval",
+                "--interval",
+                "0",
+                "--max-iterations",
+                "3",
+            ]
+        )
+
     assert exit_code == 0
     assert cycle_count == 3
+    assert "終了理由 (Exit Reason): max_iterations" in caplog.text
+
+
+def test_run_loop_logs_daily_boundary_reached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """daily 待機の正常満了時に到達断面と次周回番号をログすることを検証する."""
+    cfg_file = tmp_path / "daily_loop_config.toml"
+    cfg_file.write_text(
+        'enabled = true\n[loop]\nenabled = true\nmode = "daily"\n',
+        encoding="utf-8",
+    )
+
+    cycle_count = 0
+
+    def mock_cycle(root: Path, config: dict, opts: object) -> int:
+        nonlocal cycle_count
+        cycle_count += 1
+        return 0
+
+    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", mock_cycle)
+    monkeypatch.setattr(
+        nightly_task_worker,
+        "get_next_target_time",
+        lambda target_times: (0.0, "18:00"),
+    )
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(
+            [
+                "--config",
+                str(cfg_file),
+                "--loop",
+                "--loop-mode",
+                "daily",
+                "--daily-times",
+                "18:00",
+                "--max-iterations",
+                "2",
+            ]
+        )
+
+    assert exit_code == 0
+    assert cycle_count == 2
+    assert "指定断面時刻 (18:00) に到達しました。周回 #2 を開始します。" in caplog.text
+    assert "終了理由 (Exit Reason): max_iterations" in caplog.text
+
+
+def test_run_loop_enabled_false_exits_without_batch_or_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ループ中に enabled=false を検知したら処理・待機せず終了することを検証する."""
+    cfg_file = tmp_path / "disabled_loop_config.toml"
+    cfg_file.write_text(
+        'enabled = false\n[loop]\nenabled = true\nmode = "interval"\ninterval_seconds = 3600\n',
+        encoding="utf-8",
+    )
+
+    def fail_cycle(root: Path, config: dict, opts: object) -> int:
+        raise AssertionError("enabled=false の設定でバッチを実行してはいけません")
+
+    def fail_sleep(*args: object, **kwargs: object) -> bool:
+        raise AssertionError("enabled=false の設定で待機してはいけません")
+
+    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", fail_cycle)
+    monkeypatch.setattr(nightly_task_worker, "interruptible_sleep", fail_sleep)
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(["--config", str(cfg_file), "--loop"])
+
+    assert exit_code == 0
+    assert "終了理由 (Exit Reason): disabled" in caplog.text
+
+
+def test_run_loop_keyboard_interrupt_logs_exit_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """待機中の KeyboardInterrupt を捕捉して終了理由を記録することを検証する."""
+    cfg_file = tmp_path / "interrupt_loop_config.toml"
+    cfg_file.write_text(
+        'enabled = true\n[loop]\nenabled = true\nmode = "interval"\ninterval_seconds = 1\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", lambda root, config, opts: 0)
+
+    def raise_keyboard_interrupt(*args: object, **kwargs: object) -> bool:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(nightly_task_worker, "interruptible_sleep", raise_keyboard_interrupt)
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(["--config", str(cfg_file), "--loop"])
+
+    assert exit_code == 0
+    assert "ユーザー割り込み (Ctrl+C) を検知しました。安全に停止します。" in caplog.text
+    assert "終了理由 (Exit Reason): keyboard_interrupt" in caplog.text
+
+
+def test_windows_does_not_register_sigterm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Windows では SIGINT のみを登録し SIGTERM を登録しないことを検証する."""
+    cfg_file = tmp_path / "windows_loop_config.toml"
+    cfg_file.write_text(
+        'enabled = true\n[loop]\nenabled = true\nmode = "interval"\ninterval_seconds = 0\n',
+        encoding="utf-8",
+    )
+
+    registered_signals: list[int] = []
+
+    def fake_signal(signum: int, handler: object) -> object:
+        registered_signals.append(signum)
+        return signal.SIG_DFL
+
+    monkeypatch.setattr(nightly_task_worker.sys, "platform", "win32")
+    monkeypatch.setattr(nightly_task_worker.signal, "signal", fake_signal)
+    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", lambda root, config, opts: 0)
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(
+            ["--config", str(cfg_file), "--loop", "--max-iterations", "1"]
+        )
+
+    assert exit_code == 0
+    assert signal.SIGINT in registered_signals
+    assert signal.SIGTERM not in registered_signals
+    assert "終了理由 (Exit Reason): max_iterations" in caplog.text

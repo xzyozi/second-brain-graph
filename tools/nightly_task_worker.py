@@ -20,6 +20,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -364,22 +365,36 @@ def calculate_sleep_seconds_until(
     return wait_seconds
 
 
-def interruptible_sleep(seconds: float, check_interval: float = 1.0) -> bool:
-    """Ctrl+C や中断シグナルに即座に応答できる安全なスリープ関数.
+def interruptible_sleep(
+    seconds: float,
+    stop_event: threading.Event | None = None,
+    check_interval: float = 1.0,
+) -> bool:
+    """停止要求を監視しながら指定秒数を待機する.
 
     Args:
         seconds: 待機秒数
-        check_interval: 割り込みチェック間隔（秒）
+        stop_event: 停止要求を通知するイベント。省略時は互換用の内部イベントを使う
+        check_interval: Event.wait の最大待機間隔（秒）
 
     Returns:
-        bool: 正常待機完了なら True, 中断された場合は False
+        bool: 正常待機完了なら True、停止要求を検知した場合は False
     """
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        remaining = deadline - time.time()
-        sleep_dur = min(check_interval, max(0.05, remaining))
-        time.sleep(sleep_dur)
-    return True
+    if check_interval <= 0:
+        raise ValueError("check_interval は 0 より大きい値で指定してください。")
+
+    event = stop_event or threading.Event()
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        if event.is_set():
+            return False
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+
+        if event.wait(timeout=min(check_interval, remaining)):
+            return False
 
 
 def run_batch_cycle(
@@ -472,85 +487,153 @@ def run_loop(
     root_dir: Path,
     config_path: Path,
     opts: argparse.Namespace,
+    stop_event: threading.Event | None = None,
 ) -> int:
     """OS非依存の自己ループ（常駐デーモン）処理."""
     logger.info("【自己ループモード稼働開始】OS非依存の常駐バッチワーカーを起動しました。")
     logger.info("停止するには Ctrl+C を押してください。")
 
     iteration = 0
-    stop_requested = False
+    stop_event = stop_event or threading.Event()
+    termination_reason: str | None = None
+    previous_signal_handlers: dict[int, Any] = {}
+
+    def set_termination_reason(reason: str) -> None:
+        nonlocal termination_reason
+        if termination_reason is None:
+            termination_reason = reason
 
     def handle_signal(sig: int, frame: Any) -> None:
-        nonlocal stop_requested
-        logger.info(f"停止シグナル ({sig}) を検知しました。ループを安全に終了します...")
-        stop_requested = True
+        del frame
+        try:
+            signal_name = signal.Signals(sig).name
+        except ValueError:
+            signal_name = str(sig)
+        set_termination_reason(f"signal:{signal_name}")
+        logger.info(
+            f"停止シグナル ({signal_name}/{sig}) を検知しました。ループを安全に終了します..."
+        )
+        stop_event.set()
+
+    def register_signal_handler(signum: int, signal_name: str) -> None:
+        try:
+            previous_signal_handlers[signum] = signal.signal(signum, handle_signal)
+        except (OSError, ValueError) as exc:
+            logger.warning(f"{signal_name} のハンドラを登録できませんでした: {exc}")
+
+    register_signal_handler(signal.SIGINT, "SIGINT")
+    if sys.platform != "win32":
+        sigterm = getattr(signal, "SIGTERM", None)
+        if sigterm is not None:
+            register_signal_handler(sigterm, "SIGTERM")
 
     try:
-        signal.signal(signal.SIGINT, handle_signal)
-        signal.signal(signal.SIGTERM, handle_signal)
+        while True:
+            if stop_event.is_set():
+                set_termination_reason("stop_event")
+                break
+
+            iteration += 1
+
+            # 設定ファイルのロード（ホットリロード対応）
+            try:
+                config = load_config(config_path)
+            except Exception as e:
+                logger.error(f"設定ファイル読み込みエラー: {e}。5秒後に再試行します。")
+                if not interruptible_sleep(5.0, stop_event):
+                    set_termination_reason("stop_event_during_config_retry")
+                    break
+                continue
+
+            if stop_event.is_set():
+                set_termination_reason("stop_event")
+                break
+
+            if not config.get("enabled", True):
+                set_termination_reason("disabled")
+                logger.info(
+                    "設定ファイルで enabled = false が指定されたため、自己ループを終了します。"
+                )
+                break
+
+            loop_cfg = config.get("loop", {})
+            mode = opts.loop_mode or loop_cfg.get("mode", "daily")
+            daily_time_cfg = (
+                opts.daily_time
+                if opts.daily_time is not None
+                else loop_cfg.get("daily_times", loop_cfg.get("daily_time", "03:00"))
+            )
+            interval_seconds = (
+                opts.interval
+                if opts.interval is not None
+                else loop_cfg.get("interval_seconds", 3600)
+            )
+
+            logger.info(f"--- ループ周回 #{iteration} 開始 (方式: {mode}) ---")
+            run_batch_cycle(root_dir, config, opts)
+
+            if stop_event.is_set():
+                set_termination_reason("stop_event")
+                break
+
+            if opts.max_iterations is not None and iteration >= opts.max_iterations:
+                set_termination_reason("max_iterations")
+                logger.info(
+                    f"指定された最大周回数 ({opts.max_iterations}) に達したため、ループを終了します。"
+                )
+                break
+
+            # 次回実行までの待機秒数を算出
+            if mode == "daily":
+                wait_seconds, next_target_str = get_next_target_time(daily_time_cfg)
+                next_run_dt = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
+                normalized_list = normalize_daily_times(daily_time_cfg)
+                logger.info(
+                    f"次回実行予定: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"(設定断面: {', '.join(normalized_list)} -> 次回断面: {next_target_str}, "
+                    f"待機時間: 約 {wait_seconds / 3600:.1f} 時間 / {int(wait_seconds)} 秒)"
+                )
+            else:
+                wait_seconds = float(interval_seconds)
+                next_target_str = ""
+                next_run_dt = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
+                logger.info(
+                    f"次回実行予定: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"(待機間隔: {int(wait_seconds)} 秒)"
+                )
+
+            # 中断可能なスリープ
+            if not interruptible_sleep(wait_seconds, stop_event):
+                set_termination_reason("stop_event")
+                logger.info("停止要求を検知したため、次回バッチを実行せずに終了します。")
+                break
+
+            if mode == "daily":
+                logger.info(
+                    f"指定断面時刻 ({next_target_str}) に到達しました。周回 #{iteration + 1} を開始します。"
+                )
+            else:
+                logger.info(f"待機間隔が経過しました。周回 #{iteration + 1} を開始します。")
+    except KeyboardInterrupt:
+        set_termination_reason("keyboard_interrupt")
+        logger.info("ユーザー割り込み (Ctrl+C) を検知しました。安全に停止します。")
     except Exception:
-        pass
+        set_termination_reason("unexpected_exception")
+        logger.exception("自己ループ中に予期しない例外が発生したため、処理を終了します。")
+        raise
+    finally:
+        for signum, previous_handler in previous_signal_handlers.items():
+            try:
+                signal.signal(signum, previous_handler)
+            except (OSError, ValueError) as exc:
+                logger.warning(f"シグナルハンドラ ({signum}) を復元できませんでした: {exc}")
 
-    while not stop_requested:
-        iteration += 1
-
-        # 設定ファイルのロード（ホットリロード対応）
-        try:
-            config = load_config(config_path)
-        except Exception as e:
-            logger.error(f"設定ファイル読み込みエラー: {e}。5秒後に再試行します。")
-            if not interruptible_sleep(5.0):
-                break
-            continue
-
-        loop_cfg = config.get("loop", {})
-        mode = opts.loop_mode or loop_cfg.get("mode", "daily")
-        daily_time_cfg = (
-            opts.daily_time
-            if opts.daily_time is not None
-            else loop_cfg.get("daily_times", loop_cfg.get("daily_time", "03:00"))
-        )
-        interval_seconds = (
-            opts.interval if opts.interval is not None else loop_cfg.get("interval_seconds", 3600)
+        final_reason = termination_reason or ("stop_event" if stop_event.is_set() else "unknown")
+        logger.info(
+            "【自己ループモード正常終了】ワーカープロセスを停止しました。"
+            f"終了理由 (Exit Reason): {final_reason}"
         )
 
-        logger.info(f"--- ループ周回 #{iteration} 開始 (方式: {mode}) ---")
-        run_batch_cycle(root_dir, config, opts)
-
-        if opts.max_iterations is not None and iteration >= opts.max_iterations:
-            logger.info(
-                f"指定された最大周回数 ({opts.max_iterations}) に達したため、ループを終了します。"
-            )
-            break
-
-        # 次回実行までの待機秒数を算出
-        if mode == "daily":
-            wait_seconds, next_target_str = get_next_target_time(daily_time_cfg)
-            next_run_dt = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
-            normalized_list = normalize_daily_times(daily_time_cfg)
-            logger.info(
-                f"次回実行予定: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S')} "
-                f"(設定断面: {', '.join(normalized_list)} -> 次回断面: {next_target_str}, "
-                f"待機時間: 約 {wait_seconds / 3600:.1f} 時間 / {int(wait_seconds)} 秒)"
-            )
-        else:
-            wait_seconds = float(interval_seconds)
-            next_run_dt = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
-            logger.info(
-                f"次回実行予定: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S')} "
-                f"(待機間隔: {int(wait_seconds)} 秒)"
-            )
-
-        # 中断可能なスリープ
-        try:
-            interrupted = not interruptible_sleep(wait_seconds)
-            if interrupted or stop_requested:
-                break
-        except KeyboardInterrupt:
-            logger.info("ユーザー割り込み (Ctrl+C) を検知しました。安全に停止します。")
-            break
-
-    logger.info("【自己ループモード正常終了】ワーカープロセスを停止しました。")
     return 0
 
 
@@ -569,6 +652,7 @@ def main(args: list[str] | None = None) -> int:
         config = load_config(config_path)
     except Exception as e:
         logger.error(f"設定ファイルのロードに失敗しました: {e}")
+        logger.info("ワーカー終了理由 (Exit Reason): initial_config_error")
         return 1
 
     # ループモードの判定: CLI 引数 --loop または 設定ファイル [loop].enabled
@@ -578,6 +662,8 @@ def main(args: list[str] | None = None) -> int:
         return run_loop(root_dir, config_path, opts)
     else:
         run_batch_cycle(root_dir, config, opts)
+        reason = "disabled" if not config.get("enabled", True) else "batch_cycle_completed"
+        logger.info(f"ワンショットモード終了理由 (Exit Reason): {reason}")
         return 0
 
 
