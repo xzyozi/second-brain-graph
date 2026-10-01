@@ -115,9 +115,7 @@ def test_sync_to_tasks_md(tmp_path: Path) -> None:
     assert "- [ ] [TEST-0002] テストIssue2 <!-- priority:medium issue:#11 -->" in content2
 
 
-def test_promote_issue_creates_spec_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 擬似リポジトリとサテライトディレクトリ作成
     root_dir = tmp_path / "root"
     sat_dir = root_dir / "projects" / "test_proj"

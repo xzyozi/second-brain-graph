@@ -93,9 +93,7 @@ def test_self_heal_missing_specs_with_provided_issues(tmp_path: Path) -> None:
 
 
 @patch("tools.issue_spec_manager.fetch_remote_issue_body")
-def test_self_heal_missing_specs_with_remote_fetch(
-    mock_fetch: MagicMock, tmp_path: Path
-) -> None:
+def test_self_heal_missing_specs_with_remote_fetch(mock_fetch: MagicMock, tmp_path: Path) -> None:
     mock_fetch.return_value = {
         "number": 109,
         "title": "リモートタイトル",
