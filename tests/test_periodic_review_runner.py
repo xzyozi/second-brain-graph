@@ -159,3 +159,40 @@ def test_main_status_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
     exit_code = periodic_review_runner.main(["--status-only", "--dry-run"])
     assert exit_code == 0
+
+
+def test_sync_issue_statuses_self_heals_missing_specs(tmp_path: Path, monkeypatch) -> None:
+    sat_dir = tmp_path / "projects" / "test_proj"
+    docs_dir = sat_dir / "docs"
+    docs_dir.mkdir(parents=True)
+    tasks_path = docs_dir / "tasks.md"
+    tasks_path.write_text(
+        "- [ ] [TP-0001] タスク1 <!-- priority:high issue:#101 stage:ready -->\n",
+        encoding="utf-8",
+    )
+
+    issues = [
+        {
+            "number": 101,
+            "title": "タスク1",
+            "state": "OPEN",
+            "labels": [{"name": "stage:ready"}],
+            "body": "## 1. 概要\nタスク1の詳細仕様",
+        }
+    ]
+    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: issues)
+
+    updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
+        tasks_path=tasks_path,
+        repo="xzyozi/test_proj",
+        project_key="TP",
+        dry_run=False,
+        sync_specs=True,
+    )
+
+    spec_file = docs_dir / "issues" / "TP-0001.md"
+    assert spec_file.exists()
+    content = spec_file.read_text(encoding="utf-8")
+    assert "# [TP-0001] タスク1" in content
+    assert "タスク1の詳細仕様" in content
+
