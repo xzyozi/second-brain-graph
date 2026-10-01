@@ -90,9 +90,9 @@ def test_sync_to_tasks_md(tmp_path: Path) -> None:
     )
     assert success is True
     content = tasks_file.read_text(encoding="utf-8")
-    assert "- [ ] [TEST-0001] テストIssue <!-- priority:high issue:#10 -->" in content
+    assert "- [ ] [TEST-0001] テストIssue <!-- priority:high issue:#10 stage:ready -->" in content
 
-    # 重複登録はスキップされる
+    # 既に stage:ready の重複登録はスキップされる (False)
     success_duplicate = promote_issue.sync_to_tasks_md(
         tasks_path=tasks_file,
         project_key="TEST",
@@ -101,6 +101,23 @@ def test_sync_to_tasks_md(tmp_path: Path) -> None:
         priority="high",
     )
     assert success_duplicate is False
+
+    # 既存行が stage:ideation の場合は stage:ready へ昇格される (True)
+    ideation_file = tmp_path / "docs" / "tasks_ideation.md"
+    ideation_file.write_text(
+        "- [ ] [TEST-0003] アイデアタスク <!-- priority:low issue:#20 stage:ideation -->\n",
+        encoding="utf-8",
+    )
+    success_promote = promote_issue.sync_to_tasks_md(
+        tasks_path=ideation_file,
+        project_key="TEST",
+        issue_num=20,
+        title="アイデアタスク",
+        priority="low",
+    )
+    assert success_promote is True
+    assert "stage:ready" in ideation_file.read_text(encoding="utf-8")
+    assert "stage:ideation" not in ideation_file.read_text(encoding="utf-8")
 
     # 2件目のタスク番号が正しくインクリメントされる
     success_2 = promote_issue.sync_to_tasks_md(
@@ -112,7 +129,7 @@ def test_sync_to_tasks_md(tmp_path: Path) -> None:
     )
     assert success_2 is True
     content2 = tasks_file.read_text(encoding="utf-8")
-    assert "- [ ] [TEST-0002] テストIssue2 <!-- priority:medium issue:#11 -->" in content2
+    assert "- [ ] [TEST-0002] テストIssue2 <!-- priority:medium issue:#11 stage:ready -->" in content2
 
 
 def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

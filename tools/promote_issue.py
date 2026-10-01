@@ -216,11 +216,30 @@ def sync_to_tasks_md(
         tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
 
     content = tasks_path.read_text(encoding="utf-8")
-
-    # 既存登録チェック
     issue_tag = f"issue:#{issue_num}"
+
+    # 既存登録チェック & 昇格
     if issue_tag in content:
-        logger.info(f"tasks.md には既に Issue #{issue_num} が登録されています。")
+        lines = content.splitlines()
+        updated_lines: list[str] = []
+        promoted = False
+        for line in lines:
+            if issue_tag in line:
+                if "stage:ideation" in line:
+                    line = line.replace("stage:ideation", "stage:ready")
+                    promoted = True
+                elif "stage:ready" not in line:
+                    line = re.sub(r"(-->|\Z)", "stage:ready \\1", line)
+                    promoted = True
+            updated_lines.append(line)
+
+        if promoted:
+            updated_content = "\n".join(updated_lines) + "\n"
+            tasks_path.write_text(updated_content, encoding="utf-8")
+            logger.info(f"tasks.md の既存タスクを stage:ready に昇格しました: Issue #{issue_num}")
+            return True
+
+        logger.info(f"tasks.md には既に Issue #{issue_num} が登録されており、既に stage:ready です。")
         return False
 
     # 最大タスク番号の検出
@@ -228,7 +247,7 @@ def sync_to_tasks_md(
     next_num = max(existing_nums, default=0) + 1
     task_id = f"{project_key}-{next_num:04d}"
 
-    new_line = f"- [ ] [{task_id}] {title} <!-- priority:{priority} {issue_tag} -->\n"
+    new_line = f"- [ ] [{task_id}] {title} <!-- priority:{priority} {issue_tag} stage:ready -->\n"
 
     if content.endswith("\n"):
         updated_content = content + new_line
@@ -236,7 +255,7 @@ def sync_to_tasks_md(
         updated_content = content + "\n" + new_line
 
     tasks_path.write_text(updated_content, encoding="utf-8")
-    logger.info(f"tasks.md に追加しました: [{task_id}] {title}")
+    logger.info(f"tasks.md に追加しました (stage:ready): [{task_id}] {title}")
     return True
 
 
@@ -314,6 +333,12 @@ def promote_issue(
     tmp_path = root_dir / f"tmp_promote_{issue_num}.md"
     try:
         tmp_path.write_text(new_body, encoding="utf-8")
+        remove_labels = [
+            lbl for lbl in ["stage:ideation", "stage:done", "stage:in-progress"] if lbl in label_names
+        ]
+        if not remove_labels:
+            remove_labels = ["stage:ideation"]
+
         cmd = [
             "gh",
             "issue",
@@ -323,11 +348,11 @@ def promote_issue(
             repo,
             "--body-file",
             str(tmp_path),
-            "--remove-label",
-            "stage:ideation",
-            "--add-label",
-            "stage:ready",
         ]
+        for rl in remove_labels:
+            cmd.extend(["--remove-label", rl])
+        cmd.extend(["--add-label", "stage:ready"])
+
         subprocess.run(cmd, check=True)
         logger.info(f"GitHub Issue #{issue_num} を stage:ready へ昇格しました。")
     finally:
