@@ -1367,6 +1367,29 @@ def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
     assert "tests/test_engine.py" not in resolved
 
 
+def test_resolve_target_files_prevents_cross_type_mismapping(tmp_path: Path) -> None:
+    """非テストファイル（history.py等）がテストファイルへ誤マッピングされないことを検証する。"""
+    from tools.orchestrator_graph import resolve_target_files_against_cwd
+
+    (tmp_path / "src" / "core").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+
+    # 実在ファイル: tests/test_history_copy_warning.py, src/core/clipboard_monitor.py
+    (tmp_path / "tests" / "test_history_copy_warning.py").touch()
+    (tmp_path / "src" / "core" / "clipboard_monitor.py").touch()
+
+    # 入力1: clipboard_monitor.py (階層なし) -> src/core/clipboard_monitor.py に優先度1で解決
+    # 入力2: history.py (実在しない非テスト) -> test_history_copy_warning.py に誤マッチせず history.py のまま維持
+    raw_targets = ["clipboard_monitor.py", "history.py"]
+    resolved = resolve_target_files_against_cwd(raw_targets, cwd=tmp_path)
+
+    assert "src/core/clipboard_monitor.py" in resolved
+    assert "clipboard_monitor.py" not in resolved
+    assert "tests/test_history_copy_warning.py" not in resolved
+    assert "history.py" in resolved
+
+
+
 def test_resolve_target_files_rejects_path_traversal(tmp_path: Path) -> None:
     """衛星リポジトリ外を指す target_files（../ 等）が拒否されることを検証する（#23 path traversal）。"""
     from tools.orchestrator_graph import resolve_target_files_against_cwd
