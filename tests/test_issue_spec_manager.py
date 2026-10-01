@@ -1,7 +1,7 @@
 """tests/test_issue_spec_manager.py - issue_spec_manager の単体テスト."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from tools.issue_spec_manager import (
     format_issue_spec_content,
@@ -11,24 +11,24 @@ from tools.issue_spec_manager import (
 )
 
 
-def test_format_issue_spec_content_without_header():
+def test_format_issue_spec_content_without_header() -> None:
     content = format_issue_spec_content("CW-0038", "タイトル", "## 1. 概要\n本文です")
     assert content.startswith("# [CW-0038] タイトル\n\n## 1. 概要")
 
 
-def test_format_issue_spec_content_with_existing_header():
+def test_format_issue_spec_content_with_existing_header() -> None:
     content = format_issue_spec_content("CW-0038", "タイトル", "# 既存タイトル\n\n## 1. 概要\n本文")
     assert content.startswith("# [CW-0038] 既存タイトル\n\n## 1. 概要")
 
 
-def test_format_issue_spec_content_with_already_tagged_header():
+def test_format_issue_spec_content_with_already_tagged_header() -> None:
     content = format_issue_spec_content(
         "CW-0038", "タイトル", "# [CW-0038] 既存タイトル\n\n## 1. 概要\n本文"
     )
     assert content.startswith("# [CW-0038] 既存タイトル\n\n## 1. 概要")
 
 
-def test_write_issue_spec(tmp_path: Path):
+def test_write_issue_spec(tmp_path: Path) -> None:
     project_dir = tmp_path / "clip_watcher"
     spec_path = write_issue_spec(
         project_dir=project_dir,
@@ -43,7 +43,7 @@ def test_write_issue_spec(tmp_path: Path):
     assert "## 1. 概要" in content
 
 
-def test_get_task_id_from_tasks_md(tmp_path: Path):
+def test_get_task_id_from_tasks_md(tmp_path: Path) -> None:
     tasks_path = tmp_path / "tasks.md"
     tasks_path.write_text(
         "# Tasks\n\n- [ ] [CW-0038] タイトル <!-- priority:high issue:#109 -->\n",
@@ -54,7 +54,7 @@ def test_get_task_id_from_tasks_md(tmp_path: Path):
     assert get_task_id_from_tasks_md(tasks_path, 999) is None
 
 
-def test_self_heal_missing_specs_with_provided_issues(tmp_path: Path):
+def test_self_heal_missing_specs_with_provided_issues(tmp_path: Path) -> None:
     project_dir = tmp_path / "clip_watcher"
     docs_dir = project_dir / "docs"
     docs_dir.mkdir(parents=True)
@@ -93,7 +93,9 @@ def test_self_heal_missing_specs_with_provided_issues(tmp_path: Path):
 
 
 @patch("tools.issue_spec_manager.fetch_remote_issue_body")
-def test_self_heal_missing_specs_with_remote_fetch(mock_fetch, tmp_path: Path):
+def test_self_heal_missing_specs_with_remote_fetch(
+    mock_fetch: MagicMock, tmp_path: Path
+) -> None:
     mock_fetch.return_value = {
         "number": 109,
         "title": "リモートタイトル",

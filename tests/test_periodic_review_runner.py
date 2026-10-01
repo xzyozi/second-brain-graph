@@ -161,7 +161,9 @@ def test_main_status_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert exit_code == 0
 
 
-def test_sync_issue_statuses_self_heals_missing_specs(tmp_path: Path, monkeypatch) -> None:
+def test_sync_issue_statuses_self_heals_missing_specs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sat_dir = tmp_path / "projects" / "test_proj"
     docs_dir = sat_dir / "docs"
     docs_dir.mkdir(parents=True)
