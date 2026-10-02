@@ -56,7 +56,7 @@
 ## 3. GitHub CI PR Fixer 独立モジュール設計
 
 ### 3.1 独立分離の理由 (Single Responsibility Principle)
-- メインの [orchestrator_graph.py](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/tools/orchestrator_graph.py) は Issue 全体の計画・分解・タスク制御に集中させる。
+- メインの [orchestrator_graph.py](../../tools/orchestrator_graph.py) は Issue 全体の計画・分解・タスク制御に集中させる。
 - PR 単位での CI 失敗監視および最小修復ロジックは、独立スクリプト `tools/github_ci_pr_fixer.py` に分離し、コードの複雑化を防ぐ。
 
 ### 3.2 アーキテクチャと連携フロー

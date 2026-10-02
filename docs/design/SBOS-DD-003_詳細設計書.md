@@ -4,7 +4,7 @@
 | 項目     | 内容                                                                                                  |
 | :------- | :---------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-DD-003                                                                                           |
-| 版数     | Rev.6.3（JEV計画・レビュー適合性ゲート[#48, #50]追随版）                                             |
+| 版数     | Rev.6.3（JEV計画・レビュー適合性ゲート[#48, #50]追随版）                                              |
 | 改訂日   | 2026年9月24日                                                                                         |
 | 作成日   | 2026年7月28日                                                                                         |
 | 実装正本 | `tools/`、`config/models.yaml`、`metadata/.project-registry.json`、`metadata/projects/<PROJECT_KEY>/` |
@@ -45,30 +45,30 @@ flowchart LR
 
 ### 2.1 Module と Interface
 
-| Module                   | Interface                                        | 責務                                                                   |
-| :----------------------- | :----------------------------------------------- | :--------------------------------------------------------------------- |
-| `orchestrator_graph.py`  | `execute_issue()`、`cmd_orchestrate()`、`main()` | 実行前検証、Git ブランチ準備、LangGraph 実行。                          |
-| `metadata_store.py`      | `update_task_state()`, `record_execution_history()`, `write_event()`, `ProjectLockManager` | プロジェクト台帳・タスク状態・実行履歴・排他ロック管理。              |
-| `sanitizer.py`           | `sanitize_text()`, `sanitize_data()`             | 機密情報（キー、トークン、秘密鍵、パスワード、メール等）のマスキング。 |
-| `config_loader.py`       | `load_model_config()`、各 `get_*_config()`       | Pydantic による設定検証と設定値の提供。                                |
-| `llm_client.py`          | `call_llm()`                                     | role・intent・設定からサニタイズ済み OpenAI 互換 API 呼び出しを構成。  |
-| `backend_coordinator.py` | `BackendExecutionCoordinator.execute()`          | intent の profile 解決、GPU リース、Backend Adapter 選択。             |
-| `llama_backend.py`       | `managed_llama_server()`                         | llama-server プロセスの起動、待機、終了、ポート解放確認。              |
-| `aider_runner.py`        | `run_aider()`、`get_git_diff()`                  | Aider CLI 実行と Git 差分取得。                                        |
-| `jev_adapter.py`         | `verify_plan_conformance()`                      | JEV Core SDK (NoulTask) を用いた Zero-Decode 計画適合性判定（DoD YAGNI検問）。 |
-| `run_task.py`            | `clean_satellite_repository()`、`main()`         | 排他ロック保護下でのクリーンアップおよびオーケストレーター起動ラッパー。 |
+| Module                   | Interface                                                                                  | 責務                                                                           |
+| :----------------------- | :----------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| `orchestrator_graph.py`  | `execute_issue()`、`cmd_orchestrate()`、`main()`                                           | 実行前検証、Git ブランチ準備、LangGraph 実行。                                 |
+| `metadata_store.py`      | `update_task_state()`, `record_execution_history()`, `write_event()`, `ProjectLockManager` | プロジェクト台帳・タスク状態・実行履歴・排他ロック管理。                       |
+| `sanitizer.py`           | `sanitize_text()`, `sanitize_data()`                                                       | 機密情報（キー、トークン、秘密鍵、パスワード、メール等）のマスキング。         |
+| `config_loader.py`       | `load_model_config()`、各 `get_*_config()`                                                 | Pydantic による設定検証と設定値の提供。                                        |
+| `llm_client.py`          | `call_llm()`                                                                               | role・intent・設定からサニタイズ済み OpenAI 互換 API 呼び出しを構成。          |
+| `backend_coordinator.py` | `BackendExecutionCoordinator.execute()`                                                    | intent の profile 解決、GPU リース、Backend Adapter 選択。                     |
+| `llama_backend.py`       | `managed_llama_server()`                                                                   | llama-server プロセスの起動、待機、終了、ポート解放確認。                      |
+| `aider_runner.py`        | `run_aider()`、`get_git_diff()`                                                            | Aider CLI 実行と Git 差分取得。                                                |
+| `jev_adapter.py`         | `verify_plan_conformance()`                                                                | JEV Core SDK (NoulTask) を用いた Zero-Decode 計画適合性判定（DoD YAGNI検問）。 |
+| `run_task.py`            | `clean_satellite_repository()`、`main()`                                                   | 排他ロック保護下でのクリーンアップおよびオーケストレーター起動ラッパー。       |
 
 ## 3. 設定モデルとルーティング
 
 LLM 関連設定の検証、Pydantic スキーマ、および intent に基づくプロファイルルーティングの詳細については、以下を参照すること。
 
-👉 **[SBOS-DD-005_Backend_GPUリース仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPUリース仕様.md)**
+👉 **[SBOS-DD-005_Backend_GPUリース仕様.md](SBOS-DD-005_Backend_GPUリース仕様.md)**
 
 ## 4. プロジェクト・メタデータ設計
 
 ディレクトリ構成、メタデータ形式の詳細については、以下を参照すること。
 
-👉 **[SBOS-DD-007_永続化_排他制御仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_永続化_排他制御仕様.md)**
+👉 **[SBOS-DD-007_永続化_排他制御仕様.md](SBOS-DD-007_永続化_排他制御仕様.md)**
 
 `resolve_project_context()` は順に `project.json.target_files`、`tasks.md` 内の Python パス、衛星内の Python ファイル探索から候補を得る。Issue 詳細ファイルに Target Files がある場合はそれを優先し、実在しない Python パスはファイル名の近似で衛星内ファイルへ補正する。衛星は `.git` が存在するディレクトリでなければ無効とする。
 
@@ -108,12 +108,12 @@ LLM 関連設定の検証、Pydantic スキーマ、および intent に基づ�
 
 #### Status taxonomy
 
-| 区分                   | status                                                                   | 役割・意味                                                                 |
-| :--------------------- | :----------------------------------------------------------------------- | :------------------------------------------------------------------------- |
-| 実行中・中間状態       | `running`、`code_completed`、`lint_passed`、`test_passed`、`review_lgtm` | LangGraph のノード間を遷移する進行中状態。                                 |
-| 再試行指示             | `retry_spec_draft`、`retry_code`、`retry_review`                         | 各ノード（品質判定やタイムアウト）からの再実行シグナル。                    |
-| 終端・成功             | `COMPLETED`                                                              | PR 作成または既存 PR 検出により正常完了した終端状態。                      |
-| 終端・失敗/エスカレーション | `FAILED_SYSTEM`、`FAILED_B7`、`ESCALATED_NEEDS_REVISION`、`PR_FAILED`、`SKIPPED_LOCKED` | ロック競合、システムエラー、品質上限超過、PR 失敗等の終端状態。            |
+| 区分                        | status                                                                                  | 役割・意味                                                      |
+| :-------------------------- | :-------------------------------------------------------------------------------------- | :-------------------------------------------------------------- |
+| 実行中・中間状態            | `running`、`code_completed`、`lint_passed`、`test_passed`、`review_lgtm`                | LangGraph のノード間を遷移する進行中状態。                      |
+| 再試行指示                  | `retry_spec_draft`、`retry_code`、`retry_review`                                        | 各ノード（品質判定やタイムアウト）からの再実行シグナル。        |
+| 終端・成功                  | `COMPLETED`                                                                             | PR 作成または既存 PR 検出により正常完了した終端状態。           |
+| 終端・失敗/エスカレーション | `FAILED_SYSTEM`、`FAILED_B7`、`ESCALATED_NEEDS_REVISION`、`PR_FAILED`、`SKIPPED_LOCKED` | ロック競合、システムエラー、品質上限超過、PR 失敗等の終端状態。 |
 
 この分類は文書上の整理であり、現行実装では `status` は任意文字列 (`str`) として保持される。実装自体は安定稼働しているため即時の全面書き換えは不要だが、次回以降のリファクタリングにおいて Python の `Literal` または `Enum` として型安全に厳密化する。新しい status を追加する際は、§5.5 の遷移表、`state.json`、実行履歴、統合テストを同時に更新する。
 
@@ -157,16 +157,16 @@ sequenceDiagram
 
 ### 5.5 状態遷移表
 
-| 実行 node            | 成功時の status と次 node                                         | 再試行時の status と次 node                          | 終端・停止                                      |
-| :------------------- | :---------------------------------------------------------------- | :--------------------------------------------------- | :---------------------------------------------- |
+| 実行 node            | 成功時の status と次 node                                         | 再試行時の status と次 node                             | 終端・停止                                                       |
+| :------------------- | :---------------------------------------------------------------- | :------------------------------------------------------ | :--------------------------------------------------------------- |
 | `spec_draft_node`    | `running` (計画適合) → `code_node`                                | `retry_spec_draft` (timeout または YAGNI違反) → 同 node | `FAILED_B7` (計画不適合上限) / `FAILED_SYSTEM` → `escalate_node` |
-| `code_node`          | `code_completed` → `lint_node`                                    | `retry_code` → 同 node                               | `FAILED_SYSTEM` → `escalate_node`               |
-| `lint_node`          | `lint_passed` → `test_node`                                       | `retry_code` → `code_node`                           | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node` |
-| `run_pytest_node`    | `test_passed` → `review_node`                                     | テスト失敗 → `test_feedback_node`                    | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node` |
-| `test_feedback_node` | `retry_code` → `code_node`                                        | —                                                    | `FAILED_SYSTEM` → `escalate_node`               |
-| `review_node`        | `review_lgtm` → `done_node`                                       | `retry_review` → 同 node、`retry_code` → `code_node` | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node` |
-| `done_node`          | `COMPLETED` → 終了                                                | —                                                    | `PR_FAILED` → 終了                              |
-| `escalate_node`      | `FAILED_B7` / `FAILED_SYSTEM` / `ESCALATED_NEEDS_REVISION` → 終了 | —                                                    | —                                               |
+| `code_node`          | `code_completed` → `lint_node`                                    | `retry_code` → 同 node                                  | `FAILED_SYSTEM` → `escalate_node`                                |
+| `lint_node`          | `lint_passed` → `test_node`                                       | `retry_code` → `code_node`                              | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node`                  |
+| `run_pytest_node`    | `test_passed` → `review_node`                                     | テスト失敗 → `test_feedback_node`                       | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node`                  |
+| `test_feedback_node` | `retry_code` → `code_node`                                        | —                                                       | `FAILED_SYSTEM` → `escalate_node`                                |
+| `review_node`        | `review_lgtm` → `done_node`                                       | `retry_review` → 同 node、`retry_code` → `code_node`    | `FAILED_B7` / `FAILED_SYSTEM` → `escalate_node`                  |
+| `done_node`          | `COMPLETED` → 終了                                                | —                                                       | `PR_FAILED` → 終了                                               |
+| `escalate_node`      | `FAILED_B7` / `FAILED_SYSTEM` / `ESCALATED_NEEDS_REVISION` → 終了 | —                                                       | —                                                                |
 
 ### 5.6 例外・再試行フロー
 
@@ -198,16 +198,16 @@ flowchart TD
 
 ### 5.7 Node 契約
 
-| Node                 | 成功時                                                                                                      | 再試行・エスカレーション                                                                               |
-| :------------------- | :---------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
-| `spec_draft_node`    | planner 出力を `impl_plan` へ保存し、JEV 計画適合性ゲートで検証。適合（`passed`）なら `code_node` へ進行。    | YAGNI違反は制約フィードバックを付与し初回 `retry_spec_draft`、2回目は `FAILED_B7`。timeout は初回再試行、2回目は `FAILED_SYSTEM`。その他例外は `SYSTEM_ERROR`。 |
-| `code_node`          | Aider 実行後、`.gitignore` の変更を戻し、Git 状態から変更済み Python ファイルを `target_files` に追加する。 | timeout は初回 `retry_code`、2回目は `FAILED_SYSTEM`。その他の Aider エラーは即時 `SYSTEM_ERROR`。     |
-| `lint_node`          | 対象 Python がなければ `lint_passed`。Ruff の最終 check 成功で `lint_passed`。                              | 失敗時は `LINT_ERROR` と `lint_round` を更新し、3回目で `FAILED_B7`。                                  |
-| `run_pytest_node`    | pytest の JSON report を解析し、成功なら `test_passed`。                                                    | 失敗時は `TEST_ERROR` と `test_round` を更新し、3回目で `FAILED_B7`。実行・解析例外は `SYSTEM_ERROR`。 |
-| `test_feedback_node` | reasoning LLM の助言を `test_feedback_instruction` と `aider_message` に保存する。                          | 助言作成失敗時も raw テスト出力を維持して `retry_code`。                                               |
+| Node                 | 成功時                                                                                                                                                                                    | 再試行・エスカレーション                                                                                                                                                                                        |
+| :------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec_draft_node`    | planner 出力を `impl_plan` へ保存し、JEV 計画適合性ゲートで検証。適合（`passed`）なら `code_node` へ進行。                                                                                | YAGNI違反は制約フィードバックを付与し初回 `retry_spec_draft`、2回目は `FAILED_B7`。timeout は初回再試行、2回目は `FAILED_SYSTEM`。その他例外は `SYSTEM_ERROR`。                                                 |
+| `code_node`          | Aider 実行後、`.gitignore` の変更を戻し、Git 状態から変更済み Python ファイルを `target_files` に追加する。                                                                               | timeout は初回 `retry_code`、2回目は `FAILED_SYSTEM`。その他の Aider エラーは即時 `SYSTEM_ERROR`。                                                                                                              |
+| `lint_node`          | 対象 Python がなければ `lint_passed`。Ruff の最終 check 成功で `lint_passed`。                                                                                                            | 失敗時は `LINT_ERROR` と `lint_round` を更新し、3回目で `FAILED_B7`。                                                                                                                                           |
+| `run_pytest_node`    | pytest の JSON report を解析し、成功なら `test_passed`。                                                                                                                                  | 失敗時は `TEST_ERROR` と `test_round` を更新し、3回目で `FAILED_B7`。実行・解析例外は `SYSTEM_ERROR`。                                                                                                          |
+| `test_feedback_node` | reasoning LLM の助言を `test_feedback_instruction` と `aider_message` に保存する。                                                                                                        | 助言作成失敗時も raw テスト出力を維持して `retry_code`。                                                                                                                                                        |
 | `review_node`        | LLM 判定を実施し、`LGTM` の場合は JEV レビュー合否二次ゲート（`verify_review_conformance`）で検証。適合なら `review_lgtm` を確定して `done_node` へ進行。RDJSON・レビュー履歴を保存する。 | JEV 不適合時は `changes_requested` に上書きし `aider_message` を付与して `code_node` へ差し戻し。指摘は最大3回まで `retry_code`、超過時は `FAILED_B7`。timeout は初回 `retry_review`、2回目は `FAILED_SYSTEM`。 |
-| `done_node`          | 対象ファイルを stage・commit・push し PR を作成、または既存 PR を検出して `COMPLETED`。                     | Git/PR 操作失敗は `PR_FAILED` / `PR_ERROR`。                                                           |
-| `escalate_node`      | 最終状態を防御的に `FAILED_B7` または `FAILED_SYSTEM` とする。                                              | lint/test の上限到達時は敗因レポート生成を試み、成功時は `ESCALATED_NEEDS_REVISION` とする。           |
+| `done_node`          | 対象ファイルを stage・commit・push し PR を作成、または既存 PR を検出して `COMPLETED`。                                                                                                   | Git/PR 操作失敗は `PR_FAILED` / `PR_ERROR`。                                                                                                                                                                    |
+| `escalate_node`      | 最終状態を防御的に `FAILED_B7` または `FAILED_SYSTEM` とする。                                                                                                                            | lint/test の上限到達時は敗因レポート生成を試み、成功時は `ESCALATED_NEEDS_REVISION` とする。                                                                                                                    |
 
 ## 6. 外部ツール Adapter 契約
 
@@ -215,19 +215,19 @@ flowchart TD
 
 LLMへのリクエスト構成、OpenAI互換APIエンドポイントの切り替え、およびGPUリソースのリース制御の詳細については、以下を参照すること。
 
-👉 **[SBOS-DD-005_Backend_GPUリース仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPUリース仕様.md)**
+👉 **[SBOS-DD-005_Backend_GPUリース仕様.md](SBOS-DD-005_Backend_GPUリース仕様.md)**
 
 ### 6.2 Aider Adapter
 
 Aider の起動オプション、一時ファイル制御、モデル解決、フェイルセーフ仕様の詳細については、以下を参照すること。
 
-👉 **[SBOS-DD-004_Aider統合仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider統合仕様.md)**
+👉 **[SBOS-DD-004_Aider統合仕様.md](SBOS-DD-004_Aider統合仕様.md)**
 
 ### 6.3 品質・レビュー Adapter
 
 Ruff (lint)、pytest (test)、LLM レビューおよび Reviewdog の詳細仕様とエスカレーション処理については、以下を参照すること。
 
-👉 **[SBOS-DD-006_品質ゲート_レビュー仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_品質ゲート_レビュー仕様.md)**
+👉 **[SBOS-DD-006_品質ゲート_レビュー仕様.md](SBOS-DD-006_品質ゲート_レビュー仕様.md)**
 
 ### 6.6 Git・PR Adapter
 
@@ -245,7 +245,7 @@ Ruff (lint)、pytest (test)、LLM レビューおよび Reviewdog の詳細仕�
 
 `state.json` および `execution_history.json` の永続化契約（fsync + 原子置換）、ならびに `ProjectLockManager` による排他制御（ロック取得・競合時の挙動）の詳細については、以下を参照すること。
 
-👉 **[SBOS-DD-007_永続化_排他制御仕様.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_永続化_排他制御仕様.md)**
+👉 **[SBOS-DD-007_永続化_排他制御仕様.md](SBOS-DD-007_永続化_排他制御仕様.md)**
 
 ## 8. CLI・運用 Interface
 
@@ -268,29 +268,29 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
 
 ## 9. セキュリティ・安全性の不変条件と制約
 
-| 項目             | 実装上の保証・制約位置づけ                                          |
-| :--------------- | :------------------------------------------------------------------ |
-| 母艦誤編集の防止 | 無効な台帳・衛星ディレクトリ・対象ファイルでは Graph を開始しない。 |
-| 並行実行         | 同一 project key は `run_task.py` を含め `ProjectLockManager`（`.lock`）により排他する。 |
-| LLM の実行先     | intent は route を経由し、未定義 intent は拒否する。                |
-| Aider のコミット | `--no-auto-commits` を常に指定する。                                |
+| 項目             | 実装上の保証・制約位置づけ                                                                                                      |
+| :--------------- | :------------------------------------------------------------------------------------------------------------------------------ |
+| 母艦誤編集の防止 | 無効な台帳・衛星ディレクトリ・対象ファイルでは Graph を開始しない。                                                             |
+| 並行実行         | 同一 project key は `run_task.py` を含め `ProjectLockManager`（`.lock`）により排他する。                                        |
+| LLM の実行先     | intent は route を経由し、未定義 intent は拒否する。                                                                            |
+| Aider のコミット | `--no-auto-commits` を常に指定する。                                                                                            |
 | Stage 前検証     | 既存 staged 変更を拒否し、`target_files` に含まれない stage 変更を拒否する（※Aider 後に追加された変更済み Python も検証対象）。 |
-| レビューの差分   | Git diff が取得できない場合は review を失敗させる。                 |
-| Reviewdog        | 補助的な表示であり、失敗しても品質判定は継続する。                  |
-| 状態保存         | state と履歴は個別ロック・一時ファイル置換で保護する。              |
+| レビューの差分   | Git diff が取得できない場合は review を失敗させる。                                                                             |
+| Reviewdog        | 補助的な表示であり、失敗しても品質判定は継続する。                                                                              |
+| 状態保存         | state と履歴は個別ロック・一時ファイル置換で保護する。                                                                          |
 
 ### 9.1 副作用一覧
 
 システム全体における全コンポーネントの副作用を以下の表に集約する。
 
-| 実行箇所              | 副作用                                                                 | 影響範囲           |
-| :-------------------- | :--------------------------------------------------------------------- | :----------------- |
-| `run_task.py`         | ロック取得後、checkout, hard reset, clean で変更・未追跡ファイルを破棄する。 | 衛星ワークツリー   |
-| `get_git_diff()`      | `git add -N .` を実行して未追跡ファイルを差分対象へ登録する。          | 衛星 Git index     |
-| `code_node()` / Aider | 対象ファイルを編集し、`.gitignore` の変更を戻す。                      | 衛星ワークツリー   |
-| `lint_node()`         | Ruff format と `--unsafe-fixes` で対象 Python ファイルを修正する。     | 衛星ワークツリー   |
-| `run_pytest_node()`   | `.report.json` を一時作成し、終了時に削除する。                        | 衛星ワークツリー   |
-| `escalate_node()`     | lint/test の上限到達時に `FAILURE_REPORT_<ISSUE_ID>.md` を作成する。   | 衛星ワークツリー   |
+| 実行箇所              | 副作用                                                                         | 影響範囲           |
+| :-------------------- | :----------------------------------------------------------------------------- | :----------------- |
+| `run_task.py`         | ロック取得後、checkout, hard reset, clean で変更・未追跡ファイルを破棄する。   | 衛星ワークツリー   |
+| `get_git_diff()`      | `git add -N .` を実行して未追跡ファイルを差分対象へ登録する。                  | 衛星 Git index     |
+| `code_node()` / Aider | 対象ファイルを編集し、`.gitignore` の変更を戻す。                              | 衛星ワークツリー   |
+| `lint_node()`         | Ruff format と `--unsafe-fixes` で対象 Python ファイルを修正する。             | 衛星ワークツリー   |
+| `run_pytest_node()`   | `.report.json` を一時作成し、終了時に削除する。                                | 衛星ワークツリー   |
+| `escalate_node()`     | lint/test の上限到達時に `FAILURE_REPORT_<ISSUE_ID>.md` を作成する。           | 衛星ワークツリー   |
 | `done_node()`         | `target_files` を stage・commit・`push --force-with-lease` し、PR を作成する。 | 衛星 Git／リモート |
 
 副作用を伴う Module の変更時は、対象、失敗時の保持・復元方針、関連テストをこの表と §12 に反映する。
@@ -335,20 +335,20 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
 
 ## 11. テスト・検証設計
 
-| テスト                                         | 対応する Interface・契約                                                                                                             |
-| :--------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
+| テスト                                         | 対応する Interface・契約                                                                                                                           |
+| :--------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tests/test_orchestrator_aider_integration.py` | Issue/プロジェクト検証、文脈解決、timeout、状態遷移、Ruff・pytest、レビュー/RDJSON/Reviewdog、PR branch prefix、履歴、CLI、resume を統合検証する。 |
-| `tests/test_aider_runner.py`                   | Git diff、初回 commit 前 fallback、Aider 引数・timeout・非ゼロ終了、一時ファイル削除、`/v1` 除去を検証する。                         |
-| `tests/test_backend_coordinator.py`            | intent route、Ollama/llama-server Adapter、GPU リース、未定義 intent、Ollama 到達不能時の llama-server 起動を検証する。              |
-| `tests/test_llm_client.py`                     | role 設定、OpenAI SDK へのパラメータ伝達、intent 補完を検証する。                                                                    |
-| `tests/test_run_task.py`                       | ロック保護下でのクリーンアップ順、resume 時の skip、dry-run の非実行性を検証する。                                                   |
+| `tests/test_aider_runner.py`                   | Git diff、初回 commit 前 fallback、Aider 引数・timeout・非ゼロ終了、一時ファイル削除、`/v1` 除去を検証する。                                       |
+| `tests/test_backend_coordinator.py`            | intent route、Ollama/llama-server Adapter、GPU リース、未定義 intent、Ollama 到達不能時の llama-server 起動を検証する。                            |
+| `tests/test_llm_client.py`                     | role 設定、OpenAI SDK へのパラメータ伝達、intent 補完を検証する。                                                                                  |
+| `tests/test_run_task.py`                       | ロック保護下でのクリーンアップ順、resume 時の skip、dry-run の非実行性を検証する。                                                                 |
 
 ### 11.1 保証範囲
 
-| 検証層            | 現在の保証（モックベース検証）                                                                          | 未保証・実環境接続が必要な検証（smoke test）                                                       |
-| :---------------- | :------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------- |
-| Unit / 契約テスト | 設定解決、Aider 引数・例外、Backend route、LLM パラメータ、run_task のロック・分岐をモックで検証する。  | 実行ファイルのインストールや外部サービスの可用性。                                                 |
-| 統合テスト        | LangGraph の状態遷移、監査保存、Git/PR の失敗正規化、レビュー結果の構造化を隔離環境とモックで検証する。 | 実 Git remote、実 GitHub PR、実 LLM (Ollama/llama-server) の応答品質。                             |
+| 検証層            | 現在の保証（モックベース検証）                                                                          | 未保証・実環境接続が必要な検証（smoke test）                                                         |
+| :---------------- | :------------------------------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------- |
+| Unit / 契約テスト | 設定解決、Aider 引数・例外、Backend route、LLM パラメータ、run_task のロック・分岐をモックで検証する。  | 実行ファイルのインストールや外部サービスの可用性。                                                   |
+| 統合テスト        | LangGraph の状態遷移、監査保存、Git/PR の失敗正規化、レビュー結果の構造化を隔離環境とモックで検証する。 | 実 Git remote、実 GitHub PR、実 LLM (Ollama/llama-server) の応答品質。                               |
 | 実環境 smoke test | 自動テストスイートには含まれない（分離運用）。                                                          | Ollama、Aider、Ruff、pytest、Reviewdog、GitHub CLI、リモート Git を実接続した最小 Issue の完走検証。 |
 
 実環境 smoke test は、衛星リポジトリを破壊しない専用の一時 repository と Issue を用意して別の運用手順として実施する。
