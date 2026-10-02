@@ -23,7 +23,7 @@ _mother_root = Path(__file__).resolve().parents[4]
 if str(_mother_root) not in sys.path:
     sys.path.insert(0, str(_mother_root))
 
-from tools.issue_spec_manager import write_issue_spec  # noqa: E402
+from tools.issue_spec_manager import sync_spec_for_task  # noqa: E402
 
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("satellite_reviewer")
@@ -665,11 +665,12 @@ def sync_review_to_tasks_md(
     # docs/issues/<TASK_ID>.md の初期仕様書を自動配置
     if not body:
         body = format_issue_body(item, theme_key)
-    write_issue_spec(
+    sync_spec_for_task(
         project_dir=target_dir,
-        task_id=task_id,
+        issue_num=issue_num,
         title=item.title,
         body=body,
+        task_id=task_id,
         overwrite=False,
         dry_run=dry_run,
     )
@@ -694,11 +695,12 @@ def create_github_issue(
         if sync_tasks_md:
             project_key = resolve_project_key(target_dir)
             print(f"[DRY-RUN] tasks.md 追記予定: [{project_key}-XXXX] {item.title}")
-            write_issue_spec(
+            sync_spec_for_task(
                 project_dir=target_dir,
-                task_id=f"{project_key}-XXXX",
+                issue_num=0,
                 title=item.title,
                 body=body,
+                task_id=f"{project_key}-XXXX",
                 overwrite=False,
                 dry_run=True,
             )

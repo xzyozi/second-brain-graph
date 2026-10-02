@@ -145,6 +145,11 @@ def is_within_directory(candidate: Path, root: Path) -> bool:
     return root_resolved in candidate_resolved.parents
 
 
+def _is_test_path(p: Path) -> bool:
+    """パスがテストファイルまたはテスト関連ディレクトリに属するか判定する."""
+    return p.name.startswith("test_") or "tests" in p.parts or "test" in p.parts
+
+
 def resolve_target_files_against_cwd(
     target_files: List[str], cwd: Optional[Path] = None
 ) -> List[str]:
@@ -183,9 +188,7 @@ def resolve_target_files_against_cwd(
             tf_p = Path(tf)
             tf_name = tf_p.name
             tf_stem = tf_p.stem
-            is_tf_test = (
-                tf_name.startswith("test_") or "tests" in tf_p.parts or "test" in tf_p.parts
-            )
+            is_tf_test = _is_test_path(tf_p)
             clean_tf_stem = tf_stem.replace("test_", "").strip("_")
             matched_file: Optional[str] = None
 
@@ -199,11 +202,7 @@ def resolve_target_files_against_cwd(
             if not matched_file:
                 for repo_f in all_repo_files:
                     repo_p = Path(repo_f)
-                    is_repo_test = (
-                        repo_p.name.startswith("test_")
-                        or "tests" in repo_p.parts
-                        or "test" in repo_p.parts
-                    )
+                    is_repo_test = _is_test_path(repo_p)
                     if repo_p.stem == tf_stem and is_tf_test == is_repo_test:
                         matched_file = repo_f
                         break
@@ -212,11 +211,7 @@ def resolve_target_files_against_cwd(
             if not matched_file and clean_tf_stem:
                 for repo_f in all_repo_files:
                     repo_p = Path(repo_f)
-                    is_repo_test = (
-                        repo_p.name.startswith("test_")
-                        or "tests" in repo_p.parts
-                        or "test" in repo_p.parts
-                    )
+                    is_repo_test = _is_test_path(repo_p)
                     clean_repo_stem = repo_p.stem.replace("test_", "").strip("_")
                     if clean_tf_stem == clean_repo_stem and is_tf_test == is_repo_test:
                         matched_file = repo_f
@@ -226,11 +221,7 @@ def resolve_target_files_against_cwd(
             if not matched_file and clean_tf_stem:
                 for repo_f in all_repo_files:
                     repo_p = Path(repo_f)
-                    is_repo_test = (
-                        repo_p.name.startswith("test_")
-                        or "tests" in repo_p.parts
-                        or "test" in repo_p.parts
-                    )
+                    is_repo_test = _is_test_path(repo_p)
                     if is_tf_test != is_repo_test:
                         continue
                     clean_repo_stem = repo_p.stem.replace("test_", "").strip("_")

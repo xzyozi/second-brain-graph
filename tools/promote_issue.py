@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from tools.issue_spec_manager import get_task_id_from_tasks_md, write_issue_spec
+from tools.issue_spec_manager import fetch_remote_issue, sync_spec_for_task
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("promote_issue")
@@ -65,19 +65,11 @@ def resolve_project_info(
 
 
 def fetch_issue(repo: str, issue_num: int) -> Dict[str, Any]:
-    """GitHub CLI で Issue 情報を取得する."""
-    cmd = [
-        "gh",
-        "issue",
-        "view",
-        str(issue_num),
-        "--repo",
-        repo,
-        "--json",
-        "number,title,body,labels",
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(res.stdout)
+    """GitHub CLI で Issue 情報を取得する（issue_spec_manager に処理を集約）."""
+    data = fetch_remote_issue(repo, issue_num, fields=["number", "title", "body", "labels"])
+    if data is None:
+        raise RuntimeError(f"Issue #{issue_num} の取得に失敗しました ({repo})")
+    return data
 
 
 def parse_approaches(body: str) -> Dict[int, Dict[str, Any]]:
@@ -381,11 +373,12 @@ def promote_issue(
         print("=" * 60)
         logger.info(f"[DRY-RUN] tasks.md 追記プレビュー: priority={priority}, theme={theme}")
         if project_dir and project_key:
-            write_issue_spec(
+            sync_spec_for_task(
                 project_dir=project_dir,
-                task_id=f"{project_key}-XXXX",
+                issue_num=issue_num,
                 title=title,
                 body=new_body,
+                task_id=f"{project_key}-XXXX",
                 overwrite=True,
                 dry_run=True,
             )
@@ -427,20 +420,15 @@ def promote_issue(
     if project_dir and project_key:
         tasks_path = project_dir / "docs" / "tasks.md"
         sync_to_tasks_md(tasks_path, project_key, issue_num, title, priority)
-        task_id = get_task_id_from_tasks_md(tasks_path, issue_num)
-        if task_id:
-            write_issue_spec(
-                project_dir=project_dir,
-                task_id=task_id,
-                title=title,
-                body=new_body,
-                overwrite=True,
-            )
-            logger.info(f"仕様書を自動同期しました: docs/issues/{task_id}.md")
-        else:
-            logger.warning(
-                f"task_id を特定できなかったため仕様書生成をスキップしました: Issue #{issue_num}"
-            )
+        spec_path = sync_spec_for_task(
+            project_dir=project_dir,
+            issue_num=issue_num,
+            title=title,
+            body=new_body,
+            overwrite=True,
+        )
+        if spec_path:
+            logger.info(f"仕様書を自動同期しました: docs/issues/{spec_path.name}")
     else:
         logger.warning(
             "サテライトディレクトリまたはプロジェクトキーが解決できなかったため、tasks.md 同期および仕様書生成をスキップしました。"

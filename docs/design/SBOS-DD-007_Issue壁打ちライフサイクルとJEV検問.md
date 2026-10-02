@@ -1,9 +1,29 @@
-# SBOS-DD-007: Issue 壁打ちライフサイクルと JEV スクリーニング仕様書
+---
+title: "Issue 壁打ちライフサイクルと JEV スクリーニング仕様書"
+document_type: "detailed_design"
+version: "1.1.0"
+created_at: "2026-09-25"
+updated_at: "2026-10-02"
+author: "アーキテクチャチーム / xzyozi"
+purpose: "GitHub Issues を入力とする自律開発パイプラインの前段に位置する壁打ち・構想フェーズの状態管理ルール、JEVによるスクリーニング仕様、およびdocs/issues仕様書のライフサイクル自動同期を定義する"
+related_documents:
+  - "docs/design/SBOS-BD-002_基本設計書.md"
+  - "docs/design/SBOS-DD-003_詳細設計書.md"
+  - "metadata/templates/issue_template.md"
+---
 
-- **バージョン**: 1.0.0
-- **策定日**: 2026-09-25
-- **ステータス**: 正式版 (Implemented)
-- **対象**: `tools/screen_issues.py`, `tools/close_stale_issues.py`, `tools/score_issues.py`, `.github/workflows/cleanup-stale-ideation.yml`
+# 詳細設計書（Issue 壁打ちライフサイクルと JEV スクリーニング仕様）
+**GitHub Issues 最上流フェーズの状態管理・重複検知・docs/issues 仕様書自動同期アーキテクチャ**
+
+| 項目 | 内容 |
+| :--- | :--- |
+| 文書番号 | SBOS-DD-007 |
+| ドキュメント名 | Issue 壁打ちライフサイクルと JEV スクリーニング仕様書 |
+| 版数 | Rev.1.1 (PM-060 仕様書同期・確定タスク責務分離整合) |
+| 改訂日 | 2026-10-02 |
+| 作成日 | 2026-09-25 |
+| 作成者 | アーキテクチャチーム / xzyozi |
+| 対象 | `tools/screen_issues.py`, `tools/close_stale_issues.py`, `tools/score_issues.py`, `tools/promote_issue.py`, `tools/issue_spec_manager.py`, `tools/periodic_review_runner.py`, `.github/workflows/cleanup-stale-ideation.yml` |
 
 ---
 
@@ -150,6 +170,15 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
      - `tasks.md` 内に記載された全タスクを走査し、`docs/issues/<TASK_ID>.md` が欠落しているタスクを検知した場合、GitHub API から Issue 本文を取得して自動インポート（欠落自己修復）。
   4. **Target Files パス解決ガード (`orchestrator_graph.py`)**:
      - `resolve_target_files_against_cwd` において、ファイル名（拡張子込み）完全一致、ステム完全一致を最優先とし、非テストファイルがテストファイル（`tests/test_...`）へ安易に部分一致マッピングされる誤爆を厳格に防止。
+
+---
+
+## 4. 改訂履歴 (Change Log)
+
+| 版数 | 改訂日 | 変更者 | 変更内容・変更理由 (Why) |
+| :--- | :--- | :--- | :--- |
+| Rev.1.0 | 2026-09-25 | アーキテクチャチーム | 新規作成（初版制定: stage ラベル状態マシン、JEV スクリーニング、放置 Issue 自動クローズ仕様） |
+| Rev.1.1 | 2026-10-02 | xzyozi | PM-060 追記: docs/issues/<TASK_ID>.md 自動同期・自己修復ライフサイクルの新設。3.9節/3.10節の確定タスク・Target Files・進捗管理の責務分離（SSOT）と仕様整合性の明確化、YAML Frontmatter および改訂履歴の追記（ドキュメント規約準拠） |
 
 
 

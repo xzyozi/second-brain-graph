@@ -14,6 +14,7 @@ import logging
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,28 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
+
+# tasks.md のメタデータ抽出用正規表現（SSOT）
+RE_TASK_ID = re.compile(r"-\s*\[[ xX/]?\]\s*\[([A-Za-z0-9_-]+)\]")
+RE_ISSUE_NUM = re.compile(r"issue:#(\d+)")
+
+
+@dataclass
+class IssueSpecData:
+    """Issue仕様書生成に必要なDTO."""
+
+    task_id: str
+    title: str
+    body: str
+
+
+def parse_task_line_metadata(line: str) -> tuple[str, int] | tuple[None, None]:
+    """tasks.md の1行から (task_id, issue_num) を抽出する."""
+    m_task = RE_TASK_ID.search(line)
+    m_issue = RE_ISSUE_NUM.search(line)
+    if m_task and m_issue:
+        return m_task.group(1), int(m_issue.group(1))
+    return None, None
 
 
 def format_issue_spec_content(task_id: str, title: str, body: str) -> str:
@@ -57,21 +80,27 @@ def format_issue_spec_content(task_id: str, title: str, body: str) -> str:
 
 def write_issue_spec(
     project_dir: Path,
-    task_id: str,
-    title: str,
-    body: str,
+    task_id: str | None = None,
+    title: str | None = None,
+    body: str | None = None,
+    spec: IssueSpecData | None = None,
     overwrite: bool = True,
     dry_run: bool = False,
 ) -> Path:
     """サテライトの docs/issues/<TASK_ID>.md を生成または更新する."""
+    if spec is None:
+        if task_id is None or title is None or body is None:
+            raise ValueError("spec または (task_id, title, body) のいずれかを指定してください。")
+        spec = IssueSpecData(task_id=task_id, title=title, body=body)
+
     issues_dir = project_dir / "docs" / "issues"
-    spec_path = issues_dir / f"{task_id}.md"
+    spec_path = issues_dir / f"{spec.task_id}.md"
 
     if spec_path.exists() and not overwrite:
         logger.debug(f"仕様書は既に存在します (上書きスキップ): {spec_path}")
         return spec_path
 
-    content = format_issue_spec_content(task_id, title, body)
+    content = format_issue_spec_content(spec.task_id, spec.title, spec.body)
 
     if dry_run:
         logger.info(f"[DRY-RUN] 仕様書作成予定: {spec_path}")
@@ -92,17 +121,21 @@ def get_task_id_from_tasks_md(tasks_path: Path, issue_num: int) -> str | None:
         content = tasks_path.read_text(encoding="utf-8")
         for line in content.splitlines():
             if f"issue:#{issue_num}" in line:
-                m = re.search(r"-\s*\[[ xX/]?\]\s*\[([A-Za-z0-9_-]+)\]", line)
-                if m:
-                    return m.group(1)
+                t_id, num = parse_task_line_metadata(line)
+                if t_id and num == issue_num:
+                    return t_id
     except Exception as e:
         logger.warning(f"tasks.md 解析失敗 ({tasks_path}): {e}")
 
     return None
 
 
-def fetch_remote_issue_body(repo: str, issue_num: int) -> dict[str, Any] | None:
-    """GitHub CLI で Issue の詳細（title, body）を取得する."""
+def fetch_remote_issue(
+    repo: str, issue_num: int, fields: list[str] | None = None
+) -> dict[str, Any] | None:
+    """GitHub CLI で Issue の詳細を取得する."""
+    if fields is None:
+        fields = ["number", "title", "body", "labels", "state"]
     cmd = [
         "gh",
         "issue",
@@ -111,7 +144,7 @@ def fetch_remote_issue_body(repo: str, issue_num: int) -> dict[str, Any] | None:
         "--repo",
         repo,
         "--json",
-        "number,title,body,labels,state",
+        ",".join(fields),
     ]
     try:
         res = subprocess.run(
@@ -125,6 +158,43 @@ def fetch_remote_issue_body(repo: str, issue_num: int) -> dict[str, Any] | None:
     except Exception as e:
         logger.warning(f"Issue #{issue_num} の取得に失敗しました ({repo}): {e}")
         return None
+
+
+# 互換用エイリアス
+fetch_remote_issue_body = fetch_remote_issue
+
+
+def sync_spec_for_task(
+    project_dir: Path,
+    issue_num: int,
+    title: str,
+    body: str,
+    task_id: str | None = None,
+    overwrite: bool = True,
+    dry_run: bool = False,
+) -> Path | None:
+    """プロジェクト内の tasks.md と整合を取りながら docs/issues/<TASK_ID>.md を安全に自動生成・更新する高水準ファサード.
+
+    task_id が未指定の場合は tasks.md から issue_num を元に自動解決する。
+    解決できない場合は安全に warning を出して None を返却する。
+    """
+    if not task_id:
+        tasks_path = project_dir / "docs" / "tasks.md"
+        task_id = get_task_id_from_tasks_md(tasks_path, issue_num)
+
+    if not task_id:
+        logger.warning(
+            f"task_id を特定できなかったため仕様書同期をスキップしました: Issue #{issue_num} ({project_dir.name})"
+        )
+        return None
+
+    spec = IssueSpecData(task_id=task_id, title=title, body=body)
+    return write_issue_spec(
+        project_dir=project_dir,
+        spec=spec,
+        overwrite=overwrite,
+        dry_run=dry_run,
+    )
 
 
 def self_heal_missing_specs(
@@ -155,14 +225,9 @@ def self_heal_missing_specs(
     healed_tasks: list[str] = []
 
     for line in content.splitlines():
-        # タスク行パターン: - [ ] [KEY-0001] タイトル <!-- ... issue:#123 ... -->
-        m_task = re.search(r"-\s*\[[ xX/]?\]\s*\[([A-Za-z0-9_-]+)\]", line)
-        m_issue = re.search(r"issue:#(\d+)", line)
-        if not m_task or not m_issue:
+        task_id, issue_num = parse_task_line_metadata(line)
+        if not task_id or not issue_num:
             continue
-
-        task_id = m_task.group(1)
-        issue_num = int(m_issue.group(1))
 
         spec_file = issues_dir / f"{task_id}.md"
         if spec_file.exists():
@@ -185,11 +250,10 @@ def self_heal_missing_specs(
         title = iss_data.get("title", f"Task {task_id}")
         body = iss_data.get("body", "")
 
+        spec = IssueSpecData(task_id=task_id, title=title, body=body)
         write_issue_spec(
             project_dir=project_dir,
-            task_id=task_id,
-            title=title,
-            body=body,
+            spec=spec,
             overwrite=True,
             dry_run=dry_run,
         )
