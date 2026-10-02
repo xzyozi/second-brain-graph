@@ -88,7 +88,7 @@ uv run pytest
 
 ## 6. OSS ライセンス遵守およびセキュリティ確認
 
-本プロジェクトでは、商用・ローカル利用に寛容なライセンス（MIT, Apache-2.0, BSD等）のOSSのみを採用します。詳細は [oss_license_policy.md](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/setup/oss_license_policy.md) を参照してください。
+本プロジェクトでは、商用・ローカル利用に寛容なライセンス（MIT, Apache-2.0, BSD等）のOSSのみを採用します。詳細は [oss_license_policy.md](oss_license_policy.md) を参照してください。
 
 ### 6.1 ライセンス適合性の確認
 依存パッケージに禁忌とされるコピーレフト（GPL/AGPL）が含まれていないかを検証します。
