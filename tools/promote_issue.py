@@ -12,6 +12,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from tools.issue_spec_manager import fetch_remote_issue, sync_spec_for_task
+
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("promote_issue")
 
@@ -63,19 +65,11 @@ def resolve_project_info(
 
 
 def fetch_issue(repo: str, issue_num: int) -> Dict[str, Any]:
-    """GitHub CLI で Issue 情報を取得する."""
-    cmd = [
-        "gh",
-        "issue",
-        "view",
-        str(issue_num),
-        "--repo",
-        repo,
-        "--json",
-        "number,title,body,labels",
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(res.stdout)
+    """GitHub CLI で Issue 情報を取得する（issue_spec_manager に処理を集約）."""
+    data = fetch_remote_issue(repo, issue_num, fields=["number", "title", "body", "labels"])
+    if data is None:
+        raise RuntimeError(f"Issue #{issue_num} の取得に失敗しました ({repo})")
+    return data
 
 
 def parse_approaches(body: str) -> Dict[int, Dict[str, Any]]:
@@ -136,13 +130,58 @@ def extract_priority_and_theme(body: str, labels: List[Dict[str, str]]) -> Tuple
     return priority, theme
 
 
+def update_target_files_section(body: str, target_files: List[str]) -> str:
+    """## 4. 編集対象ファイル (Target Files) セクションを指定された target_files で置換・更新する."""
+    new_files_block = "\n".join(f"- `{tf.strip('` ')}`" for tf in target_files)
+    new_sec4 = f"## 4. 編集対象ファイル (Target Files)\n{new_files_block}\n\n"
+
+    sec4_pattern = re.compile(
+        r"(## 4\. 編集対象ファイル\s*\(Target Files\).*?\n)(?=## [5-8]\.|\Z)",
+        re.DOTALL,
+    )
+    if sec4_pattern.search(body):
+        return sec4_pattern.sub(new_sec4, body)
+    else:
+        sec5_pattern = re.compile(r"(?=## 5\.)")
+        if sec5_pattern.search(body):
+            return sec5_pattern.sub(new_sec4, body)
+        return body.rstrip() + f"\n\n{new_sec4}"
+
+
+def update_execution_steps_section(body: str, concrete_tasks: List[str]) -> str:
+    """## 3. 段階的実装手順 (Step-by-step Execution) セクションに確定タスクを展開・更新する."""
+    tasks_lines: List[str] = []
+    for t in concrete_tasks:
+        cleaned = re.sub(r"^\s*-\s*(\[[ xX]\]\s*)?", "", t).strip()
+        if cleaned:
+            tasks_lines.append(f"- [ ] {cleaned}")
+    if not tasks_lines:
+        return body
+
+    tasks_block = "\n".join(tasks_lines)
+    new_sec3 = f"## 3. 段階的実装手順 (Step-by-step Execution)\n{tasks_block}\n\n"
+
+    sec3_pattern = re.compile(
+        r"(## 3\. 段階的実装手順\s*\(Step-by-step Execution\).*?\n)(?=## [4-8]\.|\Z)",
+        re.DOTALL,
+    )
+    if sec3_pattern.search(body):
+        return sec3_pattern.sub(new_sec3, body)
+    else:
+        sec4_pattern = re.compile(r"(?=## 4\.)")
+        if sec4_pattern.search(body):
+            return sec4_pattern.sub(new_sec3, body)
+        return body.rstrip() + f"\n\n{new_sec3}"
+
+
 def generate_promoted_body(
     body: str,
     selected_approach: int,
     approaches: Dict[int, Dict[str, Any]],
     concrete_tasks: Optional[List[str]] = None,
+    target_files: Optional[List[str]] = None,
 ) -> str:
-    """採用案を [x] にし、非採用案を退避した stage:ready 用の Issue 本文を生成する."""
+    """採用案を [x] にし、非採用案を退避し、確定タスク・Target Files を反映した stage:ready 用の Issue 本文を生成する."""
     sel = approaches.get(selected_approach)
     if not sel:
         raise ValueError(f"アプローチ 案{selected_approach} の情報が見つかりません。")
@@ -167,7 +206,15 @@ def generate_promoted_body(
             flags=re.MULTILINE,
         )
 
-    # 3. 確定実装タスク枠が存在する場合は削除（tasks.md に一元化）
+    # 3. 確定実装タスクの反映 (Step-by-step Execution への展開)
+    if concrete_tasks:
+        body_updated = update_execution_steps_section(body_updated, concrete_tasks)
+
+    # 4. 編集対象ファイル (Target Files) の更新
+    if target_files:
+        body_updated = update_target_files_section(body_updated, target_files)
+
+    # 5. 確定実装タスク枠（旧フォーマット）が存在する場合は削除（tasks.md に一元化）
     body_updated = re.sub(
         r"\n*### 確定実装タスク \(Task Checklist\):.*?(?=\n## 3|\Z)",
         "",
@@ -214,11 +261,32 @@ def sync_to_tasks_md(
         tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
 
     content = tasks_path.read_text(encoding="utf-8")
-
-    # 既存登録チェック
     issue_tag = f"issue:#{issue_num}"
+
+    # 既存登録チェック & 昇格
     if issue_tag in content:
-        logger.info(f"tasks.md には既に Issue #{issue_num} が登録されています。")
+        lines = content.splitlines()
+        updated_lines: list[str] = []
+        promoted = False
+        for line in lines:
+            if issue_tag in line:
+                if "stage:ideation" in line:
+                    line = line.replace("stage:ideation", "stage:ready")
+                    promoted = True
+                elif "stage:ready" not in line:
+                    line = re.sub(r"(-->|\Z)", "stage:ready \\1", line)
+                    promoted = True
+            updated_lines.append(line)
+
+        if promoted:
+            updated_content = "\n".join(updated_lines) + "\n"
+            tasks_path.write_text(updated_content, encoding="utf-8")
+            logger.info(f"tasks.md の既存タスクを stage:ready に昇格しました: Issue #{issue_num}")
+            return True
+
+        logger.info(
+            f"tasks.md には既に Issue #{issue_num} が登録されており、既に stage:ready です。"
+        )
         return False
 
     # 最大タスク番号の検出
@@ -226,7 +294,7 @@ def sync_to_tasks_md(
     next_num = max(existing_nums, default=0) + 1
     task_id = f"{project_key}-{next_num:04d}"
 
-    new_line = f"- [ ] [{task_id}] {title} <!-- priority:{priority} {issue_tag} -->\n"
+    new_line = f"- [ ] [{task_id}] {title} <!-- priority:{priority} {issue_tag} stage:ready -->\n"
 
     if content.endswith("\n"):
         updated_content = content + new_line
@@ -234,7 +302,7 @@ def sync_to_tasks_md(
         updated_content = content + "\n" + new_line
 
     tasks_path.write_text(updated_content, encoding="utf-8")
-    logger.info(f"tasks.md に追加しました: [{task_id}] {title}")
+    logger.info(f"tasks.md に追加しました (stage:ready): [{task_id}] {title}")
     return True
 
 
@@ -244,6 +312,7 @@ def promote_issue(
     issue_num: int,
     approach: Optional[int] = None,
     concrete_tasks: Optional[List[str]] = None,
+    target_files: Optional[List[str]] = None,
     dry_run: bool = False,
 ) -> bool:
     """Issue を stage:ready へ昇格するメイン関数."""
@@ -287,7 +356,13 @@ def promote_issue(
         selected_approach = 1
 
     logger.info(f"採用アプローチ: 案{selected_approach}")
-    new_body = generate_promoted_body(body, selected_approach, approaches, concrete_tasks)
+    new_body = generate_promoted_body(
+        body,
+        selected_approach,
+        approaches,
+        concrete_tasks=concrete_tasks,
+        target_files=target_files,
+    )
     priority, theme = extract_priority_and_theme(body, labels)
 
     if dry_run:
@@ -297,12 +372,30 @@ def promote_issue(
         print(new_body)
         print("=" * 60)
         logger.info(f"[DRY-RUN] tasks.md 追記プレビュー: priority={priority}, theme={theme}")
+        if project_dir and project_key:
+            sync_spec_for_task(
+                project_dir=project_dir,
+                issue_num=issue_num,
+                title=title,
+                body=new_body,
+                task_id=f"{project_key}-XXXX",
+                overwrite=True,
+                dry_run=True,
+            )
         return True
 
     # 1. GitHub Issue の更新
     tmp_path = root_dir / f"tmp_promote_{issue_num}.md"
     try:
         tmp_path.write_text(new_body, encoding="utf-8")
+        remove_labels = [
+            lbl
+            for lbl in ["stage:ideation", "stage:done", "stage:in-progress"]
+            if lbl in label_names
+        ]
+        if not remove_labels:
+            remove_labels = ["stage:ideation"]
+
         cmd = [
             "gh",
             "issue",
@@ -312,24 +405,33 @@ def promote_issue(
             repo,
             "--body-file",
             str(tmp_path),
-            "--remove-label",
-            "stage:ideation",
-            "--add-label",
-            "stage:ready",
         ]
+        for rl in remove_labels:
+            cmd.extend(["--remove-label", rl])
+        cmd.extend(["--add-label", "stage:ready"])
+
         subprocess.run(cmd, check=True)
         logger.info(f"GitHub Issue #{issue_num} を stage:ready へ昇格しました。")
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
 
-    # 2. サテライトの tasks.md への同期
+    # 2. サテライトの tasks.md への同期および docs/issues/<TASK_ID>.md の生成・更新
     if project_dir and project_key:
         tasks_path = project_dir / "docs" / "tasks.md"
         sync_to_tasks_md(tasks_path, project_key, issue_num, title, priority)
+        spec_path = sync_spec_for_task(
+            project_dir=project_dir,
+            issue_num=issue_num,
+            title=title,
+            body=new_body,
+            overwrite=True,
+        )
+        if spec_path:
+            logger.info(f"仕様書を自動同期しました: docs/issues/{spec_path.name}")
     else:
         logger.warning(
-            "サテライトディレクトリまたはプロジェクトキーが解決できなかったため、tasks.md 同期をスキップしました。"
+            "サテライトディレクトリまたはプロジェクトキーが解決できなかったため、tasks.md 同期および仕様書生成をスキップしました。"
         )
 
     return True
@@ -358,6 +460,12 @@ def main() -> None:
         help="確定実装タスク（複数指定可能）。省略時はデフォルトタスクを生成",
     )
     parser.add_argument(
+        "--target-file",
+        "-f",
+        action="append",
+        help="編集対象ファイル（複数指定可能）。省略時は Issue 本文の既存リストを維持",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="実際の更新を行わずプレビューを表示する"
     )
 
@@ -370,6 +478,7 @@ def main() -> None:
         issue_num=args.issue,
         approach=args.approach,
         concrete_tasks=args.task,
+        target_files=args.target_file,
         dry_run=args.dry_run,
     )
     if not success:

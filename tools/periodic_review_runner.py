@@ -20,6 +20,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tools.issue_spec_manager import self_heal_missing_specs
+
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("periodic_reviewer")
 handler = logging.StreamHandler(sys.stderr)
@@ -183,7 +185,7 @@ def fetch_remote_issues(repo: str) -> list[dict[str, Any]]:
                 "--limit",
                 "200",
                 "--json",
-                "number,title,state,labels",
+                "number,title,state,labels,body",
             ],
             capture_output=True,
             text=True,
@@ -201,6 +203,7 @@ def sync_issue_statuses_to_tasks_md(
     repo: str,
     project_key: str,
     dry_run: bool = False,
+    sync_specs: bool = True,
 ) -> tuple[int, int]:
     """GitHub Issues の最新ステータスを tasks.md に同期する (更新件数, 新規追記件数).
 
@@ -311,6 +314,16 @@ def sync_issue_statuses_to_tasks_md(
     elif dry_run and (updated_count > 0 or added_count > 0):
         logger.info(
             f"[DRY-RUN] tasks.md 更新予定: 更新 {updated_count} 件, 新規追加 {added_count} 件"
+        )
+
+    # 4. 欠落している docs/issues/<TASK_ID>.md 仕様書の自動自己修復
+    if sync_specs:
+        sat_dir = tasks_path.parent.parent
+        self_heal_missing_specs(
+            project_dir=sat_dir,
+            repo=repo,
+            issues=issues,
+            dry_run=dry_run,
         )
 
     return updated_count, added_count

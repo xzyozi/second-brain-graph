@@ -18,6 +18,13 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# 母艦ルートの追加と仕様書マネージャーのインポート
+_mother_root = Path(__file__).resolve().parents[4]
+if str(_mother_root) not in sys.path:
+    sys.path.insert(0, str(_mother_root))
+
+from tools.issue_spec_manager import sync_spec_for_task  # noqa: E402
+
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("satellite_reviewer")
 handler = logging.StreamHandler(sys.stderr)
@@ -618,8 +625,10 @@ def sync_review_to_tasks_md(
     item: ReviewItem,
     theme_key: str,
     issue_num: int,
+    body: str = "",
+    dry_run: bool = False,
 ) -> bool:
-    """サテライトの docs/tasks.md に新規レビュー課題を追記する."""
+    """サテライトの docs/tasks.md に新規レビュー課題を追記し、docs/issues/<TASK_ID>.md を初期配置する."""
     tasks_path = target_dir / "docs" / "tasks.md"
     if not tasks_path.exists():
         tasks_path.parent.mkdir(parents=True, exist_ok=True)
@@ -649,8 +658,22 @@ def sync_review_to_tasks_md(
     else:
         updated = content + "\n" + new_line
 
-    tasks_path.write_text(updated, encoding="utf-8")
-    logger.info(f"tasks.md に自動追加しました: [{task_id}] {item.title} ({issue_tag})")
+    if not dry_run:
+        tasks_path.write_text(updated, encoding="utf-8")
+        logger.info(f"tasks.md に自動追加しました: [{task_id}] {item.title} ({issue_tag})")
+
+    # docs/issues/<TASK_ID>.md の初期仕様書を自動配置
+    if not body:
+        body = format_issue_body(item, theme_key)
+    sync_spec_for_task(
+        project_dir=target_dir,
+        issue_num=issue_num,
+        title=item.title,
+        body=body,
+        task_id=task_id,
+        overwrite=False,
+        dry_run=dry_run,
+    )
     return True
 
 
@@ -672,6 +695,15 @@ def create_github_issue(
         if sync_tasks_md:
             project_key = resolve_project_key(target_dir)
             print(f"[DRY-RUN] tasks.md 追記予定: [{project_key}-XXXX] {item.title}")
+            sync_spec_for_task(
+                project_dir=target_dir,
+                issue_num=0,
+                title=item.title,
+                body=body,
+                task_id=f"{project_key}-XXXX",
+                overwrite=False,
+                dry_run=True,
+            )
         print("-" * 60)
         print(body.strip())
         print("=" * 60 + "\n")
@@ -706,7 +738,7 @@ def create_github_issue(
             m = re.search(r"/issues/(\d+)", issue_url)
             if m:
                 issue_num = int(m.group(1))
-                sync_review_to_tasks_md(target_dir, item, theme_key, issue_num)
+                sync_review_to_tasks_md(target_dir, item, theme_key, issue_num, body=body)
 
         return True
     except subprocess.CalledProcessError as e:

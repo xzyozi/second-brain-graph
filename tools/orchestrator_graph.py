@@ -145,6 +145,11 @@ def is_within_directory(candidate: Path, root: Path) -> bool:
     return root_resolved in candidate_resolved.parents
 
 
+def _is_test_path(p: Path) -> bool:
+    """パスがテストファイルまたはテスト関連ディレクトリに属するか判定する."""
+    return p.name.startswith("test_") or "tests" in p.parts or "test" in p.parts
+
+
 def resolve_target_files_against_cwd(
     target_files: List[str], cwd: Optional[Path] = None
 ) -> List[str]:
@@ -180,24 +185,64 @@ def resolve_target_files_against_cwd(
             if tf not in resolved:
                 resolved.append(tf)
         else:
-            tf_stem = Path(tf).stem
+            tf_p = Path(tf)
+            tf_name = tf_p.name
+            tf_stem = tf_p.stem
+            is_tf_test = _is_test_path(tf_p)
             clean_tf_stem = tf_stem.replace("test_", "").strip("_")
-            matched = False
+            matched_file: Optional[str] = None
+
+            # 優先度 1: ファイル名（拡張子込み）完全一致 (例: tf='office_parser.py' -> repo_f='src/grep/office_parser.py')
             for repo_f in all_repo_files:
-                repo_stem = Path(repo_f).stem
-                clean_repo_stem = repo_stem.replace("test_", "").strip("_")
-                if clean_tf_stem and (
-                    clean_tf_stem in clean_repo_stem or clean_repo_stem in clean_tf_stem
-                ):
-                    if repo_f not in resolved:
-                        logger.info(
-                            f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{repo_f}'"
-                        )
-                        resolved.append(repo_f)
-                        matched = True
+                if Path(repo_f).name == tf_name:
+                    matched_file = repo_f
+                    break
+
+            # 優先度 2: ステム完全一致 (テスト属性一致)
+            if not matched_file:
+                for repo_f in all_repo_files:
+                    repo_p = Path(repo_f)
+                    is_repo_test = _is_test_path(repo_p)
+                    if repo_p.stem == tf_stem and is_tf_test == is_repo_test:
+                        matched_file = repo_f
                         break
-            if not matched and tf not in resolved:
-                resolved.append(tf)
+
+            # 優先度 3: clean_stem 完全一致 (テスト属性一致)
+            if not matched_file and clean_tf_stem:
+                for repo_f in all_repo_files:
+                    repo_p = Path(repo_f)
+                    is_repo_test = _is_test_path(repo_p)
+                    clean_repo_stem = repo_p.stem.replace("test_", "").strip("_")
+                    if clean_tf_stem == clean_repo_stem and is_tf_test == is_repo_test:
+                        matched_file = repo_f
+                        break
+
+            # 優先度 4: clean_stem 部分一致（※テスト属性が一致しており、かつ単語境界が一致する場合のみ）
+            if not matched_file and clean_tf_stem:
+                for repo_f in all_repo_files:
+                    repo_p = Path(repo_f)
+                    is_repo_test = _is_test_path(repo_p)
+                    if is_tf_test != is_repo_test:
+                        continue
+                    clean_repo_stem = repo_p.stem.replace("test_", "").strip("_")
+                    if (
+                        f"_{clean_tf_stem}" in clean_repo_stem
+                        or f"{clean_tf_stem}_" in clean_repo_stem
+                        or f"_{clean_repo_stem}" in clean_tf_stem
+                        or f"{clean_repo_stem}_" in clean_tf_stem
+                    ):
+                        matched_file = repo_f
+                        break
+
+            if matched_file:
+                if matched_file not in resolved:
+                    logger.info(
+                        f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{matched_file}'"
+                    )
+                    resolved.append(matched_file)
+            else:
+                if tf not in resolved:
+                    resolved.append(tf)
 
     return resolved
 

@@ -283,6 +283,15 @@ def test_sync_review_to_tasks_md(tmp_path: Path) -> None:
     assert "issue:#101" in content
     assert "[security] test vulnerability" in content
 
+    # docs/issues/<TASK_ID>.md の自動配置を検証
+    issues_dir = tmp_path / "docs" / "issues"
+    assert issues_dir.is_dir()
+    spec_files = list(issues_dir.glob("*.md"))
+    assert len(spec_files) == 1
+    spec_content = spec_files[0].read_text(encoding="utf-8")
+    assert "[security] test vulnerability" in spec_content
+    assert "suggested_solution" in spec_content or "solution" in spec_content
+
     # 2回目の重複追記（スキップされること）
     added_again = run_review.sync_review_to_tasks_md(tmp_path, item, "security", 101)
     assert added_again is False

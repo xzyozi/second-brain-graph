@@ -1,9 +1,29 @@
-# SBOS-DD-007: Issue 壁打ちライフサイクルと JEV スクリーニング仕様書
+---
+title: "Issue 壁打ちライフサイクルと JEV スクリーニング仕様書"
+document_type: "detailed_design"
+version: "1.1.0"
+created_at: "2026-09-25"
+updated_at: "2026-10-02"
+author: "アーキテクチャチーム / xzyozi"
+purpose: "GitHub Issues を入力とする自律開発パイプラインの前段に位置する壁打ち・構想フェーズの状態管理ルール、JEVによるスクリーニング仕様、およびdocs/issues仕様書のライフサイクル自動同期を定義する"
+related_documents:
+  - "docs/design/SBOS-BD-002_基本設計書.md"
+  - "docs/design/SBOS-DD-003_詳細設計書.md"
+  - "metadata/templates/issue_template.md"
+---
 
-- **バージョン**: 1.0.0
-- **策定日**: 2026-09-25
-- **ステータス**: 正式版 (Implemented)
-- **対象**: `tools/screen_issues.py`, `tools/close_stale_issues.py`, `tools/score_issues.py`, `.github/workflows/cleanup-stale-ideation.yml`
+# 詳細設計書（Issue 壁打ちライフサイクルと JEV スクリーニング仕様）
+**GitHub Issues 最上流フェーズの状態管理・重複検知・docs/issues 仕様書自動同期アーキテクチャ**
+
+| 項目 | 内容 |
+| :--- | :--- |
+| 文書番号 | SBOS-DD-007 |
+| ドキュメント名 | Issue 壁打ちライフサイクルと JEV スクリーニング仕様書 |
+| 版数 | Rev.1.1 (PM-060 仕様書同期・確定タスク責務分離整合) |
+| 改訂日 | 2026-10-02 |
+| 作成日 | 2026-09-25 |
+| 作成者 | アーキテクチャチーム / xzyozi |
+| 対象 | `tools/screen_issues.py`, `tools/close_stale_issues.py`, `tools/score_issues.py`, `tools/promote_issue.py`, `tools/issue_spec_manager.py`, `tools/periodic_review_runner.py`, `.github/workflows/cleanup-stale-ideation.yml` |
 
 ---
 
@@ -107,8 +127,8 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
   - `## 0. メタ情報 (Scope & Impact)`: 影響範囲、既存コード依存、関連Issue
   - `## 1. 概要・背景`: タスクの背景・目的（課題詳細を含む。PRサマリーとしても抽出）
   - `## 2. 仕様および要求事項 (修正方針の検討)`: 修正方針の選択肢（案1 推奨 / 案2 代替）。合意された方針が `tasks.md` のタスク登録 input となる
-  - `## 3. 段階的実装手順 (Step-by-step Execution)`: Phase 1 (本体), Phase 2 (テスト)
-  - `## 4. 編集対象ファイル (Target Files)`: 対象ファイルパス（オーケストレーターが自動抽出）
+  - `## 3. 段階的実装手順 (Step-by-step Execution)`: Phase 1 (本体), Phase 2 (テスト)。壁打ち昇格時は確定タスク（`concrete_tasks`）が具体的な実行ステップとして展開・反映される
+  - `## 4. 編集対象ファイル (Target Files)`: 対象ファイルパス（オーケストレーターが自動抽出）。壁打ち昇格時に確定方針に応じた対象ファイルリストで更新される
   - `## 5. ドメイン知識・技術上の落とし穴 (Domain Knowledge & Technical Pitfalls)`: 仕様、落とし穴、推奨パターン
   - `## 6. 設計制約・アンチパターンの禁止 (Architecture Constraints & Forbidden Actions)`: 単一責任、ハック禁止
   - `## 7. 対象外 (Non-Goals)`: スコープ外の明記（非採用案の退避先）
@@ -123,10 +143,11 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
     - プロジェクト側の CI 設定（GitHub Actions / `pyproject.toml` 等）に準拠し、テスト全件通過・Linter エラー 0 件・CI Checks (All Green) を完了条件とする。
 
 ### 3.9 修正方針の選択肢提示と 2 段階壁打ちフロー (Tiered Refinement)
-- **Issue は tasks.md への Input（仕様・概要）としての純化**:
-  - タスクの進捗・完了チェック（DoD管理）はサテライトの `tasks.md` に一元化し、Issue 本文内に重複する確定タスク枠（Task Checklist）は設けない。
-  - Issue の `## 2. 仕様および要求事項` は「修正方針の検討・選択肢提示（案1 推奨 / 案2 代替）」とし、これが `tasks.md` へのタスク登録の直接の input となる。
-  - 壁打ち完了（`stage:ready` 昇格時）は、選定された案のチェックボックスを `[x]` に更新し、選ばれなかった案は `## 7. 対象外 (Non-Goals)` へ退避・記録した上で、サテライトの `tasks.md` にタスク行を追加する。
+- **tasks.md と Issue 仕様書の進捗管理の責務分離（SSOTの確立）**:
+  - **進捗管理の一元化**: タスク全体の進捗・完了ステータス（ToDo / In Progress / Done）はサテライトの `tasks.md` に一元化し、Issue 本文内に重複する独立進捗チェック枠（旧 `### 確定実装タスク (Task Checklist)` 等）は設けない（存在する場合は昇格時に削除・一元化）。
+  - **確定タスクの役割と反映先**: 壁打ちで確定した具体的な作業手順（Sub-tasks / 実行ステップ）は、独立した進捗チェック枠として重複させるのではなく、オーケストレーターへの実装指示情報として **`## 3. 段階的実装手順 (Step-by-step Execution)`** セクション内に展開・反映する。
+  - **修正方針の決定**: Issue の `## 2. 仕様および要求事項` は「修正方針の検討・選択肢提示（案1 推奨 / 案2 代替）」とし、合意された方針が `tasks.md` へのタスク登録および仕様確定の直接の input となる。
+  - **昇格時の状態遷移**: 壁打ち完了（`stage:ready` 昇格時）は、選定された案のチェックボックスを `[x]` に更新し、選ばれなかった案は `## 7. 対象外 (Non-Goals)` へ退避・記録する。サテライトの `tasks.md` に既存の `stage:ideation` 行が存在する場合はインラインで `stage:ready` へ置換・昇格し、存在しない場合は `stage:ready` タスク行を新規追加する。
 - **2 段階の壁打ち運用 (Tiered Refinement)**:
   - **Tier 1 (Issue 内完結・定型/軽量タスク)**:
     - AI 起票ツールが最初から「修正方針の選択肢（案1: 推奨, 案2: 代替）」をチェックボックス形式（`- [ ] **案 1 (推奨)**` / `- [ ] **案 2**`）で Issue 本文に明記して起票。ユーザーは GitHub の Web 画面上で直接クリックして選択可能。
@@ -134,6 +155,31 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
     - ユーザーは Issue 内のチェックボックスを選択、またはチャット/コメントで「案1で」と指定するだけで、昇格ツール（`promote_issue.py`）により即座に `tasks.md` へ同期され `stage:ready` へ昇格。
   - **Tier 2 (個別フォロー・複雑/例外タスク)**:
     - 選択肢に該当しない要望や、根本的な設計方針の変更・アーキテクチャ再検討が必要な場合のみ、チャット（IDE/CLI環境）で人間とエージェントが個別に対話して仕様を詰める。
+
+### 3.10 サテライトタスク仕様書 (docs/issues/<TASK_ID>.md) のライフサイクル自動同期と自己修復
+- **アーキテクチャ方針 (PM-060: tasks.md / docs/issues / GitHub Issue の 3 者 1:1 同期保証)**:
+  - 自律実装パイプラインにおいて、オーケストレーターがタスクの要件・編集対象ファイル（Target Files）を正確に把握できるよう、サテライトの `docs/issues/<TASK_ID>.md` をローカル作業ツリーに永続化する。
+  - これにより、夜間バッチ実行時に LLM が推測で無関係なファイル（`ports.py`, `history.py` 等）をルート直下に捏造（ハルシネーション）して空ファイルを作成する問題を恒久遮断する。
+- **ライフサイクル連携ポイント**:
+  1. **起票時 (`run_review.py`)**:
+     - agys レビューによる Issue 起票および `tasks.md` 追記と同時に、初期仕様書（案1/案2含む）を `docs/issues/<TASK_ID>.md` として自動初期配置。
+  2. **壁打ち昇格時 (`promote_issue.py`)**:
+     - 採用案（案1）の確定仕様を反映し、確定タスク（`concrete_tasks`）を **`## 3. 段階的実装手順 (Step-by-step Execution)`** へ展開、編集対象ファイルを **`## 4. 編集対象ファイル (Target Files)`** へ置換・反映した最新本文で `docs/issues/<TASK_ID>.md`（および GitHub Issue 本文）を自動更新。
+     - ※ 3.9節の原則に基づき、独立した重複進捗管理枠（旧 `### 確定実装タスク (Task Checklist)`）は削除し、タスク進捗は `tasks.md` へ一元化する。
+  3. **定周期巡回時 (`periodic_review_runner.py`)**:
+     - `tasks.md` 内に記載された全タスクを走査し、`docs/issues/<TASK_ID>.md` が欠落しているタスクを検知した場合、GitHub API から Issue 本文を取得して自動インポート（欠落自己修復）。
+  4. **Target Files パス解決ガード (`orchestrator_graph.py`)**:
+     - `resolve_target_files_against_cwd` において、ファイル名（拡張子込み）完全一致、ステム完全一致を最優先とし、非テストファイルがテストファイル（`tests/test_...`）へ安易に部分一致マッピングされる誤爆を厳格に防止。
+
+---
+
+## 4. 改訂履歴 (Change Log)
+
+| 版数 | 改訂日 | 変更者 | 変更内容・変更理由 (Why) |
+| :--- | :--- | :--- | :--- |
+| Rev.1.0 | 2026-09-25 | アーキテクチャチーム | 新規作成（初版制定: stage ラベル状態マシン、JEV スクリーニング、放置 Issue 自動クローズ仕様） |
+| Rev.1.1 | 2026-10-02 | xzyozi | PM-060 追記: docs/issues/<TASK_ID>.md 自動同期・自己修復ライフサイクルの新設。3.9節/3.10節の確定タスク・Target Files・進捗管理の責務分離（SSOT）と仕様整合性の明確化、YAML Frontmatter および改訂履歴の追記（ドキュメント規約準拠） |
+
 
 
 
