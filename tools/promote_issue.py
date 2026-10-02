@@ -239,7 +239,9 @@ def sync_to_tasks_md(
             logger.info(f"tasks.md の既存タスクを stage:ready に昇格しました: Issue #{issue_num}")
             return True
 
-        logger.info(f"tasks.md には既に Issue #{issue_num} が登録されており、既に stage:ready です。")
+        logger.info(
+            f"tasks.md には既に Issue #{issue_num} が登録されており、既に stage:ready です。"
+        )
         return False
 
     # 最大タスク番号の検出
@@ -334,7 +336,9 @@ def promote_issue(
     try:
         tmp_path.write_text(new_body, encoding="utf-8")
         remove_labels = [
-            lbl for lbl in ["stage:ideation", "stage:done", "stage:in-progress"] if lbl in label_names
+            lbl
+            for lbl in ["stage:ideation", "stage:done", "stage:in-progress"]
+            if lbl in label_names
         ]
         if not remove_labels:
             remove_labels = ["stage:ideation"]

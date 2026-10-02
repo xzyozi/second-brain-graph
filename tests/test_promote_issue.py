@@ -129,7 +129,9 @@ def test_sync_to_tasks_md(tmp_path: Path) -> None:
     )
     assert success_2 is True
     content2 = tasks_file.read_text(encoding="utf-8")
-    assert "- [ ] [TEST-0002] テストIssue2 <!-- priority:medium issue:#11 stage:ready -->" in content2
+    assert (
+        "- [ ] [TEST-0002] テストIssue2 <!-- priority:medium issue:#11 stage:ready -->" in content2
+    )
 
 
 def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
