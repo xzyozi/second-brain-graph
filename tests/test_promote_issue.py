@@ -29,6 +29,48 @@ def test_parse_approaches() -> None:
     assert "事前バリデーション" in apps[2]["title"]
 
 
+def test_update_target_files_section() -> None:
+    sample_body = """## 3. 段階的実装手順 (Step-by-step Execution)
+- Phase 1
+
+## 4. 編集対象ファイル (Target Files)
+- `old/path.py`
+
+## 5. 影響範囲
+- 影響小
+"""
+    updated = promote_issue.update_target_files_section(
+        sample_body, ["src/new_path.py", "`src/another.py`"]
+    )
+    assert "- `src/new_path.py`" in updated
+    assert "- `src/another.py`" in updated
+    assert "old/path.py" not in updated
+    assert "## 5. 影響範囲" in updated
+
+
+def test_update_execution_steps_section() -> None:
+    sample_body = """## 2. 仕様
+詳細
+
+## 3. 段階的実装手順 (Step-by-step Execution)
+- Phase 1
+
+## 4. 編集対象ファイル
+- `file.py`
+"""
+    updated = promote_issue.update_execution_steps_section(
+        sample_body, ["- [ ] タスクA", "タスクB", "- タスクC"]
+    )
+    assert "- [ ] タスクA" in updated
+    assert "- [ ] タスクB" in updated
+    assert "- [ ] タスクC" in updated
+    assert "Phase 1" not in updated
+
+    # 空リストの場合は変更されない
+    unchanged = promote_issue.update_execution_steps_section(sample_body, [])
+    assert unchanged == sample_body
+
+
 def test_generate_promoted_body() -> None:
     sample_body = """## 0. メタ情報 (Scope & Impact)
 - **検出テーマ**: セキュリティ
@@ -52,6 +94,9 @@ def test_generate_promoted_body() -> None:
 ## 3. 段階的実装手順 (Step-by-step Execution)
 - Phase 1
 
+## 4. 編集対象ファイル (Target Files)
+- `dummy/file.py`
+
 ## 7. 対象外 (Non-Goals)
 - 本課題と無関係な修正
 - （※壁打ちで採用されなかった代替アプローチはここに記録してスコープ外を明確化）
@@ -68,12 +113,18 @@ def test_generate_promoted_body() -> None:
         selected_approach=1,
         approaches=apps,
         concrete_tasks=["タスク1を実行する", "テストコードを作成する"],
+        target_files=["src/core/runner.py", "tests/test_runner.py"],
     )
 
     assert "`stage:ready` (方針確定・tasks.md 登録完了)" in promoted
     assert "- [x] **案 1 (推奨): アプローチ1のタイトル**" in promoted
     assert "- [ ] **案 2: アプローチ2のタイトル**" in promoted
     assert "### 確定実装タスク" not in promoted
+    assert "- [ ] タスク1を実行する" in promoted
+    assert "- [ ] テストコードを作成する" in promoted
+    assert "- `src/core/runner.py`" in promoted
+    assert "- `tests/test_runner.py`" in promoted
+    assert "dummy/file.py" not in promoted
     assert "## 7. 対象外 (Non-Goals)" in promoted
     assert "**案 2 (アプローチ2のタイトル)**: 案1を採用したため今回はスコープ外" in promoted
     assert "tasks.md に登録されて stage:ready に昇格しました" in promoted
@@ -177,6 +228,8 @@ def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.Mon
         target_project="test_proj",
         issue_num=42,
         approach=1,
+        concrete_tasks=["実装タスク1", "実装タスク2"],
+        target_files=["src/main.py"],
     )
     assert success is True
 
@@ -193,3 +246,6 @@ def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.Mon
     assert "stage:ready" in spec_content
     assert "- [x] **案 1 (推奨): 推奨方針**" in spec_content
     assert "**案 2 (代替方針)**: 案1を採用したため今回はスコープ外" in spec_content
+    assert "- [ ] 実装タスク1" in spec_content
+    assert "- [ ] 実装タスク2" in spec_content
+    assert "- `src/main.py`" in spec_content

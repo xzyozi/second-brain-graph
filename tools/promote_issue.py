@@ -138,13 +138,58 @@ def extract_priority_and_theme(body: str, labels: List[Dict[str, str]]) -> Tuple
     return priority, theme
 
 
+def update_target_files_section(body: str, target_files: List[str]) -> str:
+    """## 4. 編集対象ファイル (Target Files) セクションを指定された target_files で置換・更新する."""
+    new_files_block = "\n".join(f"- `{tf.strip('` ')}`" for tf in target_files)
+    new_sec4 = f"## 4. 編集対象ファイル (Target Files)\n{new_files_block}\n\n"
+
+    sec4_pattern = re.compile(
+        r"(## 4\. 編集対象ファイル\s*\(Target Files\).*?\n)(?=## [5-8]\.|\Z)",
+        re.DOTALL,
+    )
+    if sec4_pattern.search(body):
+        return sec4_pattern.sub(new_sec4, body)
+    else:
+        sec5_pattern = re.compile(r"(?=## 5\.)")
+        if sec5_pattern.search(body):
+            return sec5_pattern.sub(new_sec4, body)
+        return body.rstrip() + f"\n\n{new_sec4}"
+
+
+def update_execution_steps_section(body: str, concrete_tasks: List[str]) -> str:
+    """## 3. 段階的実装手順 (Step-by-step Execution) セクションに確定タスクを展開・更新する."""
+    tasks_lines: List[str] = []
+    for t in concrete_tasks:
+        cleaned = re.sub(r"^\s*-\s*(\[[ xX]\]\s*)?", "", t).strip()
+        if cleaned:
+            tasks_lines.append(f"- [ ] {cleaned}")
+    if not tasks_lines:
+        return body
+
+    tasks_block = "\n".join(tasks_lines)
+    new_sec3 = f"## 3. 段階的実装手順 (Step-by-step Execution)\n{tasks_block}\n\n"
+
+    sec3_pattern = re.compile(
+        r"(## 3\. 段階的実装手順\s*\(Step-by-step Execution\).*?\n)(?=## [4-8]\.|\Z)",
+        re.DOTALL,
+    )
+    if sec3_pattern.search(body):
+        return sec3_pattern.sub(new_sec3, body)
+    else:
+        sec4_pattern = re.compile(r"(?=## 4\.)")
+        if sec4_pattern.search(body):
+            return sec4_pattern.sub(new_sec3, body)
+        return body.rstrip() + f"\n\n{new_sec3}"
+
+
 def generate_promoted_body(
     body: str,
     selected_approach: int,
     approaches: Dict[int, Dict[str, Any]],
     concrete_tasks: Optional[List[str]] = None,
+    target_files: Optional[List[str]] = None,
 ) -> str:
-    """採用案を [x] にし、非採用案を退避した stage:ready 用の Issue 本文を生成する."""
+    """採用案を [x] にし、非採用案を退避し、確定タスク・Target Files を反映した stage:ready 用の Issue 本文を生成する."""
     sel = approaches.get(selected_approach)
     if not sel:
         raise ValueError(f"アプローチ 案{selected_approach} の情報が見つかりません。")
@@ -169,7 +214,15 @@ def generate_promoted_body(
             flags=re.MULTILINE,
         )
 
-    # 3. 確定実装タスク枠が存在する場合は削除（tasks.md に一元化）
+    # 3. 確定実装タスクの反映 (Step-by-step Execution への展開)
+    if concrete_tasks:
+        body_updated = update_execution_steps_section(body_updated, concrete_tasks)
+
+    # 4. 編集対象ファイル (Target Files) の更新
+    if target_files:
+        body_updated = update_target_files_section(body_updated, target_files)
+
+    # 5. 確定実装タスク枠（旧フォーマット）が存在する場合は削除（tasks.md に一元化）
     body_updated = re.sub(
         r"\n*### 確定実装タスク \(Task Checklist\):.*?(?=\n## 3|\Z)",
         "",
@@ -267,6 +320,7 @@ def promote_issue(
     issue_num: int,
     approach: Optional[int] = None,
     concrete_tasks: Optional[List[str]] = None,
+    target_files: Optional[List[str]] = None,
     dry_run: bool = False,
 ) -> bool:
     """Issue を stage:ready へ昇格するメイン関数."""
@@ -310,7 +364,13 @@ def promote_issue(
         selected_approach = 1
 
     logger.info(f"採用アプローチ: 案{selected_approach}")
-    new_body = generate_promoted_body(body, selected_approach, approaches, concrete_tasks)
+    new_body = generate_promoted_body(
+        body,
+        selected_approach,
+        approaches,
+        concrete_tasks=concrete_tasks,
+        target_files=target_files,
+    )
     priority, theme = extract_priority_and_theme(body, labels)
 
     if dry_run:
@@ -412,6 +472,12 @@ def main() -> None:
         help="確定実装タスク（複数指定可能）。省略時はデフォルトタスクを生成",
     )
     parser.add_argument(
+        "--target-file",
+        "-f",
+        action="append",
+        help="編集対象ファイル（複数指定可能）。省略時は Issue 本文の既存リストを維持",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="実際の更新を行わずプレビューを表示する"
     )
 
@@ -424,6 +490,7 @@ def main() -> None:
         issue_num=args.issue,
         approach=args.approach,
         concrete_tasks=args.task,
+        target_files=args.target_file,
         dry_run=args.dry_run,
     )
     if not success:
