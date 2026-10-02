@@ -7,9 +7,11 @@
 ## ディレクトリ構造とテンプレート
 
 * **`docs/design/`**: システムの各種設計書（基本設計、詳細設計、データ構造仕様）および運用ガイドラインを格納する主領域
-  * `TEMPLATE_基本設計書.md`: アーキテクチャ・コンポーネント分離用テンプレート
-  * `TEMPLATE_詳細設計書.md`: モジュール制御・入出力契約・状態遷移用テンプレート
-  * `TEMPLATE_データ構造仕様書.md`: データ型・スキーマ・原子置換・排他制御用テンプレート
+  * `SBOS-BD-002_基本設計書.md`: システム全体アーキテクチャ
+  * `SBOS-DD-003_詳細設計書.md`〜`SBOS-DD-007_*.md`: 各モジュール、品質、Issueライフサイクル、永続化の詳細仕様
+  * `SBOS-ENV-001_環境構築仕様書.md` / `SBOS-OP-001_運用詳細設計書.md`: 環境構築・運用仕様
+  * `SBOS-MULTI-001_複数リポジトリ_差分設計書.md` / `SBOS-PM-005_課題矛盾一覧.md`: 母艦・衛星設計と課題管理
+  * `TEMPLATE_*.md`: 基本設計、詳細設計、データ構造仕様の作成テンプレート
   * `README.md`: 設計ドキュメントの命名規則・執筆・更新運用ルール
 * **`docs/features/`**: 機能別の利用契約と運用手順
   * [`aider_format_benchmark.md`](features/aider_format_benchmark.md): Aider edit_format 多角的実証ベンチマーク (`tools/benchmark_aider_formats.py`) 仕様書
@@ -22,6 +24,7 @@
   * [`ollama_gguf_registration.md`](how-to/ollama_gguf_registration.md): 独立GGUFファイルのOllamaローカルモデル登録手順
 * **`docs/analysis/`**: 実装調査・フロー解析の記録
   * [`flow-gguf-20260907.md`](analysis/flow-gguf-20260907.md): GGUFバックエンド処理フローの解析記録
+* **サテライト生成文書**: サテライト側の `docs/issues/<TASK_ID>.md` は、Issue起票・昇格・定周期同期時に自動生成・自己修復されます。仕様は [`SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md`](design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md) を参照してください。
 
 ---
 
