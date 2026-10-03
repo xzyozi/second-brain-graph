@@ -13,7 +13,7 @@ from tools.run_task import (
 
 
 def test_clean_satellite_repository_executes_git_commands() -> None:
-    """clean_satellite_repository が git status, fetch, checkout, reset, clean を正しい順番で実行することを検証する。"""
+    """clean_satellite_repository が git status, fetch, branch check, checkout, reset, clean を正しい順番で実行することを検証する。"""
     executed_cmds = []
 
     def mock_run(
@@ -29,12 +29,72 @@ def test_clean_satellite_repository_executes_git_commands() -> None:
     with patch("subprocess.run", side_effect=mock_run):
         clean_satellite_repository("/path/to/sat", base_branch="develop")
 
-    assert len(executed_cmds) == 5
+    assert len(executed_cmds) == 6
     assert executed_cmds[0] == "git status --porcelain"
     assert executed_cmds[1] == "git fetch origin develop"
-    assert executed_cmds[2] == "git checkout -f develop"
-    assert executed_cmds[3] == "git reset --hard origin/develop"
-    assert executed_cmds[4] == "git clean -fd"
+    assert executed_cmds[2] == "git rev-parse --verify develop"
+    assert executed_cmds[3] == "git checkout -f develop"
+    assert executed_cmds[4] == "git reset --hard origin/develop"
+    assert executed_cmds[5] == "git clean -fd"
+
+
+def test_clean_satellite_repository_creates_develop_from_main_when_missing() -> None:
+    """develop ブランチがローカルにもリモートにも無い場合、main から作成してチェックアウトすることを検証する。"""
+    executed_cmds = []
+
+    def mock_run(
+        cmd: list[str],
+        cwd: str | None = None,
+        text: bool = True,
+        capture_output: bool = True,
+        check: bool = True,
+    ) -> MagicMock:
+        cmd_str = " ".join(cmd)
+        executed_cmds.append(cmd_str)
+        # develop はローカル・リモートともに存在しない
+        if (
+            "rev-parse --verify develop" in cmd_str
+            or "rev-parse --verify origin/develop" in cmd_str
+        ):
+            return MagicMock(returncode=1, stdout="", stderr="not found")
+        # origin/main は存在する
+        if "rev-parse --verify origin/main" in cmd_str:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run):
+        clean_satellite_repository("/path/to/sat", base_branch="develop")
+
+    assert any("git checkout -b develop origin/main" in c for c in executed_cmds)
+
+
+def test_clean_satellite_repository_self_heals_untracked_project_json(tmp_path: Path) -> None:
+    """git clean で未追跡の project.json が消去された場合でも、自己修復によって復元されることを検証する。"""
+    sat_dir = tmp_path / "satellite"
+    docs_dir = sat_dir / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    pjson = docs_dir / "project.json"
+    pjson.write_text('{"key": "TEST", "base_branch": "develop"}', encoding="utf-8")
+
+    def mock_run(
+        cmd: list[str],
+        cwd: str | None = None,
+        text: bool = True,
+        capture_output: bool = True,
+        check: bool = True,
+    ) -> MagicMock:
+        cmd_str = " ".join(cmd)
+        # git clean -fd が呼ばれたら project.json を物理削除して再現
+        if "clean -fd" in cmd_str:
+            if pjson.exists():
+                pjson.unlink()
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run):
+        clean_satellite_repository(str(sat_dir), base_branch="develop")
+
+    assert pjson.exists()
+    assert '"key": "TEST"' in pjson.read_text(encoding="utf-8")
 
 
 def test_clean_satellite_repository_dirty_aborts_without_auto_stash_or_force() -> None:

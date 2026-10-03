@@ -100,6 +100,79 @@ def check_and_safeguard_working_tree(
     raise DirtyWorkingTreeError(error_msg)
 
 
+def backup_critical_metadata(cwd: str) -> dict[str, str]:
+    """docs/project.json などの重要構成ファイルをメモリに退避する。"""
+    backup: dict[str, str] = {}
+    pjson = Path(cwd) / "docs" / "project.json"
+    if pjson.exists():
+        try:
+            backup["project.json"] = pjson.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Could not backup {pjson}: {e}")
+    return backup
+
+
+def restore_critical_metadata(cwd: str, backup: dict[str, str]) -> None:
+    """退避した重要構成ファイルを復元する（git clean -fd 等で消去された場合の自己修復）。"""
+    if "project.json" in backup:
+        pjson = Path(cwd) / "docs" / "project.json"
+        if not pjson.exists():
+            pjson.parent.mkdir(parents=True, exist_ok=True)
+            pjson.write_text(backup["project.json"], encoding="utf-8")
+            logger.info(f"Self-healed: restored {pjson} after git clean.")
+
+
+def ensure_satellite_base_branch(cwd: str, base_branch: str = "develop") -> str:
+    """base_branch (develop) が存在しない場合、リモート default branch (main 等) から作成する。"""
+    # 1. ローカル base_branch が存在するか確認
+    chk_local = subprocess.run(
+        ["git", "rev-parse", "--verify", base_branch],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if chk_local.returncode == 0:
+        run_command(["git", "checkout", "-f", base_branch], cwd=cwd)
+        return base_branch
+
+    # 2. リモート origin/{base_branch} が存在するか確認
+    chk_remote = subprocess.run(
+        ["git", "rev-parse", "--verify", f"origin/{base_branch}"],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if chk_remote.returncode == 0:
+        run_command(
+            ["git", "checkout", "-f", "-b", base_branch, f"origin/{base_branch}"],
+            cwd=cwd,
+        )
+        return base_branch
+
+    # 3. develop がローカルにもリモートにも無い場合: main / default branch から develop を作成
+    default_branch = "main"
+    for candidate in ["origin/main", "origin/master", "main", "master"]:
+        chk_def = subprocess.run(
+            ["git", "rev-parse", "--verify", candidate],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if chk_def.returncode == 0:
+            default_branch = candidate
+            break
+
+    logger.warning(
+        f"base_branch '{base_branch}' not found in '{cwd}'. Creating '{base_branch}' from '{default_branch}'..."
+    )
+    run_command(["git", "checkout", "-b", base_branch, default_branch], cwd=cwd)
+    logger.info(f"Successfully created base_branch '{base_branch}' from '{default_branch}'.")
+    return base_branch
+
+
 def sync_base_branch(cwd: str, base_branch: str = "develop") -> None:
     """ベースブランチをリモートの最新状態と同期する (git fetch origin {base_branch})"""
     logger.info(f"Fetching latest origin/{base_branch} for '{cwd}'...")
@@ -128,25 +201,17 @@ def clean_satellite_repository(
     """衛星プロダクトリポジトリの変更を破棄または退避し、クリーンな初期状態にセットアップする"""
     logger.info(f"Cleaning satellite repository at '{cwd}' (base_branch: {base_branch})...")
 
+    # 重要メタデータの事前退避
+    metadata_backup = backup_critical_metadata(cwd)
+
     # 1. 未コミット変更の事前チェック & 退避/停止
     check_and_safeguard_working_tree(cwd, auto_stash=auto_stash, force=force, issue_id=issue_id)
 
     # 2. リモートベースブランチの同期
     sync_base_branch(cwd, base_branch=base_branch)
 
-    # 3. base_branch へ強制チェックアウト
-    try:
-        run_command(["git", "checkout", "-f", base_branch], cwd=cwd)
-    except subprocess.CalledProcessError as e:
-        logger.warning(
-            f"Failed to checkout {base_branch}: {e.stderr}. Trying git checkout -f main..."
-        )
-        try:
-            run_command(["git", "checkout", "-f", "main"], cwd=cwd)
-            base_branch = "main"
-        except subprocess.CalledProcessError as e2:
-            logger.error(f"Failed to checkout base branch: {e2.stderr}")
-            raise e2
+    # 3. base_branch へ強制チェックアウト（未存在時は main から作成）
+    ensure_satellite_base_branch(cwd, base_branch=base_branch)
 
     # 4. リモート追跡ブランチまたはローカル HEAD へのリセット
     try:
@@ -157,6 +222,10 @@ def clean_satellite_repository(
 
     # 5. 未追跡ファイル・フォルダの完全クリーニング
     run_command(["git", "clean", "-fd"], cwd=cwd)
+
+    # 6. 未追跡だった重要メタデータが消去された場合は自己修復復元
+    restore_critical_metadata(cwd, metadata_backup)
+
     logger.info("Satellite repository cleaning completed successfully.")
 
 

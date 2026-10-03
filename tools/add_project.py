@@ -168,6 +168,217 @@ def get_git_remote_url(repo_dir: str) -> Optional[str]:
         return None
 
 
+def detect_git_default_branch(repo_dir: str) -> str:
+    """Detect default branch of the git repository (e.g. main, master)."""
+    # 1. Try remote symbolic-ref
+    try:
+        res = subprocess.run(
+            ["git", "-C", repo_dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout:
+            ref = str(res.stdout).strip()
+            if "/" in ref:
+                return ref.split("/", 1)[1]
+            if ref:
+                return ref
+    except Exception:
+        pass
+
+    # 2. Check if origin/main or origin/master exists
+    for candidate in ["origin/main", "origin/master"]:
+        res = subprocess.run(
+            ["git", "-C", repo_dir, "rev-parse", "--verify", candidate],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0:
+            return candidate.replace("origin/", "")
+
+    # 3. Check local main or master
+    for candidate in ["main", "master"]:
+        res = subprocess.run(
+            ["git", "-C", repo_dir, "rev-parse", "--verify", candidate],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0:
+            return candidate
+
+    # 4. Fallback to current branch or "main"
+    try:
+        res = subprocess.run(
+            ["git", "-C", repo_dir, "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout:
+            cur = str(res.stdout).strip()
+            if cur:
+                return cur
+    except Exception:
+        pass
+
+    return "main"
+
+
+def ensure_base_branch(repo_dir: str, base_branch: str = "develop") -> str:
+    """Ensure base branch exists in the satellite repo.
+    If base_branch (e.g. develop) does not exist, create it from default branch (e.g. main).
+    """
+    if not os.path.exists(os.path.join(repo_dir, ".git")):
+        logger.debug(f"{repo_dir} is not a git repository. Skipping branch setup.")
+        return base_branch
+
+    # Try fetching origin to have latest remote refs
+    subprocess.run(
+        ["git", "-C", repo_dir, "fetch", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Check if local base_branch exists
+    res_local = subprocess.run(
+        ["git", "-C", repo_dir, "rev-parse", "--verify", base_branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res_local.returncode == 0:
+        subprocess.run(
+            ["git", "-C", repo_dir, "checkout", base_branch],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        logger.info(f"Checked out existing local branch '{base_branch}' in {repo_dir}")
+        return base_branch
+
+    # Check if remote base_branch exists
+    res_remote = subprocess.run(
+        ["git", "-C", repo_dir, "rev-parse", "--verify", f"origin/{base_branch}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res_remote.returncode == 0:
+        res_chk = subprocess.run(
+            ["git", "-C", repo_dir, "checkout", "-b", base_branch, f"origin/{base_branch}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res_chk.returncode == 0:
+            logger.info(
+                f"Created and checked out '{base_branch}' tracking 'origin/{base_branch}' in {repo_dir}"
+            )
+            return base_branch
+
+    # Neither local nor remote base_branch exists: create from default branch (e.g. main)
+    default_branch = detect_git_default_branch(repo_dir)
+    start_point = f"origin/{default_branch}"
+    res_sp = subprocess.run(
+        ["git", "-C", repo_dir, "rev-parse", "--verify", start_point],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res_sp.returncode != 0:
+        start_point = default_branch
+
+    res_create = subprocess.run(
+        ["git", "-C", repo_dir, "checkout", "-b", base_branch, start_point],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res_create.returncode == 0:
+        logger.info(f"Created base_branch '{base_branch}' from '{start_point}' in {repo_dir}")
+    else:
+        logger.warning(
+            f"Failed to create '{base_branch}' from '{start_point}': {res_create.stderr.strip()}"
+        )
+
+    return base_branch
+
+
+def commit_and_push_initial_files(
+    repo_dir: str,
+    base_branch: str = "develop",
+    push: bool = True,
+) -> bool:
+    """Stage generated metadata/workflows, commit them to base_branch, and optionally push to origin."""
+    if not os.path.exists(os.path.join(repo_dir, ".git")):
+        return False
+
+    stage_paths = []
+    if os.path.exists(os.path.join(repo_dir, "docs")):
+        stage_paths.append("docs")
+    if os.path.exists(os.path.join(repo_dir, ".github")):
+        stage_paths.append(".github")
+
+    if not stage_paths:
+        return False
+
+    subprocess.run(
+        ["git", "-C", repo_dir, "add"] + stage_paths,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Check if there are staged changes
+    res_diff = subprocess.run(
+        ["git", "-C", repo_dir, "diff", "--cached", "--quiet"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res_diff.returncode != 0:
+        commit_msg = "chore(init): initialize Second Brain satellite project configuration"
+        res_commit = subprocess.run(
+            ["git", "-C", repo_dir, "commit", "-m", commit_msg],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res_commit.returncode == 0:
+            logger.info(f"Committed initial configuration files in {repo_dir}")
+        else:
+            logger.warning(f"Could not commit initial configuration: {res_commit.stderr.strip()}")
+            return False
+    else:
+        logger.info(f"No new changes to commit in {repo_dir}")
+
+    if not push:
+        logger.info(f"Push skipped (--no-push specified) for {repo_dir}")
+        return True
+
+    res_push = subprocess.run(
+        ["git", "-C", repo_dir, "push", "-u", "origin", base_branch],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res_push.returncode == 0:
+        logger.info(
+            f"Successfully pushed initial configuration to origin/{base_branch} in {repo_dir}"
+        )
+        return True
+    else:
+        logger.warning(
+            f"Could not push to origin/{base_branch} in {repo_dir}: {res_push.stderr.strip()}\n"
+            f"Please manually push using: git -C {repo_dir} push -u origin {base_branch}"
+        )
+        return False
+
+
 def setup_satellite_workflow(sat_path: str) -> str:
     """Ensure .github/workflows/issue-auto-tag.yml exists in the satellite repository."""
     wf_dir = os.path.join(sat_path, ".github", "workflows")
@@ -218,6 +429,7 @@ def register_project(
     repo_url: Optional[str] = None,
     github_repo: Optional[str] = None,
     setup_labels: bool = True,
+    push: bool = True,
     root_dir: str = ".",
 ) -> Dict[str, Any]:
     """Register a new satellite project into Second Brain OS."""
@@ -246,7 +458,11 @@ def register_project(
         remote_url = get_git_remote_url(sat_path)
         resolved_github_repo = extract_github_repo(remote_url)
 
-    # 2. Ensure satellite root and docs directory exist
+    # 2. Ensure satellite is on base_branch (create from default branch if not exists)
+    if os.path.exists(os.path.join(sat_path, ".git")):
+        ensure_base_branch(sat_path, base_branch=base_branch)
+
+    # 3. Ensure satellite root and docs directory exist
     docs_path = os.path.join(sat_path, "docs")
     os.makedirs(docs_path, exist_ok=True)
     logger.info(f"Ensured satellite docs directory: {docs_path}")
@@ -298,11 +514,15 @@ def register_project(
     # 6. Ensure satellite has issue auto-tagging workflow (.github/workflows/issue-auto-tag.yml)
     setup_satellite_workflow(sat_path)
 
-    # 7. Optionally setup standard GitHub labels on satellite repository
+    # 7. Commit and push initial files to base_branch in satellite repo
+    if os.path.exists(os.path.join(sat_path, ".git")):
+        commit_and_push_initial_files(sat_path, base_branch=base_branch, push=push)
+
+    # 8. Optionally setup standard GitHub labels on satellite repository
     if setup_labels and resolved_github_repo:
         setup_github_labels(resolved_github_repo)
 
-    # 8. Update host metadata/.project-registry.json
+    # 9. Update host metadata/.project-registry.json
     reg_path = os.path.join(root_dir, "metadata", ".project-registry.json")
     os.makedirs(os.path.dirname(reg_path), exist_ok=True)
     registry: Dict[str, Any] = {"version": "1.0", "projects": {}}
@@ -369,6 +589,12 @@ def main() -> None:
         default=True,
         help="Setup standard stage and theme labels on the satellite GitHub repository via gh CLI (default: True)",
     )
+    parser.add_argument(
+        "--push",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Commit and push initial satellite files to origin base_branch (default: True)",
+    )
 
     args = parser.parse_args()
 
@@ -382,6 +608,7 @@ def main() -> None:
             repo_url=args.repo,
             github_repo=args.github_repo,
             setup_labels=args.setup_labels,
+            push=args.push,
             root_dir=".",
         )
         print(

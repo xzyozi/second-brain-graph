@@ -2,10 +2,18 @@
 
 import json
 import os
+import subprocess
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.add_project import extract_github_repo, register_project
+from tools.add_project import (
+    commit_and_push_initial_files,
+    detect_git_default_branch,
+    ensure_base_branch,
+    extract_github_repo,
+    register_project,
+)
 
 
 def test_register_project_success(tmp_path: pytest.TempPathFactory) -> None:
@@ -145,3 +153,111 @@ def test_register_project_loads_master_issue_template(tmp_path: pytest.TempPathF
         content2 = f.read()
     assert "# [CUST-9999] Custom Master Template" in content2
     assert "## Custom Section" in content2
+
+
+def test_detect_git_default_branch() -> None:
+    # 1. Test symbolic-ref
+    def mock_run_sym(cmd: list[str], **kwargs: object) -> MagicMock:
+        if "symbolic-ref" in cmd:
+            return MagicMock(returncode=0, stdout="origin/main\n")
+        return MagicMock(returncode=1, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run_sym):
+        assert detect_git_default_branch("/dummy") == "main"
+
+    # 2. Test origin/master candidate
+    def mock_run_master(cmd: list[str], **kwargs: object) -> MagicMock:
+        if "symbolic-ref" in cmd:
+            return MagicMock(returncode=1, stdout="", stderr="")
+        if "origin/master" in cmd:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=1, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run_master):
+        assert detect_git_default_branch("/dummy") == "master"
+
+
+def test_ensure_base_branch_creates_from_main_when_missing() -> None:
+    executed_cmds = []
+
+    def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+        cmd_str = " ".join(cmd)
+        executed_cmds.append(cmd_str)
+        if (
+            "rev-parse --verify develop" in cmd_str
+            or "rev-parse --verify origin/develop" in cmd_str
+        ):
+            return MagicMock(returncode=1)
+        if "rev-parse --verify origin/main" in cmd_str:
+            return MagicMock(returncode=0)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("os.path.exists", return_value=True), patch("subprocess.run", side_effect=mock_run):
+        branch = ensure_base_branch("/dummy", base_branch="develop")
+
+    assert branch == "develop"
+    assert any("git -C /dummy checkout -b develop origin/main" in c for c in executed_cmds)
+
+
+def test_commit_and_push_initial_files_no_push() -> None:
+    executed_cmds = []
+
+    def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+        cmd_str = " ".join(cmd)
+        executed_cmds.append(cmd_str)
+        if "diff --cached" in cmd_str:
+            return MagicMock(returncode=1)  # has staged diff
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("os.path.exists", return_value=True), patch("subprocess.run", side_effect=mock_run):
+        success = commit_and_push_initial_files("/dummy", base_branch="develop", push=False)
+
+    assert success is True
+    assert any("git -C /dummy commit" in c for c in executed_cmds)
+    assert not any("git -C /dummy push" in c for c in executed_cmds)
+
+
+def test_register_project_git_integration(tmp_path: pytest.TempPathFactory) -> None:
+    """ローカル git リポジトリに対する register_project のブランチ作成と初期コミットの検証."""
+    root_dir = str(tmp_path)
+    sat_dir = os.path.join(root_dir, "projects", "repo_app")
+    os.makedirs(sat_dir, exist_ok=True)
+
+    # Initialize a real git repo with a main branch and initial commit
+    subprocess.run(["git", "-C", sat_dir, "init", "-b", "main"], check=True)
+    subprocess.run(["git", "-C", sat_dir, "config", "user.name", "Test User"], check=True)
+    subprocess.run(["git", "-C", sat_dir, "config", "user.email", "test@example.com"], check=True)
+    dummy_file = os.path.join(sat_dir, "README.md")
+    with open(dummy_file, "w", encoding="utf-8") as f:
+        f.write("# Repo App\n")
+    subprocess.run(["git", "-C", sat_dir, "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", sat_dir, "commit", "-m", "Initial commit on main"], check=True)
+
+    # Register project with develop as base_branch and push=False (no remote)
+    entry = register_project(
+        key="RAPP",
+        name="Repo App",
+        directory="projects/repo_app",
+        base_branch="develop",
+        push=False,
+        root_dir=root_dir,
+    )
+
+    assert entry["name"] == "Repo App"
+    # Check current branch in satellite repo: must be develop (created from main)
+    res_br = subprocess.run(
+        ["git", "-C", sat_dir, "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert res_br.stdout.strip() == "develop"
+
+    # Check git log on develop: must have initial config commit
+    res_log = subprocess.run(
+        ["git", "-C", sat_dir, "log", "-1", "--oneline"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "chore(init): initialize Second Brain satellite project configuration" in res_log.stdout
