@@ -174,14 +174,19 @@ def validate_project_consistency(
                 candidate_proj_json = fallback_proj_json
 
     if candidate_proj_json is None:
-        if not meta_rel:
+        if not meta_rel and not dir_rel:
             raise ValueError(
                 f"Missing 'meta' and 'dir' field for project '{project_key}' in .project-registry.json."
             )
-        meta_dir_path = project_root / meta_rel
-        if not meta_dir_path.exists():
-            raise ValueError(f"Project metadata directory '{meta_dir_path}' does not exist.")
-        raise ValueError(f"project.json does not exist at '{meta_dir_path / 'project.json'}'.")
+        expected_path = (
+            (project_root / dir_rel / "docs" / "project.json")
+            if dir_rel
+            else (project_root / meta_rel / "project.json")
+        )
+        raise ValueError(
+            f"project.json does not exist at '{expected_path}'. "
+            f"Please check if satellite branch is initialized or run 'uv run python tools/add_project.py --key {project_key} ...'."
+        )
 
     with open(candidate_proj_json, "r", encoding="utf-8") as pf:
         pdata = json.load(pf)
