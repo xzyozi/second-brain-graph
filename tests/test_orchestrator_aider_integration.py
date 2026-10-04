@@ -665,6 +665,10 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
         patch("tools.orchestrator_graph.run_cmd", return_value=mock_rd_fail),
+        patch(
+            "tools.jev_adapter.verify_review_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
     ):
         res = review_node(state)
         assert res["status"] == "review_lgtm"
@@ -725,6 +729,14 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
         patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire,
         patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release,
         patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")),
+        patch(
+            "tools.jev_adapter.verify_plan_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
+        patch(
+            "tools.jev_adapter.verify_review_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
     ):
         execute_issue(
             issue_id,
@@ -881,6 +893,69 @@ def test_run_pytest_node_json_report_parsing(tmp_path: Path) -> None:
         assert "tests/test_foo.py::test_bar" in res["aider_message"]
     # 一意名レポートは finally で削除されること
     assert not report_file.exists()
+
+
+def test_clean_legacy_pytest_reports(tmp_path: Path) -> None:
+    """Issue #76: 過去の .pytest-report-*.json 残骸が一括削除され、他ファイルは保護されることを検証する。"""
+    from tools.orchestrator_graph import clean_legacy_pytest_reports
+
+    # 残骸ファイルを作成
+    legacy1 = tmp_path / ".pytest-report-12345-abc.json"
+    legacy2 = tmp_path / ".pytest-report-67890-def.json"
+    other_file = tmp_path / "normal_data.json"
+    legacy1.write_text("", encoding="utf-8")
+    legacy2.write_text("", encoding="utf-8")
+    other_file.write_text('{"key": "value"}', encoding="utf-8")
+
+    count = clean_legacy_pytest_reports(tmp_path)
+    assert count == 2
+    assert not legacy1.exists()
+    assert not legacy2.exists()
+    assert other_file.exists()
+
+
+def test_run_pytest_node_isolates_report_from_cwd(tmp_path: Path) -> None:
+    """Issue #76: run_pytest_node が作業ツリー(cwd)直下にレポートファイルを作成しないことを検証する。"""
+    sat_dir = tmp_path / "satellite"
+    sat_dir.mkdir(parents=True, exist_ok=True)
+
+    state = GraphState(
+        issue_id="TFG-0004",
+        project_key="TFG",
+        cwd=str(sat_dir),
+        target_files=["src/foo.py"],
+        metadata_dir=str(tmp_path / "metadata"),
+        base_branch="develop",
+        aider_message="",
+        impl_plan=None,
+        review_round=0,
+        lint_round=0,
+        test_round=0,
+        status="code_completed",
+        error=None,
+        error_category=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict="PENDING",
+        review_rounds=[],
+        reviewdog_result=None,
+        rdjson=None,
+    )
+
+    with (
+        patch(
+            "tools.orchestrator_graph.run_cmd",
+            return_value=MagicMock(returncode=0, stdout="Passed", stderr=""),
+        ),
+    ):
+        res = run_pytest_node(state)
+        assert res["status"] == "test_passed"
+
+    # 衛星リポジトリ直下に .pytest-report-* が残っていないことを検証
+    residue = list(sat_dir.glob(".pytest-report-*.json")) + list(
+        sat_dir.glob("pytest-report-*.json")
+    )
+    assert len(residue) == 0
 
 
 def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
@@ -1240,6 +1315,10 @@ def test_review_node_empty_comments_guard() -> None:
     with (
         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
         patch("tools.llm_client.call_llm", return_value=mock_llm_res),
+        patch(
+            "tools.jev_adapter.verify_review_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
     ):
         res_state = review_node(state)
 

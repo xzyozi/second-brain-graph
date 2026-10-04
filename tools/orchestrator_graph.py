@@ -604,6 +604,33 @@ def lint_node(state: GraphState) -> GraphState:
     return state
 
 
+def clean_legacy_pytest_reports(root_dir: Optional[Path] = None) -> int:
+    """リポジトリ直下や作業ディレクトリに残存する過去の .pytest-report-*.json を一括削除する (Issue #76).
+
+    Returns:
+        削除された残骸ファイルの数
+    """
+    if root_dir is None:
+        root_dir = Path(__file__).resolve().parent.parent
+
+    cleaned_count = 0
+    try:
+        for f in root_dir.glob(".pytest-report-*.json"):
+            if f.is_file():
+                try:
+                    f.unlink()
+                    cleaned_count += 1
+                except Exception as ex:
+                    logger.debug(f"Failed to unlink legacy report {f}: {ex}")
+        if cleaned_count > 0:
+            logger.info(
+                f"Cleaned up {cleaned_count} legacy pytest report residue file(s) from {root_dir}"
+            )
+    except Exception as e:
+        logger.warning(f"Error during legacy pytest report cleanup: {e}")
+    return cleaned_count
+
+
 def run_pytest_node(state: GraphState) -> GraphState:
     """Pytest による単体テストを実行するノード (DD-003 §4)。
     pytest-json-report を使用してテスト結果を構造化ログとしてパースし Aider へフィードバックする。
@@ -615,12 +642,15 @@ def run_pytest_node(state: GraphState) -> GraphState:
     try:
         cwd = state.get("cwd")
         target_files = state.get("target_files", [])
-        # #26: 固定名 .report.json を cwd 直下へ出力し finally で無条件削除すると、
-        # 既存ファイルや並行実行のレポートを上書き・削除してしまう。実行ごとに一意名の
-        # 一時ファイルを用い、他プロセス・利用者のファイルを侵さないようにする。
-        report_dir = Path(cwd) if (cwd and Path(cwd).exists()) else Path(".")
+
+        # #76: 過去に残骸化した母艦ルート直下の .pytest-report-*.json を自己修復クリーンアップ
+        clean_legacy_pytest_reports()
+
+        # #26, #76: レポートファイルを作業ツリー（cwd / リポジトリルート）に出力せず、
+        # OS 標準のテンポラリディレクトリ (tempfile.gettempdir()) に配置する。
+        # これにより万が一プロセスが強制中断されても作業ツリーが一切汚染されない。
         report_fd, report_file_str = tempfile.mkstemp(
-            prefix=f".pytest-report-{os.getpid()}-", suffix=".json", dir=str(report_dir)
+            prefix=f"pytest-report-{os.getpid()}-", suffix=".json"
         )
         os.close(report_fd)
         report_file = Path(report_file_str)
