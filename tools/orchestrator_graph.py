@@ -108,6 +108,106 @@ def is_in_git_workspace(cwd: Optional[str]) -> bool:
         return False
 
 
+def get_satellite_python_path(sat_path: Path) -> Path:
+    """サテライトの仮想環境内の Python 実行可能ファイルパスを取得する (OS依存対応)."""
+    if os.name == "nt":
+        return sat_path / ".venv" / "Scripts" / "python.exe"
+    return sat_path / ".venv" / "bin" / "python"
+
+
+def ensure_satellite_environment(cwd: Optional[str]) -> str:
+    """サテライトの仮想環境 (.venv) を検証・自動セットアップし、実行可能な Python パスを返す。
+
+    1. cwd が未指定、または pyproject.toml / requirements.txt が存在しない場合は母艦 Python (sys.executable) を返す。
+    2. サテライトに .venv が存在しない、または Python バイナリがない場合:
+       - pyproject.toml があれば `uv sync --project <cwd> --all-extras` で自動構築。
+       - requirements.txt があれば `uv venv` + `uv pip install -r` で構築。
+    3. オーケストレーターのテスト結果構造化に必要な pytest-json-report の存在を確認し、なければ自動導入。
+    4. 解決された Python パス (str) を返す。失敗時は安全に sys.executable にフォールバック。
+    """
+    if not cwd:
+        return sys.executable
+
+    sat_path = Path(cwd)
+    if not sat_path.exists():
+        return sys.executable
+
+    has_pyproject = (sat_path / "pyproject.toml").is_file()
+    has_requirements = (sat_path / "requirements.txt").is_file()
+    if not (has_pyproject or has_requirements):
+        return sys.executable
+
+    python_bin = get_satellite_python_path(sat_path)
+
+    if not python_bin.exists():
+        logger.info(f"Satellite virtual environment not found in '{cwd}'. Setting up with uv...")
+        try:
+            if has_pyproject:
+                sync_cmd = ["uv", "sync", "--project", str(sat_path), "--all-extras"]
+                res = run_cmd(sync_cmd, timeout=300)
+                if res.returncode != 0:
+                    logger.warning(
+                        f"uv sync --all-extras failed ({res.stderr}). Trying uv sync without extras..."
+                    )
+                    res = run_cmd(["uv", "sync", "--project", str(sat_path)], timeout=300)
+            elif has_requirements:
+                run_cmd(["uv", "venv", str(sat_path / ".venv")], timeout=120)
+                if python_bin.exists():
+                    run_cmd(
+                        [
+                            "uv",
+                            "pip",
+                            "install",
+                            "-r",
+                            str(sat_path / "requirements.txt"),
+                            "--python",
+                            str(python_bin),
+                        ],
+                        timeout=300,
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Failed to auto-setup satellite venv: {e}. Falling back to host python."
+            )
+            return sys.executable
+
+    if not python_bin.exists():
+        logger.warning(
+            f"Satellite python binary still not found at '{python_bin}'. Falling back to host python."
+        )
+        return sys.executable
+
+    # pytest-json-report の自動確認・導入
+    try:
+        chk_report = subprocess.run(
+            [str(python_bin), "-c", "import pytest_jsonreport"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if chk_report.returncode != 0:
+            logger.info("pytest-json-report not found in satellite venv. Installing via uv pip...")
+            run_cmd(
+                ["uv", "pip", "install", "pytest-json-report", "--python", str(python_bin)],
+                timeout=120,
+            )
+    except Exception as e:
+        logger.debug(f"Failed to check/install pytest-json-report: {e}")
+
+    # ruff の自動確認・導入
+    try:
+        chk_ruff = subprocess.run(
+            [str(python_bin), "-c", "import ruff"], capture_output=True, text=True, timeout=10
+        )
+        if chk_ruff.returncode != 0:
+            logger.info("ruff not found in satellite venv. Installing via uv pip...")
+            run_cmd(["uv", "pip", "install", "ruff", "--python", str(python_bin)], timeout=120)
+    except Exception as e:
+        logger.debug(f"Failed to check/install ruff: {e}")
+
+    return str(python_bin)
+
+
 def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
     """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
     target_files: List[str] = []
@@ -517,11 +617,12 @@ def lint_node(state: GraphState) -> GraphState:
             state["status"] = "lint_passed"
             return state
 
-        cmd = [sys.executable, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
+        python_bin = ensure_satellite_environment(cwd)
+        cmd = [python_bin, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
         # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
-        run_cmd([sys.executable, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
+        run_cmd([python_bin, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
         run_cmd(
-            [sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
+            [python_bin, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
             + targets_to_check,
             cwd=cwd,
             timeout=300,
@@ -647,9 +748,10 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
         cmd_test_files = existing_test_files if existing_test_files else test_files
 
+        python_bin = ensure_satellite_environment(cwd)
         # pytest-json-report オプションを付加して対象テストファイルを実行
         cmd = (
-            [sys.executable, "-m", "pytest"]
+            [python_bin, "-m", "pytest"]
             + (cmd_test_files if cmd_test_files else [])
             + ["--json-report", f"--json-report-file={report_file}"]
         )

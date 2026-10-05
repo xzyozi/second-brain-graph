@@ -276,3 +276,23 @@ def test_run_task_main_passes_auto_stash_to_orchestrator(tmp_path: Path) -> None
         assert mock_sub_run.called
         exec_cmd = mock_sub_run.call_args.args[0]
         assert "--auto-stash" in exec_cmd
+
+
+def test_ensure_satellite_gitignore(tmp_path: Path) -> None:
+    """サテライトの .gitignore に .venv/ および .aider* が欠けている場合に自動追記されることを検証する。"""
+    from tools.run_task import ensure_satellite_gitignore
+
+    gi_file = tmp_path / ".gitignore"
+    gi_file.write_text("*.pyc\n__pycache__/\n", encoding="utf-8")
+
+    ensure_satellite_gitignore(str(tmp_path))
+
+    content = gi_file.read_text(encoding="utf-8")
+    assert ".venv/" in content
+    assert ".aider*" in content
+
+    # 既に存在する場合は二重追加されないこと
+    ensure_satellite_gitignore(str(tmp_path))
+    content_second = gi_file.read_text(encoding="utf-8")
+    assert content_second.count(".venv/") == 1
+    assert content_second.count(".aider*") == 1

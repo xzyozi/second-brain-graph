@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools.orchestrator_graph import (  # noqa: E402
+    ensure_satellite_environment,
     resolve_project_context,
     validate_project_consistency,
 )
@@ -191,6 +192,28 @@ def sync_base_branch(cwd: str, base_branch: str = "develop") -> None:
         )
 
 
+def ensure_satellite_gitignore(cwd: str) -> None:
+    """サテライトの .gitignore に .venv/ および .aider* が含まれていることを保証する (自己修復)."""
+    gi_path = Path(cwd) / ".gitignore"
+    if not gi_path.exists():
+        return
+    try:
+        content = gi_path.read_text(encoding="utf-8")
+        needed = []
+        if ".venv" not in content:
+            needed.append(".venv/")
+        if ".aider" not in content:
+            needed.append(".aider*")
+        if needed:
+            logger.info(f"Adding {needed} to {gi_path}")
+            new_content = (
+                content.rstrip() + "\n\n# Autonomous worker ignores\n" + "\n".join(needed) + "\n"
+            )
+            gi_path.write_text(new_content, encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to inspect/update {gi_path}: {e}")
+
+
 def clean_satellite_repository(
     cwd: str,
     base_branch: str = "develop",
@@ -203,6 +226,9 @@ def clean_satellite_repository(
 
     # 重要メタデータの事前退避
     metadata_backup = backup_critical_metadata(cwd)
+
+    # 0. .gitignore の自己修復 (.venv, .aider*)
+    ensure_satellite_gitignore(cwd)
 
     # 1. 未コミット変更の事前チェック & 退避/停止
     check_and_safeguard_working_tree(cwd, auto_stash=auto_stash, force=force, issue_id=issue_id)
@@ -225,6 +251,9 @@ def clean_satellite_repository(
 
     # 6. 未追跡だった重要メタデータが消去された場合は自己修復復元
     restore_critical_metadata(cwd, metadata_backup)
+
+    # 7. サテライト仮想環境 (.venv) の事前検証・自動セットアップ
+    ensure_satellite_environment(cwd)
 
     logger.info("Satellite repository cleaning completed successfully.")
 

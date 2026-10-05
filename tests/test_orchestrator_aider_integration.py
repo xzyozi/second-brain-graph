@@ -1,6 +1,8 @@
 """Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, git switch, reviewer validation, RDJSON, audit schema, regex validation, and CLI commands."""
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
@@ -665,6 +667,10 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
         patch("tools.orchestrator_graph.run_cmd", return_value=mock_rd_fail),
+        patch(
+            "tools.jev_adapter.verify_review_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
     ):
         res = review_node(state)
         assert res["status"] == "review_lgtm"
@@ -725,6 +731,14 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
         patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire,
         patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release,
         patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")),
+        patch(
+            "tools.jev_adapter.verify_plan_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
+        patch(
+            "tools.jev_adapter.verify_review_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
     ):
         execute_issue(
             issue_id,
@@ -1240,6 +1254,10 @@ def test_review_node_empty_comments_guard() -> None:
     with (
         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
         patch("tools.llm_client.call_llm", return_value=mock_llm_res),
+        patch(
+            "tools.jev_adapter.verify_review_conformance",
+            return_value=(True, 1.0, "JEV conformance passed"),
+        ),
     ):
         res_state = review_node(state)
 
@@ -1685,3 +1703,45 @@ def test_execute_issue_dirty_working_tree_auto_stash(tmp_path: Path) -> None:
     assert any(
         "git stash push -u -m orchestrator: auto-stash before TFG-0004" in c for c in executed_cmds
     )
+
+
+def test_get_satellite_python_path(tmp_path: Path) -> None:
+    """OS に応じたサテライト仮想環境内の Python パスを返すことを検証する。"""
+    from tools.orchestrator_graph import get_satellite_python_path
+
+    py_path = get_satellite_python_path(tmp_path)
+    if os.name == "nt":
+        assert py_path == tmp_path / ".venv" / "Scripts" / "python.exe"
+    else:
+        assert py_path == tmp_path / ".venv" / "bin" / "python"
+
+
+def test_ensure_satellite_environment_fallback() -> None:
+    """cwd が未指定または pyproject.toml / requirements.txt がない場合、母艦 Python (sys.executable) を返すことを検証する。"""
+    from tools.orchestrator_graph import ensure_satellite_environment
+
+    assert ensure_satellite_environment(None) == sys.executable
+    assert ensure_satellite_environment("/non/existent/path") == sys.executable
+
+
+def test_ensure_satellite_environment_resolves_existing_venv(tmp_path: Path) -> None:
+    """サテライトに pyproject.toml と .venv が存在する場合、サテライトの Python パスを返すことを検証する。"""
+    from tools.orchestrator_graph import (
+        ensure_satellite_environment,
+        get_satellite_python_path,
+    )
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "dummy"\n', encoding="utf-8")
+    expected_python = get_satellite_python_path(tmp_path)
+    expected_python.parent.mkdir(parents=True, exist_ok=True)
+    expected_python.write_text("", encoding="utf-8")
+
+    with (
+        patch("subprocess.run") as mock_sub_run,
+        patch("tools.orchestrator_graph.run_cmd") as mock_run_cmd,
+    ):
+        mock_sub_run.return_value = MagicMock(returncode=0)
+        mock_run_cmd.return_value = MagicMock(returncode=0)
+
+        resolved_python = ensure_satellite_environment(str(tmp_path))
+        assert resolved_python == str(expected_python)
