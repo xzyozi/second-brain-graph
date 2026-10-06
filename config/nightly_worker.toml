@@ -53,7 +53,7 @@ create_draft_pr = true
 auto_stash = true
 
 # 1タスクあたりの最大実行タイムアウト秒数（Aider コーディング + テスト自己修復）
-timeout_seconds = 600
+timeout_seconds = 1800
 
 # テスト不合格時のエスカレーション前に試行する最大リトライ回数
 max_retries = 1

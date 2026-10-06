@@ -265,6 +265,29 @@ class ProjectLockManager:
             logger.error(f"Failed to release lock: {e}")
 
 
+def force_unlock_project(
+    project_key: str,
+    metadata_dir: Optional[Path] = None,
+    lock_file: Optional[Path] = None,
+) -> bool:
+    """残留したプロジェクトロック (.lock) を安全に強制解除する (Issue #80)。"""
+    if lock_file is not None:
+        target_lock_file = lock_file
+    elif not _is_default_metadata_dir(metadata_dir) and metadata_dir is not None:
+        target_lock_file = metadata_dir / "projects" / project_key / ".lock"
+    else:
+        target_lock_file = get_runtime_cache_dir(project_key) / ".lock"
+
+    if target_lock_file.exists():
+        try:
+            target_lock_file.unlink(missing_ok=True)
+            logger.info(f"Forcefully removed lock file: {target_lock_file}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to remove lock file {target_lock_file}: {e}")
+    return False
+
+
 # ==============================================================================
 # 4. Task State (state.json) & History (execution_history.json) Operations
 # ==============================================================================
@@ -352,6 +375,129 @@ def update_task_state(
         os.fsync(f.fileno())
 
     os.replace(temp_file, target_state_file)
+
+
+def reset_task_state(
+    project_key: str,
+    issue_id: str,
+    metadata_dir: Optional[Path] = None,
+    state_file: Optional[Path] = None,
+) -> bool:
+    """state.json 内の該当 issue_id の状態項目を安全に削除・初期化する (Issue #80)。
+    他タスクの状態は安全に保持する。
+    削除に成功した場合は True、該当エントリが存在しなかった場合は False を返す。
+    """
+    if state_file is not None:
+        target_state_file = state_file
+    elif not _is_default_metadata_dir(metadata_dir) and metadata_dir is not None:
+        target_state_file = metadata_dir / "projects" / project_key / "state.json"
+    else:
+        target_state_file = get_runtime_cache_dir(project_key) / "state.json"
+
+    removed = False
+    if target_state_file.exists():
+        try:
+            with open(target_state_file, "r", encoding="utf-8") as f:
+                state_data = json.load(f)
+            if issue_id in state_data:
+                del state_data[issue_id]
+                removed = True
+
+                temp_file = target_state_file.with_name(f"state.json.{uuid.uuid4().hex}.tmp")
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(state_data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_file, target_state_file)
+                logger.info(
+                    f"Successfully reset task state for '{issue_id}' in {target_state_file}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to reset task state for {project_key}/{issue_id}: {e}")
+
+    # 旧パス (metadata/projects/<KEY>/state.json) も存在する場合は削除
+    if metadata_dir is None and state_file is None:
+        legacy_state_file = (
+            Path(__file__).resolve().parent.parent
+            / "metadata"
+            / "projects"
+            / project_key
+            / "state.json"
+        )
+        if legacy_state_file.exists():
+            try:
+                with open(legacy_state_file, "r", encoding="utf-8") as lf:
+                    legacy_data = json.load(lf)
+                if issue_id in legacy_data:
+                    del legacy_data[issue_id]
+                    removed = True
+                    temp_legacy = legacy_state_file.with_name(f"state.json.{uuid.uuid4().hex}.tmp")
+                    with open(temp_legacy, "w", encoding="utf-8") as lf:
+                        json.dump(legacy_data, lf, indent=2, ensure_ascii=False)
+                        lf.flush()
+                        os.fsync(lf.fileno())
+                    os.replace(temp_legacy, legacy_state_file)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to reset legacy state.json for {project_key}/{issue_id}: {e}"
+                )
+
+    return removed
+
+
+def mark_task_completed_in_tasks_md(
+    cwd: Optional[str],
+    issue_id: str,
+    project_key: Optional[str] = None,
+    project_root: Optional[Path] = None,
+) -> bool:
+    """サテライト (docs/tasks.md) および母艦 (metadata/projects/<KEY>/tasks.md) の
+    該当タスク行を完了状態 (- [x] ... completed:YYYY-MM-DD) に更新する (Issue #80)。
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    updated = False
+
+    target_paths: List[Path] = []
+    if cwd:
+        sat_tasks = Path(cwd) / "docs" / "tasks.md"
+        if sat_tasks.exists():
+            target_paths.append(sat_tasks)
+
+    if project_key and project_root:
+        meta_tasks = project_root / "metadata" / "projects" / project_key / "tasks.md"
+        if meta_tasks.exists():
+            target_paths.append(meta_tasks)
+
+    for tpath in target_paths:
+        try:
+            content = tpath.read_text(encoding="utf-8")
+            new_lines: List[str] = []
+            modified = False
+            for line in content.splitlines():
+                # 該当 Issue ID の未完了行 (- [ ] [ID] または - [/] [ID])
+                if f"[{issue_id}]" in line and (
+                    line.strip().startswith("- [ ]") or line.strip().startswith("- [/]")
+                ):
+                    # - [ ] または - [/] を - [x] に置換
+                    new_line = re.sub(r"^(\s*-\s*)\[[ /]?\]", r"\1[x]", line)
+                    if "completed:" not in new_line:
+                        if "-->" in new_line:
+                            new_line = re.sub(r"(-->|\Z)", f"completed:{today} \\1", new_line)
+                        else:
+                            new_line = f"{new_line} <!-- completed:{today} -->"
+                    new_lines.append(new_line)
+                    modified = True
+                    updated = True
+                else:
+                    new_lines.append(line)
+
+            if modified:
+                tpath.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                logger.info(f"Marked task '{issue_id}' as completed in {tpath}")
+        except Exception as e:
+            logger.warning(f"Failed to update tasks.md at {tpath} for {issue_id}: {e}")
+
+    return updated
 
 
 def record_execution_history(

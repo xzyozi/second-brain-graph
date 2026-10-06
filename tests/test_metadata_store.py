@@ -14,7 +14,9 @@ from tools.metadata_store import (
     ProjectLockManager,
     TaskStatus,
     get_runtime_cache_dir,
+    mark_task_completed_in_tasks_md,
     record_execution_history,
+    reset_task_state,
     resolve_project_context,
     safe_record_execution_history,
     update_task_state,
@@ -406,3 +408,68 @@ def test_resolve_project_context_prioritizes_satellite_docs(tmp_path: Path) -> N
     assert ctx["valid"] is True
     assert ctx["base_branch"] == "develop"
     assert ctx["target_files"] == ["satellite_code.py"]
+
+
+def test_reset_task_state(tmp_path: Path) -> None:
+    """Issue #80: reset_task_state が指定した issue_id を安全に削除し、他タスクを保持することを検証する。"""
+    state_file = tmp_path / "state.json"
+
+    # 1. 2つのタスクを追加
+    update_task_state("PROJ", "TASK-0001", TaskStatus.FAILED_SYSTEM, state_file=state_file)
+    update_task_state("PROJ", "TASK-0002", TaskStatus.COMPLETED, state_file=state_file)
+
+    with open(state_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert "TASK-0001" in data
+    assert "TASK-0002" in data
+
+    # 2. TASK-0001 をリセット
+    res = reset_task_state("PROJ", "TASK-0001", state_file=state_file)
+    assert res is True
+
+    with open(state_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert "TASK-0001" not in data
+    assert "TASK-0002" in data
+
+    # 3. 再度 TASK-0001 をリセットしようとすると False
+    res_again = reset_task_state("PROJ", "TASK-0001", state_file=state_file)
+    assert res_again is False
+
+    # 4. 存在しない state_file に対する呼び出しでも例外にならず False
+    non_existent = tmp_path / "non_existent.json"
+    assert reset_task_state("PROJ", "TASK-9999", state_file=non_existent) is False
+
+
+def test_mark_task_completed_in_tasks_md(tmp_path: Path) -> None:
+    """Issue #80: mark_task_completed_in_tasks_md が該当タスクを安全に完了チェックに更新することを検証する。"""
+    sat_docs = tmp_path / "docs"
+    sat_docs.mkdir(parents=True)
+    tasks_file = sat_docs / "tasks.md"
+
+    initial_content = (
+        "# Tasks\n\n"
+        "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->\n"
+        "- [ ] [CW-0038] 除外アプリ判定 <!-- priority:medium issue:#109 stage:ready -->\n"
+        "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->\n"
+    )
+    tasks_file.write_text(initial_content, encoding="utf-8")
+
+    # CW-0038 を完了に更新
+    updated = mark_task_completed_in_tasks_md(str(tmp_path), "CW-0038")
+    assert updated is True
+
+    new_content = tasks_file.read_text(encoding="utf-8")
+    lines = new_content.splitlines()
+
+    # CW-0001 は変更なし
+    assert (
+        lines[2] == "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->"
+    )
+    # CW-0038 は - [x] になり completed: が付与
+    assert lines[3].startswith("- [x] [CW-0038] 除外アプリ判定")
+    assert "completed:" in lines[3]
+    # CW-0039 は未完了のまま
+    assert (
+        lines[4] == "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->"
+    )

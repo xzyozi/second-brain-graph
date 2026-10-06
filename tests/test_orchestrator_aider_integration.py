@@ -1745,3 +1745,76 @@ def test_ensure_satellite_environment_resolves_existing_venv(tmp_path: Path) -> 
 
         resolved_python = ensure_satellite_environment(str(tmp_path))
         assert resolved_python == str(expected_python)
+
+
+def test_done_node_already_satisfied_completion() -> None:
+    """Issue #80: 差分も新コミットもない既済タスクの場合、PR作成をスキップしてCOMPLETEDにし、ブランチ削除とtasks.md完了反映を行うことを検証する。"""
+    from tools.orchestrator_graph import done_node
+
+    state = GraphState(
+        issue_id="CW-0038",
+        project_key="CW",
+        execution_id="test_exec_already_satisfied",
+        generation=0,
+        status="running",
+        error=None,
+        error_category=None,
+        llm_timeout_count=0,
+        review_round=1,
+        lint_round=0,
+        test_round=0,
+        max_round=3,
+        target_files=["src/core/clipboard/clipboard_monitor.py"],
+        instruction="Fix case sensitivity",
+        cwd="/path/to/sat",
+        base_branch="develop",
+        aider_message="",
+        test_feedback_instruction=None,
+        impl_plan=None,
+        lint_result=None,
+        test_result=None,
+        review_verdict="LGTM",
+        review_comments=[],
+        review_rounds=[],
+        reviewdog_result=None,
+        history_summary=None,
+        rdjson=None,
+        boundary_warning=None,
+        empty_diff_detected=True,
+    )
+
+    cmd_history: list[str] = []
+
+    def mock_run_cmd(cmd: list[str], cwd: str | None = None, timeout: int = 60) -> MagicMock:
+        cmd_str = " ".join(cmd)
+        cmd_history.append(cmd_str)
+        # diff, status, log はすべて空（差分・新コミットなし）
+        if "diff --cached" in cmd_str:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if "status --porcelain" in cmd_str:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if "log origin/develop..HEAD" in cmd_str:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        if "rev-parse --verify" in cmd_str:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with (
+        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("tools.metadata_store.mark_task_completed_in_tasks_md") as mock_mark_tasks,
+    ):
+        res = done_node(state)
+
+        assert res["status"] == "COMPLETED"
+        assert res.get("already_satisfied") is True
+        mock_mark_tasks.assert_called_once()
+        call_args = mock_mark_tasks.call_args
+        assert call_args.args[0] == "/path/to/sat"
+        assert call_args.args[1] == "CW-0038"
+        assert call_args.kwargs.get("project_key") == "CW"
+        # PR作成やpushは呼ばれず、ブランチ削除が実行されること
+        assert not any("push" in c for c in cmd_history)
+        assert not any("pr create" in c for c in cmd_history)
+        assert any("checkout -f develop" in c for c in cmd_history)
+        assert any("branch -D sbos/CW-0038" in c for c in cmd_history)

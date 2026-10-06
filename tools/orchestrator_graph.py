@@ -383,6 +383,8 @@ class GraphState(TypedDict, total=False):
     plan_conformance_round: int
     review_conformance_status: Optional[str]
     review_conformance_score: Optional[float]
+    empty_diff_detected: Optional[bool]
+    already_satisfied: Optional[bool]
 
 
 def spec_draft_node(state: GraphState) -> GraphState:
@@ -977,10 +979,40 @@ def review_node(state: GraphState) -> GraphState:
         return state
 
     impl_plan_text = state.get("impl_plan") or "(No implementation plan provided)"
+
+    diff_prompt_text = diff_text
+    if not diff_text.strip():
+        state["empty_diff_detected"] = True
+        logger.info(
+            f"[{state.get('issue_id')}] No git diff detected in review_node. Checking for already-satisfied implementation."
+        )
+        diff_prompt_text = (
+            "(No git diff detected - changes may already exist in the base codebase)\n\n"
+            "【NOTICE REGARDING EMPTY DIFF】\n"
+            "All static analysis checks (Ruff) and automated tests (Pytest) have PASSED.\n"
+            "If the required specifications and behaviors described in the implementation plan "
+            "are already fully satisfied and present in the target files, you MUST return 'LGTM' "
+            "with a comment confirming that the requirements are already met in the codebase.\n"
+            "Only return 'changes_requested' if the required implementation is genuinely missing."
+        )
+        if cwd:
+            snippets = []
+            for tf in (state.get("target_files") or [])[:3]:
+                tf_path = Path(cwd) / tf
+                if tf_path.exists() and tf_path.is_file():
+                    try:
+                        lines = tf_path.read_text(encoding="utf-8").splitlines()
+                        snippet = "\n".join(lines[:300])
+                        snippets.append(f"--- File: {tf} ---\n{snippet}")
+                    except Exception:
+                        pass
+            if snippets:
+                diff_prompt_text += "\n\nTarget file contents for review:\n" + "\n\n".join(snippets)
+
     user_prompt = (
         f"Review changes for {state['issue_id']}.\n\n"
         f"Implementation Plan:\n{impl_plan_text}\n\n"
-        f"Git diff:\n{diff_text if diff_text else '(No git diff detected)'}"
+        f"Git diff:\n{diff_prompt_text}"
     )
 
     try:
@@ -1365,6 +1397,35 @@ def done_node(state: GraphState) -> GraphState:
                     state["error_category"] = "PR_ERROR"
                     state["error"] = f"git commit failed: {commit_res.stderr}"
                     return state
+            elif state.get("empty_diff_detected"):
+                # 2.5. 既済タスク判定 (Issue #80: review_node で diff が空と判定され、かつ未コミット変更もない場合)
+                logger.info(
+                    f"[{state['issue_id']}] Task had empty diff and no uncommitted changes. "
+                    f"All tests passed and implementation is verified as already satisfied on base branch '{base_branch}'. "
+                    "Marking as COMPLETED."
+                )
+                from tools.metadata_store import mark_task_completed_in_tasks_md
+
+                # 作業ブランチの安全クリーンアップ
+                run_cmd(["git", "checkout", "-f", base_branch], cwd=cwd, timeout=60)
+                chk_branch = run_cmd(
+                    ["git", "rev-parse", "--verify", head_branch], cwd=cwd, timeout=30
+                )
+                if chk_branch.returncode == 0:
+                    run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=30)
+
+                # tasks.md の完了反映 (- [ ] -> - [x])
+                proj_root = Path(cwd).parent.parent if cwd else None
+                mark_task_completed_in_tasks_md(
+                    cwd,
+                    state["issue_id"],
+                    project_key=state.get("project_key"),
+                    project_root=proj_root,
+                )
+
+                state["status"] = "COMPLETED"
+                state["already_satisfied"] = True
+                return state
 
             # 3. リモートへ Fetch & Safe Push (--force-with-lease を使用し、人間が追加したリモートコミットの上書き破壊を予防)
             run_cmd(["git", "fetch", "origin"], cwd=cwd, timeout=60)
