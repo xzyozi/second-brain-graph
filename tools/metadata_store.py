@@ -139,7 +139,9 @@ def self_heal_satellite_project_json(
         "name": proj_entry.get("name", project_key),
         "base_branch": proj_entry.get("base_branch", "develop"),
         "created_at": now_date,
-        "description": proj_entry.get("description", f"{proj_entry.get('name', project_key)} satellite project"),
+        "description": proj_entry.get(
+            "description", f"{proj_entry.get('name', project_key)} satellite project"
+        ),
     }
     if "github_repo" in proj_entry:
         proj_data["github_repo"] = proj_entry["github_repo"]
@@ -1088,9 +1090,7 @@ def resolve_target_spec(
             num_pkey = resolve_project_from_cwd(cwd, project_root)
 
         num_task_id = (
-            resolve_task_id_for_issue(num_pkey, num_issue, project_root)
-            if num_pkey
-            else None
+            resolve_task_id_for_issue(num_pkey, num_issue, project_root) if num_pkey else None
         )
         projects = load_project_registry(project_root)
         pdata = projects.get(num_pkey, {}) if num_pkey else {}
@@ -1113,4 +1113,3 @@ def resolve_target_spec(
         "github_repo": None,
         "target": target,
     }
-

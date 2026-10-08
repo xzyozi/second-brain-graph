@@ -265,16 +265,18 @@ def test_promote_issue_main_url_driven(tmp_path: Path, monkeypatch: pytest.Monke
     meta_dir.mkdir(parents=True, exist_ok=True)
     reg_file = meta_dir / ".project-registry.json"
     reg_file.write_text(
-        json.dumps({
-            "projects": {
-                "TP": {
-                    "name": "test_proj",
-                    "github_repo": "xzyozi/test_proj",
-                    "dir": "projects/test_proj",
-                    "meta": "metadata/projects/TP",
+        json.dumps(
+            {
+                "projects": {
+                    "TP": {
+                        "name": "test_proj",
+                        "github_repo": "xzyozi/test_proj",
+                        "dir": "projects/test_proj",
+                        "meta": "metadata/projects/TP",
+                    }
                 }
             }
-        }),
+        ),
         encoding="utf-8",
     )
 
@@ -288,7 +290,10 @@ def test_promote_issue_main_url_driven(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(promote_issue.subprocess, "run", lambda *a, **kw: None)
 
     with (
-        patch("sys.argv", ["promote_issue.py", "https://github.com/xzyozi/test_proj/issues/42", "--dry-run"]),
+        patch(
+            "sys.argv",
+            ["promote_issue.py", "https://github.com/xzyozi/test_proj/issues/42", "--dry-run"],
+        ),
         patch("pathlib.Path.cwd", return_value=root_dir),
         patch("tools.promote_issue.Path", return_value=root_dir),
     ):
@@ -299,4 +304,3 @@ def test_promote_issue_main_url_driven(tmp_path: Path, monkeypatch: pytest.Monke
             call_kwargs = mock_promote.call_args.kwargs
             assert call_kwargs["target_project"] == "xzyozi/test_proj"
             assert call_kwargs["issue_num"] == 42
-

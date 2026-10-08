@@ -500,11 +500,7 @@ def main() -> None:
         project_root=root_dir,
     )
 
-    target_project = (
-        args.project
-        or resolved.get("github_repo")
-        or resolved.get("project_key")
-    )
+    target_project = args.project or resolved.get("github_repo") or resolved.get("project_key")
     issue_num = args.issue or resolved.get("issue_number")
 
     if not target_project:

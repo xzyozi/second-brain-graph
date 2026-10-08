@@ -505,9 +505,7 @@ def test_run_task_main_resolves_url_and_cwd(tmp_path: Path) -> None:
             }
         }
     }
-    (metadata_dir / ".project-registry.json").write_text(
-        json.dumps(reg_data), encoding="utf-8"
-    )
+    (metadata_dir / ".project-registry.json").write_text(json.dumps(reg_data), encoding="utf-8")
 
     sat_docs = sat_dir / "docs"
     sat_docs.mkdir(parents=True, exist_ok=True)
@@ -535,4 +533,3 @@ def test_run_task_main_resolves_url_and_cwd(tmp_path: Path) -> None:
         # 引数に --issue-id TFG-0005 --project-key TFG が渡されていること
         assert "TFG-0005" in exec_cmd
         assert "TFG" in exec_cmd
-

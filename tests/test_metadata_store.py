@@ -121,9 +121,7 @@ def test_validate_project_consistency_self_heals_missing_project_json(tmp_path: 
     assert not pjson_path.exists()
 
     # 例外なく成功すること
-    validate_project_consistency(
-        "TFG-0005", "TFG", metadata_dir=meta_dir, project_root=tmp_path
-    )
+    validate_project_consistency("TFG-0005", "TFG", metadata_dir=meta_dir, project_root=tmp_path)
 
     # project.json が自動生成されていること
     assert pjson_path.exists()
@@ -131,7 +129,6 @@ def test_validate_project_consistency_self_heals_missing_project_json(tmp_path: 
     assert pdata["key"] == "TFG"
     assert pdata["name"] == "test_file_grep"
     assert pdata["github_repo"] == "xzyozi/test_file_grep"
-
 
 
 # ==============================================================================
@@ -583,4 +580,3 @@ def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
     assert res_num["project_key"] == "TFG"
     assert res_num["task_id"] == "TFG-0005"
     assert res_num["issue_number"] == 5
-

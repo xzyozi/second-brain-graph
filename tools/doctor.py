@@ -502,9 +502,7 @@ def diagnose_project(
 
     # 2. docs/project.json チェック
     results.append(
-        check_project_json(
-            project_key, sat_dir, pdata, project_root=project_root, fix=fix
-        )
+        check_project_json(project_key, sat_dir, pdata, project_root=project_root, fix=fix)
     )
 
     # 3. docs/tasks.md チェック

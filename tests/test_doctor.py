@@ -275,4 +275,3 @@ def test_diagnose_project_full(tmp_path: Path) -> None:
         assert "Satellite Directory" in names
         assert "Satellite project.json" in names
         assert "Tasks Backlog" in names
-
