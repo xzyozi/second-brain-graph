@@ -9,10 +9,12 @@ import json
 import logging
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from tools.issue_spec_manager import fetch_remote_issue, sync_spec_for_task
+from tools.metadata_store import resolve_target_spec
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("promote_issue")
@@ -438,14 +440,27 @@ def promote_issue(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Issue 壁打ち完了・stage:ready 昇格ツール")
+    parser = argparse.ArgumentParser(
+        description="Issue 壁打ち完了・stage:ready 昇格ツール（URL、タスクID、番号、CWD判定対応）"
+    )
+    parser.add_argument(
+        "target",
+        nargs="?",
+        help="対象 Issue URL、タスクID（例: TFG-0005）、または Issue 番号（位置引数指定可能）",
+    )
     parser.add_argument(
         "--project",
         "-p",
-        required=True,
-        help="対象プロジェクト名または github_repo（例: env_builder, xzyozi/env_builder）",
+        required=False,
+        help="対象プロジェクト名または github_repo（例: env_builder, xzyozi/env_builder）。URLやサテライトCWDから自動判定可能",
     )
-    parser.add_argument("--issue", "-i", type=int, required=True, help="対象 Issue 番号")
+    parser.add_argument(
+        "--issue",
+        "-i",
+        type=int,
+        required=False,
+        help="対象 Issue 番号（位置引数 target または URL/タスクID から自動判定可能）",
+    )
     parser.add_argument(
         "--approach",
         "-a",
@@ -472,17 +487,45 @@ def main() -> None:
     args = parser.parse_args()
     root_dir = Path(__file__).resolve().parent.parent
 
+    target_input = args.target or (str(args.issue) if args.issue is not None else None)
+    if not target_input:
+        parser.error(
+            "対象が指定されていません。位置引数に Issue URL、タスクID、または --issue を指定してください。"
+        )
+
+    resolved = resolve_target_spec(
+        target_input,
+        project_hint=args.project,
+        cwd=Path.cwd(),
+        project_root=root_dir,
+    )
+
+    target_project = args.project or resolved.get("github_repo") or resolved.get("project_key")
+    issue_num = args.issue or resolved.get("issue_number")
+
+    if not target_project:
+        logger.error(
+            f"プロジェクトを特定できませんでした。'--project' を指定するか、レジストリに登録された URL/サテライトディレクトリから実行してください。(target: {target_input})"
+        )
+        sys.exit(1)
+
+    if not issue_num:
+        logger.error(
+            f"Issue 番号を特定できませんでした。'--issue' を指定するか、URL またはタスクID を指定してください。(target: {target_input})"
+        )
+        sys.exit(1)
+
     success = promote_issue(
         root_dir=root_dir,
-        target_project=args.project,
-        issue_num=args.issue,
+        target_project=target_project,
+        issue_num=issue_num,
         approach=args.approach,
         concrete_tasks=args.task,
         target_files=args.target_file,
         dry_run=args.dry_run,
     )
     if not success:
-        exit(1)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

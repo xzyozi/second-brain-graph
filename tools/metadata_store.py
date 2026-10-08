@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from filelock import FileLock, Timeout
 
@@ -116,6 +116,48 @@ def get_runtime_cache_dir(
     return cache_dir
 
 
+def self_heal_satellite_project_json(
+    project_key: str,
+    proj_entry: dict[str, Any],
+    project_root: Path,
+) -> Optional[Path]:
+    """サテライトの docs/project.json が未存在の場合、.project-registry.json 情報から自己修復生成する。"""
+    dir_rel = proj_entry.get("dir")
+    if not dir_rel:
+        return None
+    sat_dir = project_root / dir_rel
+    if not sat_dir.exists():
+        return None
+
+    docs_dir = sat_dir / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    proj_json_path = docs_dir / "project.json"
+
+    now_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    proj_data = {
+        "key": project_key,
+        "name": proj_entry.get("name", project_key),
+        "base_branch": proj_entry.get("base_branch", "develop"),
+        "created_at": now_date,
+        "description": proj_entry.get(
+            "description", f"{proj_entry.get('name', project_key)} satellite project"
+        ),
+    }
+    if "github_repo" in proj_entry:
+        proj_data["github_repo"] = proj_entry["github_repo"]
+
+    try:
+        proj_json_path.write_text(
+            json.dumps(proj_data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        logger.info(f"Self-healed: created missing project.json at '{proj_json_path}'.")
+        return proj_json_path
+    except Exception as e:
+        logger.warning(f"Failed to self-heal project.json at '{proj_json_path}': {e}")
+        return None
+
+
 def validate_project_consistency(
     issue_id: str,
     project_key: str,
@@ -125,6 +167,7 @@ def validate_project_consistency(
     """Issue ID 形式、プレフィックス、CLI project_key、台帳キー、
     ディレクトリ、project.json、project.json["key"] の必須存在と一致性を検証する (MULTI-001 §2②・§4)。
     サテライト（<dir>/docs/project.json）または母艦（<meta>/project.json）の存在を許容・検証する。
+    欠落している場合は自己修復を試行する (Zero-Failure 実行)。
     """
     if not validate_issue_id(issue_id):
         raise ValueError(
@@ -172,6 +215,12 @@ def validate_project_consistency(
             fallback_proj_json = meta_dir_path / "project.json"
             if fallback_proj_json.exists():
                 candidate_proj_json = fallback_proj_json
+
+    # 探索失敗時: サテライトディレクトリが存在すれば自己修復を試行 (Zero-Failure)
+    if candidate_proj_json is None:
+        healed_path = self_heal_satellite_project_json(project_key, proj_entry, project_root)
+        if healed_path and healed_path.exists():
+            candidate_proj_json = healed_path
 
     if candidate_proj_json is None:
         if not meta_rel and not dir_rel:
@@ -780,3 +829,287 @@ def resolve_project_context(
             "work_branch_prefix": "sbos/",
             "valid": False,
         }
+
+
+# ==============================================================================
+# 10. URL Driven & CWD Target Resolution Helpers (Issue #83)
+# ==============================================================================
+
+
+def load_project_registry(project_root: Optional[Path] = None) -> Dict[str, Any]:
+    """metadata/.project-registry.json を読み込み、projects 辞書を返す。"""
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+    reg_file = project_root / "metadata" / ".project-registry.json"
+    if not reg_file.exists():
+        return {}
+    try:
+        with open(reg_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("projects", {})
+    except Exception as e:
+        logger.error(f"Failed to load project registry from {reg_file}: {e}")
+        return {}
+
+
+def parse_github_issue_url(url: str) -> Optional[Tuple[str, int]]:
+    """GitHub Issue URL をパースし、(owner_repo, issue_number) を返す。
+    例: https://github.com/xzyozi/test_file_grep/issues/5 -> ('xzyozi/test_file_grep', 5)
+    """
+    if not isinstance(url, str):
+        return None
+    match = re.match(
+        r"^https?://github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:[/?#].*)?$", url.strip()
+    )
+    if match:
+        owner = match.group(1)
+        repo = match.group(2)
+        issue_num = int(match.group(3))
+        return f"{owner}/{repo}", issue_num
+    return None
+
+
+def resolve_project_key_from_repo_or_name(
+    repo_or_name: str, project_root: Optional[Path] = None
+) -> Optional[str]:
+    """owner/repo, repo 名、またはプロジェクト名から登録済みの project_key を逆引きする。"""
+    if not repo_or_name:
+        return None
+    projects = load_project_registry(project_root)
+    # 1. key 直接一致
+    if repo_or_name in projects:
+        return repo_or_name
+
+    clean = repo_or_name.strip()
+    repo_basename = clean.split("/")[-1] if "/" in clean else clean
+
+    # 2. github_repo または name 一致
+    for key, pdata in projects.items():
+        if pdata.get("github_repo") == clean:
+            return key
+        if pdata.get("name") == clean or pdata.get("name") == repo_basename:
+            return key
+        pdir = pdata.get("dir", "")
+        if pdir and Path(pdir).name == repo_basename:
+            return key
+
+    return None
+
+
+def resolve_project_from_cwd(
+    cwd: Optional[Path] = None, project_root: Optional[Path] = None
+) -> Optional[str]:
+    """CWD（または指定パス）がサテライト配下にある場合、該当する project_key を判定して返す。"""
+    if cwd is None:
+        cwd = Path.cwd().resolve()
+    else:
+        cwd = cwd.resolve()
+
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+    project_root = project_root.resolve()
+
+    # 1. CWD から上位ディレクトリを遡り docs/project.json を探索
+    curr = cwd
+    while True:
+        pjson = curr / "docs" / "project.json"
+        if pjson.exists():
+            try:
+                data = json.loads(pjson.read_text(encoding="utf-8"))
+                if "key" in data and data["key"]:
+                    return str(data["key"])
+            except Exception:
+                pass
+        if curr == curr.parent or curr == project_root:
+            break
+        curr = curr.parent
+
+    # 2. .project-registry.json の各 dir と CWD の包含関係を検証
+    projects = load_project_registry(project_root)
+    for key, pdata in projects.items():
+        dir_rel = pdata.get("dir")
+        if dir_rel:
+            abs_sat_dir = (project_root / dir_rel).resolve()
+            try:
+                if cwd == abs_sat_dir or abs_sat_dir in cwd.parents:
+                    return key
+            except Exception:
+                pass
+
+    return None
+
+
+def resolve_task_id_for_issue(
+    project_key: str, issue_number: int, project_root: Optional[Path] = None
+) -> Optional[str]:
+    """project_key と GitHub Issue 番号からサテライト内の対応する task_id（例: TFG-0005）を逆引きする。"""
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+
+    projects = load_project_registry(project_root)
+    pdata = projects.get(project_key, {})
+    dir_rel = pdata.get("dir", f"projects/{pdata.get('name', '')}")
+    sat_dir = project_root / dir_rel
+
+    # 1. docs/tasks.md を探索: [KEY-XXXX] ... issue:#<NUM>
+    tasks_md = sat_dir / "docs" / "tasks.md"
+    if tasks_md.exists():
+        try:
+            content = tasks_md.read_text(encoding="utf-8")
+            pattern = rf"\[({project_key}-\d{{4}}(?:-[A-Z])?)\].*?(?:issue:#{issue_number}\b|#{issue_number}\b)"
+            m = re.search(pattern, content)
+            if m:
+                return m.group(1)
+        except Exception as e:
+            logger.debug(f"tasks.md 解析エラー: {e}")
+
+    # 2. docs/issues/*.md のフロントマター探索
+    issues_dir = sat_dir / "docs" / "issues"
+    if issues_dir.exists():
+        for md_file in issues_dir.glob("*.md"):
+            try:
+                text = md_file.read_text(encoding="utf-8")
+                if re.search(rf"^issue(?:_number)?:\s*#?{issue_number}\b", text, re.MULTILINE):
+                    m_task = re.search(r"^task_id:\s*([A-Za-z0-9_]+-\d+)", text, re.MULTILINE)
+                    if m_task:
+                        return m_task.group(1)
+                    if ISSUE_ID_PATTERN.match(md_file.stem):
+                        return md_file.stem
+            except Exception:
+                pass
+
+    # 3. ゼロ埋め4桁の候補
+    candidate = f"{project_key}-{issue_number:04d}"
+    return candidate
+
+
+def resolve_issue_number_for_task(
+    task_id: str, project_root: Optional[Path] = None
+) -> Optional[int]:
+    """task_id (例: TFG-0005) から対応する GitHub Issue 番号を逆引きする。"""
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+
+    project_key = task_id.split("-")[0]
+    projects = load_project_registry(project_root)
+    pdata = projects.get(project_key, {})
+    dir_rel = pdata.get("dir", f"projects/{pdata.get('name', '')}")
+    sat_dir = project_root / dir_rel
+
+    # 1. docs/issues/{task_id}.md
+    spec_md = sat_dir / "docs" / "issues" / f"{task_id}.md"
+    if spec_md.exists():
+        try:
+            text = spec_md.read_text(encoding="utf-8")
+            m = re.search(r"^issue(?:_number)?:\s*#?(\d+)\b", text, re.MULTILINE)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+
+    # 2. docs/tasks.md
+    tasks_md = sat_dir / "docs" / "tasks.md"
+    if tasks_md.exists():
+        try:
+            text = tasks_md.read_text(encoding="utf-8")
+            pattern = rf"\[{re.escape(task_id)}\].*?(?:issue:#(\d+)|#(\d+))"
+            m = re.search(pattern, text)
+            if m:
+                num_str = m.group(1) or m.group(2)
+                if num_str:
+                    return int(num_str)
+        except Exception:
+            pass
+
+    # 3. フォールバック: task_id の末尾数値 (例: TFG-0005 -> 5)
+    m_num = re.search(r"-0*(\d+)(?:-[A-Z])?$", task_id)
+    if m_num:
+        return int(m_num.group(1))
+
+    return None
+
+
+def resolve_target_spec(
+    target: str,
+    project_hint: Optional[str] = None,
+    cwd: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """任意の形式の指定 (URL, task_id, 数値) と CWD / project_hint から
+    project_key, task_id, issue_number, github_repo を高精度に解決する。
+    """
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+
+    target = target.strip()
+
+    # 1. URL 形式の判定
+    url_info = parse_github_issue_url(target)
+    if url_info:
+        repo_str, issue_num = url_info
+        resolved_key = resolve_project_key_from_repo_or_name(repo_str, project_root)
+        if not resolved_key and project_hint:
+            resolved_key = resolve_project_key_from_repo_or_name(project_hint, project_root)
+        task_id = (
+            resolve_task_id_for_issue(resolved_key, issue_num, project_root)
+            if resolved_key
+            else None
+        )
+        return {
+            "type": "url",
+            "project_key": resolved_key,
+            "task_id": task_id,
+            "issue_number": issue_num,
+            "github_repo": repo_str,
+            "target": target,
+        }
+
+    # 2. タスクID形式 (例: TFG-0005) の判定
+    if ISSUE_ID_PATTERN.match(target) or re.match(r"^[A-Za-z0-9_]+-\d+", target):
+        task_pkey = target.split("-")[0]
+        task_issue_num: Optional[int] = resolve_issue_number_for_task(target, project_root)
+        projects = load_project_registry(project_root)
+        pdata = projects.get(task_pkey, {})
+        return {
+            "type": "task_id",
+            "project_key": task_pkey,
+            "task_id": target,
+            "issue_number": task_issue_num,
+            "github_repo": pdata.get("github_repo"),
+            "target": target,
+        }
+
+    # 3. 単なる数値 (例: 5 or #5) の判定
+    target_clean = target.lstrip("#")
+    if target_clean.isdigit():
+        num_issue: int = int(target_clean)
+        num_pkey: Optional[str] = None
+        if project_hint:
+            num_pkey = resolve_project_key_from_repo_or_name(project_hint, project_root)
+        if not num_pkey:
+            num_pkey = resolve_project_from_cwd(cwd, project_root)
+
+        num_task_id = (
+            resolve_task_id_for_issue(num_pkey, num_issue, project_root) if num_pkey else None
+        )
+        projects = load_project_registry(project_root)
+        pdata = projects.get(num_pkey, {}) if num_pkey else {}
+        return {
+            "type": "issue_number",
+            "project_key": num_pkey,
+            "task_id": num_task_id,
+            "issue_number": num_issue,
+            "github_repo": pdata.get("github_repo"),
+            "target": target,
+        }
+
+    # 4. それ以外（未解決）
+    unknown_pkey: Optional[str] = resolve_project_key_from_repo_or_name(target, project_root)
+    return {
+        "type": "unknown",
+        "project_key": unknown_pkey,
+        "task_id": None,
+        "issue_number": None,
+        "github_repo": None,
+        "target": target,
+    }

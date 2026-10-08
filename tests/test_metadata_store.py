@@ -96,6 +96,41 @@ def test_validate_project_consistency_registry_not_found(tmp_path: Path) -> None
         validate_project_consistency("SBOS-0001", "SBOS", metadata_dir=tmp_path)
 
 
+def test_validate_project_consistency_self_heals_missing_project_json(tmp_path: Path) -> None:
+    """サテライトの docs/project.json が欠落している場合、自動自己修復されて検証がパスすることを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TFG": {
+                "name": "test_file_grep",
+                "dir": "projects/test_file_grep",
+                "meta": "projects/test_file_grep/docs",
+                "github_repo": "xzyozi/test_file_grep",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    sat_dir = tmp_path / "projects" / "test_file_grep"
+    sat_dir.mkdir(parents=True, exist_ok=True)
+
+    # project.json が未存在の状態で呼び出す
+    pjson_path = sat_dir / "docs" / "project.json"
+    assert not pjson_path.exists()
+
+    # 例外なく成功すること
+    validate_project_consistency("TFG-0005", "TFG", metadata_dir=meta_dir, project_root=tmp_path)
+
+    # project.json が自動生成されていること
+    assert pjson_path.exists()
+    pdata = json.loads(pjson_path.read_text(encoding="utf-8"))
+    assert pdata["key"] == "TFG"
+    assert pdata["name"] == "test_file_grep"
+    assert pdata["github_repo"] == "xzyozi/test_file_grep"
+
+
 # ==============================================================================
 # 4. Project Lock Manager Tests
 # ==============================================================================
@@ -473,3 +508,75 @@ def test_mark_task_completed_in_tasks_md(tmp_path: Path) -> None:
     assert (
         lines[4] == "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->"
     )
+
+
+def test_parse_github_issue_url() -> None:
+    """GitHub Issue URL のパース処理を検証する。"""
+    from tools.metadata_store import parse_github_issue_url
+
+    res = parse_github_issue_url("https://github.com/xzyozi/test_file_grep/issues/5")
+    assert res == ("xzyozi/test_file_grep", 5)
+
+    res_param = parse_github_issue_url("https://github.com/org/repo/issues/123#issuecomment-456")
+    assert res_param == ("org/repo", 123)
+
+    assert parse_github_issue_url("invalid-url") is None
+    assert parse_github_issue_url("https://github.com/org/repo/pull/123") is None
+
+
+def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
+    """URL および task_id から project_key, task_id, issue_number が正しく解決されることを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+
+    reg_file = metadata_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TFG": {
+                "name": "test_file_grep",
+                "github_repo": "xzyozi/test_file_grep",
+                "dir": "projects/test_file_grep",
+                "meta": "metadata/projects/TFG",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    sat_docs = sat_dir / "docs"
+    sat_docs.mkdir(parents=True, exist_ok=True)
+
+    # tasks.md に TFG-0005 (issue:#5) を配置
+    tasks_content = "# Tasks\n- [ ] [TFG-0005] パス検証関数を追加 (issue:#5)\n"
+    (sat_docs / "tasks.md").write_text(tasks_content, encoding="utf-8")
+
+    from tools.metadata_store import resolve_target_spec
+
+    # 1. URL からの解決
+    res_url = resolve_target_spec(
+        "https://github.com/xzyozi/test_file_grep/issues/5",
+        project_root=project_root,
+    )
+    assert res_url["type"] == "url"
+    assert res_url["project_key"] == "TFG"
+    assert res_url["task_id"] == "TFG-0005"
+    assert res_url["issue_number"] == 5
+
+    # 2. task_id からの解決
+    res_task = resolve_target_spec("TFG-0005", project_root=project_root)
+    assert res_task["type"] == "task_id"
+    assert res_task["project_key"] == "TFG"
+    assert res_task["task_id"] == "TFG-0005"
+    assert res_task["issue_number"] == 5
+
+    # 3. CWD サテライト配下での数値指定 (5) からの解決
+    res_num = resolve_target_spec(
+        "5",
+        cwd=sat_dir,
+        project_root=project_root,
+    )
+    assert res_num["type"] == "issue_number"
+    assert res_num["project_key"] == "TFG"
+    assert res_num["task_id"] == "TFG-0005"
+    assert res_num["issue_number"] == 5
