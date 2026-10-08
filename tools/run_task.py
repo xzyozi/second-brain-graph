@@ -424,8 +424,15 @@ def main() -> None:
     parser.add_argument(
         "--auto-stash",
         action="store_true",
-        default=False,
-        help="Automatically stash uncommitted changes in satellite repository before execution",
+        default=True,
+        help="Automatically stash uncommitted changes in satellite repository before execution (default: True)",
+    )
+    parser.add_argument(
+        "--no-auto-stash",
+        "--no-stash",
+        action="store_false",
+        dest="auto_stash",
+        help="Disable automatic stashing of uncommitted changes",
     )
     parser.add_argument(
         "--force",

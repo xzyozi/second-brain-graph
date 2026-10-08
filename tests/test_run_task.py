@@ -1,5 +1,6 @@
 """Unit tests for tools/run_task.py wrapper script."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -276,6 +277,65 @@ def test_run_task_main_passes_auto_stash_to_orchestrator(tmp_path: Path) -> None
         assert mock_sub_run.called
         exec_cmd = mock_sub_run.call_args.args[0]
         assert "--auto-stash" in exec_cmd
+
+
+def test_run_task_main_defaults_to_auto_stash_and_supports_no_stash(tmp_path: Path) -> None:
+    """フラグ未指定時にデフォルトで auto_stash=True となり、--no-stash で False になることを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
+
+    (meta_tfg / "project.json").write_text(
+        '{"key": "TFG", "base_branch": "develop"}', encoding="utf-8"
+    )
+    reg_file = metadata_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TFG": {
+                "name": "test_file_grep",
+                "dir": "projects/test_file_grep",
+                "meta": "metadata/projects/TFG",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    from tools.run_task import main
+
+    # 1. 引数なし (デフォルト): auto_stash は True
+    with (
+        patch("sys.argv", ["run_task.py", "TFG-0005"]),
+        patch("tools.run_task.PROJECT_ROOT", project_root),
+        patch("tools.run_task.clean_satellite_repository") as mock_clean,
+        patch("subprocess.run") as mock_sub_run,
+    ):
+        mock_sub_run.return_value = MagicMock(returncode=0)
+        try:
+            main()
+        except SystemExit:
+            pass
+        assert mock_clean.called
+        assert mock_clean.call_args.kwargs.get("auto_stash") is True
+
+    # 2. --no-stash 指定時: auto_stash は False
+    with (
+        patch("sys.argv", ["run_task.py", "TFG-0005", "--no-stash"]),
+        patch("tools.run_task.PROJECT_ROOT", project_root),
+        patch("tools.run_task.clean_satellite_repository") as mock_clean_no,
+        patch("subprocess.run") as mock_sub_run_no,
+    ):
+        mock_sub_run_no.return_value = MagicMock(returncode=0)
+        try:
+            main()
+        except SystemExit:
+            pass
+        assert mock_clean_no.call_args.kwargs.get("auto_stash") is False
 
 
 def test_ensure_satellite_gitignore(tmp_path: Path) -> None:
