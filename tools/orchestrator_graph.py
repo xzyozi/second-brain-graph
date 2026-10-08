@@ -108,6 +108,106 @@ def is_in_git_workspace(cwd: Optional[str]) -> bool:
         return False
 
 
+def get_satellite_python_path(sat_path: Path) -> Path:
+    """サテライトの仮想環境内の Python 実行可能ファイルパスを取得する (OS依存対応)."""
+    if os.name == "nt":
+        return sat_path / ".venv" / "Scripts" / "python.exe"
+    return sat_path / ".venv" / "bin" / "python"
+
+
+def ensure_satellite_environment(cwd: Optional[str]) -> str:
+    """サテライトの仮想環境 (.venv) を検証・自動セットアップし、実行可能な Python パスを返す。
+
+    1. cwd が未指定、または pyproject.toml / requirements.txt が存在しない場合は母艦 Python (sys.executable) を返す。
+    2. サテライトに .venv が存在しない、または Python バイナリがない場合:
+       - pyproject.toml があれば `uv sync --project <cwd> --all-extras` で自動構築。
+       - requirements.txt があれば `uv venv` + `uv pip install -r` で構築。
+    3. オーケストレーターのテスト結果構造化に必要な pytest-json-report の存在を確認し、なければ自動導入。
+    4. 解決された Python パス (str) を返す。失敗時は安全に sys.executable にフォールバック。
+    """
+    if not cwd:
+        return sys.executable
+
+    sat_path = Path(cwd)
+    if not sat_path.exists():
+        return sys.executable
+
+    has_pyproject = (sat_path / "pyproject.toml").is_file()
+    has_requirements = (sat_path / "requirements.txt").is_file()
+    if not (has_pyproject or has_requirements):
+        return sys.executable
+
+    python_bin = get_satellite_python_path(sat_path)
+
+    if not python_bin.exists():
+        logger.info(f"Satellite virtual environment not found in '{cwd}'. Setting up with uv...")
+        try:
+            if has_pyproject:
+                sync_cmd = ["uv", "sync", "--project", str(sat_path), "--all-extras"]
+                res = run_cmd(sync_cmd, timeout=300)
+                if res.returncode != 0:
+                    logger.warning(
+                        f"uv sync --all-extras failed ({res.stderr}). Trying uv sync without extras..."
+                    )
+                    res = run_cmd(["uv", "sync", "--project", str(sat_path)], timeout=300)
+            elif has_requirements:
+                run_cmd(["uv", "venv", str(sat_path / ".venv")], timeout=120)
+                if python_bin.exists():
+                    run_cmd(
+                        [
+                            "uv",
+                            "pip",
+                            "install",
+                            "-r",
+                            str(sat_path / "requirements.txt"),
+                            "--python",
+                            str(python_bin),
+                        ],
+                        timeout=300,
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Failed to auto-setup satellite venv: {e}. Falling back to host python."
+            )
+            return sys.executable
+
+    if not python_bin.exists():
+        logger.warning(
+            f"Satellite python binary still not found at '{python_bin}'. Falling back to host python."
+        )
+        return sys.executable
+
+    # pytest-json-report の自動確認・導入
+    try:
+        chk_report = subprocess.run(
+            [str(python_bin), "-c", "import pytest_jsonreport"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if chk_report.returncode != 0:
+            logger.info("pytest-json-report not found in satellite venv. Installing via uv pip...")
+            run_cmd(
+                ["uv", "pip", "install", "pytest-json-report", "--python", str(python_bin)],
+                timeout=120,
+            )
+    except Exception as e:
+        logger.debug(f"Failed to check/install pytest-json-report: {e}")
+
+    # ruff の自動確認・導入
+    try:
+        chk_ruff = subprocess.run(
+            [str(python_bin), "-c", "import ruff"], capture_output=True, text=True, timeout=10
+        )
+        if chk_ruff.returncode != 0:
+            logger.info("ruff not found in satellite venv. Installing via uv pip...")
+            run_cmd(["uv", "pip", "install", "ruff", "--python", str(python_bin)], timeout=120)
+    except Exception as e:
+        logger.debug(f"Failed to check/install ruff: {e}")
+
+    return str(python_bin)
+
+
 def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
     """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
     target_files: List[str] = []
@@ -283,6 +383,8 @@ class GraphState(TypedDict, total=False):
     plan_conformance_round: int
     review_conformance_status: Optional[str]
     review_conformance_score: Optional[float]
+    empty_diff_detected: Optional[bool]
+    already_satisfied: Optional[bool]
 
 
 def spec_draft_node(state: GraphState) -> GraphState:
@@ -517,11 +619,12 @@ def lint_node(state: GraphState) -> GraphState:
             state["status"] = "lint_passed"
             return state
 
-        cmd = [sys.executable, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
+        python_bin = ensure_satellite_environment(cwd)
+        cmd = [python_bin, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
         # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
-        run_cmd([sys.executable, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
+        run_cmd([python_bin, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
         run_cmd(
-            [sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
+            [python_bin, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
             + targets_to_check,
             cwd=cwd,
             timeout=300,
@@ -634,8 +737,12 @@ def run_pytest_node(state: GraphState) -> GraphState:
                 if candidate not in test_files:
                     test_files.append(candidate)
 
-        # ディスク上に実際に存在するテストファイルのみに絞り込み
-        existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
+        # ディスク上に実際に存在するテストファイルのみに絞り込み（0バイトの空ファイルは未実装として除外）
+        existing_test_files = [
+            tf
+            for tf in test_files
+            if cwd and (Path(cwd) / tf).exists() and (Path(cwd) / tf).stat().st_size > 0
+        ]
 
         # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
         if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
@@ -647,9 +754,10 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
         cmd_test_files = existing_test_files if existing_test_files else test_files
 
+        python_bin = ensure_satellite_environment(cwd)
         # pytest-json-report オプションを付加して対象テストファイルを実行
         cmd = (
-            [sys.executable, "-m", "pytest"]
+            [python_bin, "-m", "pytest"]
             + (cmd_test_files if cmd_test_files else [])
             + ["--json-report", f"--json-report-file={report_file}"]
         )
@@ -875,10 +983,40 @@ def review_node(state: GraphState) -> GraphState:
         return state
 
     impl_plan_text = state.get("impl_plan") or "(No implementation plan provided)"
+
+    diff_prompt_text = diff_text
+    if not diff_text.strip():
+        state["empty_diff_detected"] = True
+        logger.info(
+            f"[{state.get('issue_id')}] No git diff detected in review_node. Checking for already-satisfied implementation."
+        )
+        diff_prompt_text = (
+            "(No git diff detected - changes may already exist in the base codebase)\n\n"
+            "【NOTICE REGARDING EMPTY DIFF】\n"
+            "All static analysis checks (Ruff) and automated tests (Pytest) have PASSED.\n"
+            "If the required specifications and behaviors described in the implementation plan "
+            "are already fully satisfied and present in the target files, you MUST return 'LGTM' "
+            "with a comment confirming that the requirements are already met in the codebase.\n"
+            "Only return 'changes_requested' if the required implementation is genuinely missing."
+        )
+        if cwd:
+            snippets = []
+            for tf in (state.get("target_files") or [])[:3]:
+                tf_path = Path(cwd) / tf
+                if tf_path.exists() and tf_path.is_file():
+                    try:
+                        lines = tf_path.read_text(encoding="utf-8").splitlines()
+                        snippet = "\n".join(lines[:300])
+                        snippets.append(f"--- File: {tf} ---\n{snippet}")
+                    except Exception:
+                        pass
+            if snippets:
+                diff_prompt_text += "\n\nTarget file contents for review:\n" + "\n\n".join(snippets)
+
     user_prompt = (
         f"Review changes for {state['issue_id']}.\n\n"
         f"Implementation Plan:\n{impl_plan_text}\n\n"
-        f"Git diff:\n{diff_text if diff_text else '(No git diff detected)'}"
+        f"Git diff:\n{diff_prompt_text}"
     )
 
     try:
@@ -1263,6 +1401,35 @@ def done_node(state: GraphState) -> GraphState:
                     state["error_category"] = "PR_ERROR"
                     state["error"] = f"git commit failed: {commit_res.stderr}"
                     return state
+            elif state.get("empty_diff_detected"):
+                # 2.5. 既済タスク判定 (Issue #80: review_node で diff が空と判定され、かつ未コミット変更もない場合)
+                logger.info(
+                    f"[{state['issue_id']}] Task had empty diff and no uncommitted changes. "
+                    f"All tests passed and implementation is verified as already satisfied on base branch '{base_branch}'. "
+                    "Marking as COMPLETED."
+                )
+                from tools.metadata_store import mark_task_completed_in_tasks_md
+
+                # 作業ブランチの安全クリーンアップ
+                run_cmd(["git", "checkout", "-f", base_branch], cwd=cwd, timeout=60)
+                chk_branch = run_cmd(
+                    ["git", "rev-parse", "--verify", head_branch], cwd=cwd, timeout=30
+                )
+                if chk_branch.returncode == 0:
+                    run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=30)
+
+                # tasks.md の完了反映 (- [ ] -> - [x])
+                proj_root = Path(cwd).parent.parent if cwd else None
+                mark_task_completed_in_tasks_md(
+                    cwd,
+                    state["issue_id"],
+                    project_key=state.get("project_key"),
+                    project_root=proj_root,
+                )
+
+                state["status"] = "COMPLETED"
+                state["already_satisfied"] = True
+                return state
 
             # 3. リモートへ Fetch & Safe Push (--force-with-lease を使用し、人間が追加したリモートコミットの上書き破壊を予防)
             run_cmd(["git", "fetch", "origin"], cwd=cwd, timeout=60)

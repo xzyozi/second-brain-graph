@@ -12,6 +12,7 @@ tools/run_task.py - 衛星リポジトリのクリーンアップおよび Issue
 
 import argparse
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools.orchestrator_graph import (  # noqa: E402
+    ensure_satellite_environment,
     resolve_project_context,
     validate_project_consistency,
 )
@@ -191,6 +193,28 @@ def sync_base_branch(cwd: str, base_branch: str = "develop") -> None:
         )
 
 
+def ensure_satellite_gitignore(cwd: str) -> None:
+    """サテライトの .gitignore に .venv/ および .aider* が含まれていることを保証する (自己修復)."""
+    gi_path = Path(cwd) / ".gitignore"
+    if not gi_path.exists():
+        return
+    try:
+        content = gi_path.read_text(encoding="utf-8")
+        needed = []
+        if ".venv" not in content:
+            needed.append(".venv/")
+        if ".aider" not in content:
+            needed.append(".aider*")
+        if needed:
+            logger.info(f"Adding {needed} to {gi_path}")
+            new_content = (
+                content.rstrip() + "\n\n# Autonomous worker ignores\n" + "\n".join(needed) + "\n"
+            )
+            gi_path.write_text(new_content, encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to inspect/update {gi_path}: {e}")
+
+
 def clean_satellite_repository(
     cwd: str,
     base_branch: str = "develop",
@@ -203,6 +227,9 @@ def clean_satellite_repository(
 
     # 重要メタデータの事前退避
     metadata_backup = backup_critical_metadata(cwd)
+
+    # 0. .gitignore の自己修復 (.venv, .aider*)
+    ensure_satellite_gitignore(cwd)
 
     # 1. 未コミット変更の事前チェック & 退避/停止
     check_and_safeguard_working_tree(cwd, auto_stash=auto_stash, force=force, issue_id=issue_id)
@@ -223,10 +250,133 @@ def clean_satellite_repository(
     # 5. 未追跡ファイル・フォルダの完全クリーニング
     run_command(["git", "clean", "-fd"], cwd=cwd)
 
+    # 5.5 .aider 関連の過去履歴・キャッシュの完全削除（コンテキスト4万トークン肥大化防止）
+    for aider_artifact in Path(cwd).glob(".aider*"):
+        try:
+            if aider_artifact.is_file():
+                aider_artifact.unlink()
+            elif aider_artifact.is_dir():
+                shutil.rmtree(aider_artifact)
+        except Exception as e:
+            logger.warning(f"Failed to clean aider artifact {aider_artifact}: {e}")
+
     # 6. 未追跡だった重要メタデータが消去された場合は自己修復復元
     restore_critical_metadata(cwd, metadata_backup)
 
+    # 7. サテライト仮想環境 (.venv) の事前検証・自動セットアップ
+    ensure_satellite_environment(cwd)
+
     logger.info("Satellite repository cleaning completed successfully.")
+
+
+def reset_task_environment(
+    target_issue_id: str,
+    project_key: str,
+    satellite_cwd: str,
+    base_branch: str = "develop",
+    auto_stash: bool = False,
+    force: bool = False,
+    project_root: Optional[Path] = None,
+) -> None:
+    """指定 Issue の実行状態を完全に初期化（リセット）する (Issue #80)。
+
+    処理手順:
+    1. state.json から該当 Issue のエントリを削除 (reset_task_state)
+    2. サテライト作業ツリーの未コミット変更を退避または確認
+    3. 作業ブランチ (sbos/<ISSUE_ID>) を削除し、base_branch (develop) へ切り替え
+    4. サテライトの未追跡残骸 (git clean -fd) のクリーンアップ
+    5. 過去の失敗レポート (FAILURE_REPORT_<ISSUE_ID>.md) のクリーンアップ
+    6. プロジェクトロック (.lock) の解放 (残留時)
+    """
+    logger.info(
+        f"=== Resetting task environment for '{target_issue_id}' (Project: {project_key}) ==="
+    )
+    from tools.metadata_store import force_unlock_project, reset_task_state
+
+    root = project_root or PROJECT_ROOT
+
+    # 1. state.json のエントリ初期化
+    reset_ok = reset_task_state(project_key, target_issue_id)
+    if reset_ok:
+        logger.info(f"Task state cleared from state.json for {target_issue_id}.")
+    else:
+        logger.info(f"No existing state entry found for {target_issue_id} in state.json.")
+
+    # 2. サテライト作業ツリーの安全確認と作業ブランチの削除
+    if satellite_cwd and Path(satellite_cwd).exists():
+        check_and_safeguard_working_tree(
+            satellite_cwd, auto_stash=auto_stash, force=force, issue_id=target_issue_id
+        )
+
+        metadata_backup = backup_critical_metadata(satellite_cwd)
+
+        # 3. base_branch への切り替えと作業ブランチの削除
+        work_branch = f"sbos/{target_issue_id}"
+        logger.info(f"Checking out base branch '{base_branch}' in satellite repository...")
+        ensure_satellite_base_branch(satellite_cwd, base_branch=base_branch)
+
+        # ローカル作業ブランチの削除
+        chk_branch = subprocess.run(
+            ["git", "rev-parse", "--verify", work_branch],
+            cwd=satellite_cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if chk_branch.returncode == 0:
+            logger.info(f"Deleting leftover local work branch '{work_branch}'...")
+            del_res = subprocess.run(
+                ["git", "branch", "-D", work_branch],
+                cwd=satellite_cwd,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if del_res.returncode == 0:
+                logger.info(f"Deleted work branch '{work_branch}'.")
+            else:
+                logger.warning(f"Failed to delete branch '{work_branch}': {del_res.stderr}")
+
+        # サテライトのクリーンアップ (git reset & clean)
+        logger.info(f"Cleaning satellite repository at '{satellite_cwd}'...")
+        try:
+            run_command(["git", "reset", "--hard", f"origin/{base_branch}"], cwd=satellite_cwd)
+        except subprocess.CalledProcessError:
+            run_command(["git", "reset", "--hard", "HEAD"], cwd=satellite_cwd)
+        run_command(["git", "clean", "-fd"], cwd=satellite_cwd)
+        restore_critical_metadata(satellite_cwd, metadata_backup)
+        ensure_satellite_gitignore(satellite_cwd)
+        ensure_satellite_environment(satellite_cwd)
+
+    # 4. 失敗レポートのクリーンアップ
+    failure_report_candidates = [
+        root
+        / "metadata"
+        / "projects"
+        / project_key
+        / "issues"
+        / f"FAILURE_REPORT_{target_issue_id}.md",
+        root / "metadata" / "projects" / project_key / f"FAILURE_REPORT_{target_issue_id}.md",
+    ]
+    if satellite_cwd:
+        failure_report_candidates.append(
+            Path(satellite_cwd) / "docs" / "issues" / f"FAILURE_REPORT_{target_issue_id}.md"
+        )
+    for rep in failure_report_candidates:
+        if rep and rep.exists():
+            try:
+                rep.unlink()
+                logger.info(f"Removed failure report: {rep}")
+            except Exception as e:
+                logger.warning(f"Failed to remove failure report {rep}: {e}")
+
+    # 5. プロジェクトロックの解放 (もし残留していれば)
+    try:
+        force_unlock_project(project_key)
+    except Exception:
+        pass
+
+    logger.info(f"=== Reset completed successfully for '{target_issue_id}' ===")
 
 
 def main() -> None:
@@ -284,6 +434,18 @@ def main() -> None:
         help="Force cleanup of uncommitted changes in satellite repository without safeguarding",
     )
     parser.add_argument(
+        "--reset",
+        action="store_true",
+        default=False,
+        help="Reset task state in state.json, remove work branch, and clean satellite workspace without re-running",
+    )
+    parser.add_argument(
+        "--retry",
+        action="store_true",
+        default=False,
+        help="Reset task state and satellite branch cleanly, then immediately re-run with --fresh",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -324,6 +486,15 @@ def main() -> None:
     logger.info(f"Target Issue: {target_issue_id} | Project: {project_key} | CWD: {satellite_cwd}")
 
     if args.dry_run:
+        if args.reset or args.retry:
+            logger.info("[DRY RUN] Would reset task environment:")
+            logger.info(f"  - Clear state.json entry for '{target_issue_id}'")
+            logger.info(f"  - Delete work branch 'sbos/{target_issue_id}' in '{satellite_cwd}'")
+            logger.info(f"  - Reset satellite to origin/{base_branch} and git clean -fd")
+            logger.info(f"  - Remove failure report for '{target_issue_id}'")
+            if args.reset:
+                return
+
         logger.info("[DRY RUN] Would execute satellite cleanup:")
         if args.auto_stash:
             logger.info("  - git stash push -u (auto-stash)")
@@ -340,7 +511,7 @@ def main() -> None:
             "--project-key",
             project_key,
         ]
-        if args.fresh:
+        if args.fresh or args.retry:
             orch_cmd.append("--fresh")
         if args.resume:
             orch_cmd.append("--resume")
@@ -349,8 +520,33 @@ def main() -> None:
         logger.info(f"[DRY RUN] Would execute orchestrator command: {' '.join(orch_cmd)}")
         return
 
-    # 3. 衛星リポジトリのクリーンアップの実行 (--resume 指定時は変更を維持するためスキップ)
-    should_clean = args.clean and not args.resume
+    # 2.5. リセットまたはリトライの実行 (Issue #80)
+    if args.reset or args.retry:
+        try:
+            reset_task_environment(
+                target_issue_id,
+                project_key,
+                satellite_cwd,
+                base_branch=base_branch,
+                auto_stash=args.auto_stash,
+                force=args.force,
+                project_root=PROJECT_ROOT,
+            )
+        except Exception as e:
+            logger.error(f"Task reset failed: {e}")
+            sys.exit(1)
+
+        if args.reset:
+            logger.info(
+                "Task reset completed successfully. Skipping execution (--reset specified)."
+            )
+            return
+
+        # --retry の場合は fresh モードとして続行
+        args.fresh = True
+
+    # 3. 衛星リポジトリのクリーンアップの実行 (--resume 指定時、または --retry 済みの場合はスキップ)
+    should_clean = args.clean and not args.resume and not args.retry
     if should_clean:
         try:
             clean_satellite_repository(

@@ -267,6 +267,9 @@ def _execute_aider_single(
             "--no-auto-commits",
             "--yes-always",
             "--no-show-model-warnings",
+            "--no-restore-chat-history",
+            "--map-tokens",
+            "1024",
             "--edit-format",
             format_to_run,
         ]
