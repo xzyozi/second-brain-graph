@@ -152,6 +152,30 @@ def extract_github_repo(url: Optional[str]) -> Optional[str]:
     return None
 
 
+def extract_repo_name(url_or_repo: Optional[str]) -> Optional[str]:
+    """Extract repository name (basename) from git URL or owner/repo shorthand."""
+    if not url_or_repo:
+        return None
+    cleaned = url_or_repo.strip().rstrip("/")
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[:-4]
+    if "/" in cleaned:
+        return cleaned.split("/")[-1]
+    if ":" in cleaned:
+        return cleaned.split(":")[-1]
+    return cleaned
+
+
+def normalize_git_url(url_or_repo: Optional[str]) -> Optional[str]:
+    """Normalize owner/repo shorthand to full GitHub HTTPS URL."""
+    if not url_or_repo:
+        return None
+    cleaned = url_or_repo.strip()
+    if re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", cleaned):
+        return f"https://github.com/{cleaned}"
+    return cleaned
+
+
 def get_git_remote_url(repo_dir: str) -> Optional[str]:
     """Get remote origin URL of a git directory if present."""
     if not os.path.exists(os.path.join(repo_dir, ".git")):
@@ -422,7 +446,7 @@ def setup_github_labels(github_repo: str) -> None:
 
 def register_project(
     key: str,
-    name: str,
+    name: Optional[str] = None,
     directory: str = "",
     base_branch: str = "develop",
     description: str = "",
@@ -433,27 +457,40 @@ def register_project(
     root_dir: str = ".",
 ) -> Dict[str, Any]:
     """Register a new satellite project into Second Brain OS."""
+    if not key or not key.strip():
+        raise ValueError("Project key must not be empty.")
     key = key.strip().upper()
-    name = name.strip()
-    if not key or not name:
-        raise ValueError("Project key and name must not be empty.")
 
+    # Normalize Git URL and extract repo name
+    normalized_url = normalize_git_url(repo_url)
+    repo_name = extract_repo_name(normalized_url) or extract_repo_name(github_repo)
+
+    # Auto-derive project name if omitted
+    if not name or not name.strip():
+        name = repo_name or key.lower()
+    else:
+        name = name.strip()
+
+    # Auto-derive directory path if omitted
     if not directory:
-        directory = f"projects/{key.lower()}"
+        if repo_name:
+            directory = f"projects/{repo_name}"
+        else:
+            directory = f"projects/{key.lower()}"
 
     sat_path = os.path.join(root_dir, directory)
 
     # 1. Clone repository if repo_url provided and directory does not exist
-    if repo_url and not os.path.exists(sat_path):
-        logger.info(f"Cloning repository {repo_url} into {sat_path}...")
+    if normalized_url and not os.path.exists(sat_path):
+        logger.info(f"Cloning repository {normalized_url} into {sat_path}...")
         try:
-            subprocess.run(["git", "clone", repo_url, sat_path], check=True)
+            subprocess.run(["git", "clone", normalized_url, sat_path], check=True)
         except Exception as e:
             logger.error(f"Failed to clone repository: {e}")
             raise
 
     # Determine github_repo from parameter, repo_url, or satellite git remote
-    resolved_github_repo = github_repo or extract_github_repo(repo_url)
+    resolved_github_repo = github_repo or extract_github_repo(normalized_url)
     if not resolved_github_repo and os.path.exists(sat_path):
         remote_url = get_git_remote_url(sat_path)
         resolved_github_repo = extract_github_repo(remote_url)
@@ -467,7 +504,7 @@ def register_project(
     os.makedirs(docs_path, exist_ok=True)
     logger.info(f"Ensured satellite docs directory: {docs_path}")
 
-    # 3. Create satellite docs/project.json (SSOT)
+    # 4. Create satellite docs/project.json (SSOT)
     proj_json_path = os.path.join(docs_path, "project.json")
     now_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     proj_data: Dict[str, Any] = {}
@@ -492,7 +529,7 @@ def register_project(
         json.dump(proj_data, f, indent=2, ensure_ascii=False)
     logger.info(f"Updated satellite project config at {proj_json_path}")
 
-    # 4. Create satellite docs/tasks.md if not present
+    # 5. Create satellite docs/tasks.md if not present
     tasks_md_path = os.path.join(docs_path, "tasks.md")
     if not os.path.exists(tasks_md_path):
         with open(tasks_md_path, "w", encoding="utf-8") as f:
@@ -501,7 +538,7 @@ def register_project(
     else:
         logger.info(f"Satellite tasks.md already exists at {tasks_md_path}")
 
-    # 5. Create satellite docs/issues/ and _template.md
+    # 6. Create satellite docs/issues/ and _template.md
     issues_dir = os.path.join(docs_path, "issues")
     os.makedirs(issues_dir, exist_ok=True)
     template_path = os.path.join(issues_dir, "_template.md")
@@ -511,18 +548,27 @@ def register_project(
             f.write(template_content)
         logger.info(f"Initialized issue template at {template_path}")
 
-    # 6. Ensure satellite has issue auto-tagging workflow (.github/workflows/issue-auto-tag.yml)
+    # 7. Ensure satellite has issue auto-tagging workflow (.github/workflows/issue-auto-tag.yml)
     setup_satellite_workflow(sat_path)
 
-    # 7. Commit and push initial files to base_branch in satellite repo
+    # 8. Ensure satellite .gitignore has .venv/ and .aider*
+    if os.path.exists(sat_path):
+        try:
+            from tools.run_task import ensure_satellite_gitignore
+
+            ensure_satellite_gitignore(sat_path)
+        except Exception as e:
+            logger.debug(f"Could not update satellite .gitignore: {e}")
+
+    # 9. Commit and push initial files to base_branch in satellite repo
     if os.path.exists(os.path.join(sat_path, ".git")):
         commit_and_push_initial_files(sat_path, base_branch=base_branch, push=push)
 
-    # 8. Optionally setup standard GitHub labels on satellite repository
+    # 10. Optionally setup standard GitHub labels on satellite repository
     if setup_labels and resolved_github_repo:
         setup_github_labels(resolved_github_repo)
 
-    # 9. Update host metadata/.project-registry.json
+    # 11. Update host metadata/.project-registry.json
     reg_path = os.path.join(root_dir, "metadata", ".project-registry.json")
     os.makedirs(os.path.dirname(reg_path), exist_ok=True)
     registry: Dict[str, Any] = {"version": "1.0", "projects": {}}
@@ -564,24 +610,41 @@ def register_project(
 def main() -> None:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(
-        description="Add a new satellite project to Second Brain OS (Satellite Docs Ownership)."
+        description="Add a new satellite project to Second Brain OS (Git URL Driven)."
+    )
+    parser.add_argument(
+        "target",
+        nargs="?",
+        help="Git repository URL (e.g. https://github.com/owner/repo) or owner/repo shorthand (Positional argument)",
     )
     parser.add_argument(
         "--key", "-k", required=True, help="Project ID key prefix (e.g. EC, MOB, NEW)"
     )
-    parser.add_argument("--name", "-n", required=True, help="Human-readable project name")
     parser.add_argument(
-        "--dir", "-d", default="", help="Satellite directory path (e.g. projects/new-service)"
+        "--name",
+        "-n",
+        default=None,
+        help="Human-readable project name (auto-inferred from repo name if omitted)",
+    )
+    parser.add_argument(
+        "--dir",
+        "-d",
+        default="",
+        help="Satellite directory path (e.g. projects/new-service, auto-inferred to projects/<repo> if omitted)",
     )
     parser.add_argument(
         "--base-branch", "-b", default="develop", help="Base branch name (default: develop)"
     )
     parser.add_argument("--desc", default="", help="Project description")
-    parser.add_argument("--repo", default=None, help="Git repository URL to clone if not present")
+    parser.add_argument(
+        "--repo",
+        default=None,
+        help="Git repository URL to clone if not present (alternative to positional target)",
+    )
     parser.add_argument(
         "--github-repo",
         default=None,
-        help="GitHub repository name in 'owner/repo' format (auto-inferred from --repo if omitted)",
+        help="GitHub repository name in 'owner/repo' format (auto-inferred from Git URL if omitted)",
     )
     parser.add_argument(
         "--setup-labels",
@@ -598,6 +661,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    repo_input = normalize_git_url(args.target or args.repo)
+
     try:
         entry = register_project(
             key=args.key,
@@ -605,7 +670,7 @@ def main() -> None:
             directory=args.dir,
             base_branch=args.base_branch,
             description=args.desc,
-            repo_url=args.repo,
+            repo_url=repo_input,
             github_repo=args.github_repo,
             setup_labels=args.setup_labels,
             push=args.push,
