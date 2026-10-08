@@ -12,6 +12,9 @@ from tools.add_project import (
     detect_git_default_branch,
     ensure_base_branch,
     extract_github_repo,
+    extract_repo_name,
+    main,
+    normalize_git_url,
     register_project,
 )
 
@@ -261,3 +264,131 @@ def test_register_project_git_integration(tmp_path: pytest.TempPathFactory) -> N
         check=True,
     )
     assert "chore(init): initialize Second Brain satellite project configuration" in res_log.stdout
+
+
+def test_extract_repo_name() -> None:
+    """extract_repo_name の各パターンを検証する。"""
+    assert extract_repo_name("https://github.com/owner/my-app.git") == "my-app"
+    assert extract_repo_name("https://github.com/owner/my-app") == "my-app"
+    assert extract_repo_name("git@github.com:owner/my-app.git") == "my-app"
+    assert extract_repo_name("owner/my-app") == "my-app"
+    assert extract_repo_name("my-app") == "my-app"
+    assert extract_repo_name(None) is None
+
+
+def test_normalize_git_url() -> None:
+    """normalize_git_url の正規化動作を検証する。"""
+    assert normalize_git_url("owner/repo") == "https://github.com/owner/repo"
+    assert normalize_git_url("https://github.com/owner/repo") == "https://github.com/owner/repo"
+    assert normalize_git_url(None) is None
+
+
+def test_register_project_auto_derives_dir_and_name_from_url(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Git URL を渡した際に --name と --dir が自動導出されることを検証する。"""
+    root_dir = str(tmp_path)
+    # ディレクトリを事前に作っておき clone をスキップ
+    sat_dir = os.path.join(root_dir, "projects", "service-x")
+    os.makedirs(sat_dir, exist_ok=True)
+
+    entry = register_project(
+        key="SX",
+        repo_url="https://github.com/xzyozi/service-x.git",
+        root_dir=root_dir,
+        push=False,
+    )
+
+    assert entry["name"] == "service-x"
+    assert entry["dir"] == "projects/service-x"
+    assert entry["meta"] == "projects/service-x/docs"
+    assert entry["github_repo"] == "xzyozi/service-x"
+
+    proj_json = os.path.join(sat_dir, "docs", "project.json")
+    with open(proj_json, "r", encoding="utf-8") as f:
+        pdata = json.load(f)
+        assert pdata["key"] == "SX"
+        assert pdata["name"] == "service-x"
+        assert pdata["github_repo"] == "xzyozi/service-x"
+
+
+def test_register_project_auto_clones_when_missing(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """サテライトディレクトリが存在しない場合に git clone が実行されることを検証する。"""
+    root_dir = str(tmp_path)
+    executed_cmds = []
+
+    def mock_run(cmd: list[str], **kwargs: object) -> MagicMock:
+        executed_cmds.append(" ".join(cmd))
+        if cmd[0:2] == ["git", "clone"]:
+            # クローン先ディレクトリを作成
+            target_path = cmd[3]
+            os.makedirs(os.path.join(target_path, ".git"), exist_ok=True)
+            return MagicMock(returncode=0)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_run):
+        entry = register_project(
+            key="CLONE",
+            repo_url="https://github.com/xzyozi/remote-repo.git",
+            root_dir=root_dir,
+            push=False,
+        )
+
+    assert entry["name"] == "remote-repo"
+    assert entry["dir"] == "projects/remote-repo"
+    assert any("git clone https://github.com/xzyozi/remote-repo.git" in c for c in executed_cmds)
+
+
+def test_add_project_main_positional_target(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """main() で位置引数に Git URL と --key のみを指定して登録が成功することを検証する。"""
+    root_dir = str(tmp_path)
+    sat_dir = os.path.join(root_dir, "projects", "pos-app")
+    os.makedirs(sat_dir, exist_ok=True)
+
+    with (
+        patch("sys.argv", ["add_project.py", "xzyozi/pos-app", "--key", "POS", "--no-push"]),
+        patch("tools.add_project.register_project") as mock_reg,
+    ):
+        mock_reg.return_value = {"key": "POS", "name": "pos-app", "dir": "projects/pos-app"}
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        assert mock_reg.called
+        kwargs = mock_reg.call_args.kwargs
+        assert kwargs["key"] == "POS"
+        assert kwargs["repo_url"] == "https://github.com/xzyozi/pos-app"
+        assert kwargs["name"] is None
+        assert kwargs["directory"] == ""
+        assert kwargs["push"] is False
+
+
+def test_register_project_ensures_gitignore(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """サテライト登録時に .gitignore に .venv/ および .aider* が設定されることを検証する。"""
+    root_dir = str(tmp_path)
+    sat_dir = os.path.join(root_dir, "projects", "gi_app")
+    os.makedirs(sat_dir, exist_ok=True)
+
+    gitignore = os.path.join(sat_dir, ".gitignore")
+    with open(gitignore, "w", encoding="utf-8") as f:
+        f.write("# existing\n")
+
+    register_project(
+        key="GI",
+        name="GI App",
+        directory="projects/gi_app",
+        push=False,
+        root_dir=root_dir,
+    )
+
+    with open(gitignore, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert ".venv/" in content
+    assert ".aider*" in content
