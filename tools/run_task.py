@@ -12,6 +12,7 @@ tools/run_task.py - 衛星リポジトリのクリーンアップおよび Issue
 
 import argparse
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -248,6 +249,16 @@ def clean_satellite_repository(
 
     # 5. 未追跡ファイル・フォルダの完全クリーニング
     run_command(["git", "clean", "-fd"], cwd=cwd)
+
+    # 5.5 .aider 関連の過去履歴・キャッシュの完全削除（コンテキスト4万トークン肥大化防止）
+    for aider_artifact in Path(cwd).glob(".aider*"):
+        try:
+            if aider_artifact.is_file():
+                aider_artifact.unlink()
+            elif aider_artifact.is_dir():
+                shutil.rmtree(aider_artifact)
+        except Exception as e:
+            logger.warning(f"Failed to clean aider artifact {aider_artifact}: {e}")
 
     # 6. 未追跡だった重要メタデータが消去された場合は自己修復復元
     restore_critical_metadata(cwd, metadata_backup)

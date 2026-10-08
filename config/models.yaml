@@ -25,9 +25,9 @@ models:
 aider:
   description: "Aider 自動コード編集用モデル設定"
   no_auto_commits: true       # オーケストレーター側で境界検証とアトミックコミットを統制するため無効化
-  edit_format: "hybrid"       # whole / diff / udiff / hybrid (ファイル行数に応じた自動切替)
-  hybrid_line_threshold: 100  # 100行未満は安全な whole、100行以上は高速な diff を試行
-  fallback_to_whole: true     # diff 失敗時に安全に whole へ自動フォールバック
+  edit_format: "diff"         # diff で高速・安全に差分編集 (wholeによるCoT思考爆発と18分超タイムアウトを防止)
+  hybrid_line_threshold: 0    # 常に diff を優先して巨大トークン生成を防止
+  fallback_to_whole: false    # ローカルLLMで whole は CoT 爆発・パース不能リスクがあるため原則無効化
   timeout: 1200               # 複数ファイルの推論・編集を考慮し十分なタイムアウト (秒) を確保
 
 # GPU 排他リースおよびバックエンドルーティング

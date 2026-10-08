@@ -737,8 +737,12 @@ def run_pytest_node(state: GraphState) -> GraphState:
                 if candidate not in test_files:
                     test_files.append(candidate)
 
-        # ディスク上に実際に存在するテストファイルのみに絞り込み
-        existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
+        # ディスク上に実際に存在するテストファイルのみに絞り込み（0バイトの空ファイルは未実装として除外）
+        existing_test_files = [
+            tf
+            for tf in test_files
+            if cwd and (Path(cwd) / tf).exists() and (Path(cwd) / tf).stat().st_size > 0
+        ]
 
         # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
         if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
