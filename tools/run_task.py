@@ -26,6 +26,7 @@ logger = logging.getLogger("run_task")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from tools.metadata_store import resolve_target_spec  # noqa: E402
 from tools.orchestrator_graph import (  # noqa: E402
     ensure_satellite_environment,
     resolve_project_context,
@@ -461,12 +462,23 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    target_issue_id = args.issue_id or args.issue_id_opt
-    if not target_issue_id:
-        logger.error("Error: issue_id is required. Usage: python tools/run_task.py TFG-0006")
+    raw_target = args.issue_id or args.issue_id_opt
+    if not raw_target:
+        logger.error(
+            "Error: issue_id is required. Usage: python tools/run_task.py TFG-0006 or <GitHub Issue URL>"
+        )
         sys.exit(1)
 
-    project_key = args.project_key
+    spec_res = resolve_target_spec(
+        raw_target,
+        project_hint=args.project_key,
+        cwd=Path.cwd(),
+        project_root=PROJECT_ROOT,
+    )
+
+    project_key = args.project_key or spec_res.get("project_key")
+    target_issue_id = spec_res.get("task_id") or raw_target
+
     if not project_key and "-" in target_issue_id:
         project_key = target_issue_id.split("-")[0]
 

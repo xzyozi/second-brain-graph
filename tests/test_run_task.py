@@ -477,3 +477,62 @@ def test_run_task_main_retry(tmp_path: Path) -> None:
         assert mock_sub_run.called
         exec_cmd = mock_sub_run.call_args.args[0]
         assert "--fresh" in exec_cmd
+
+
+def test_run_task_main_resolves_url_and_cwd(tmp_path: Path) -> None:
+    """run_task.py の位置引数に GitHub Issue URL を指定した場合に、
+    自動的にプロジェクトキーとタスクIDが解決されてオーケストレーターに渡されることを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
+
+    (meta_tfg / "project.json").write_text(
+        '{"key": "TFG", "base_branch": "develop"}', encoding="utf-8"
+    )
+    reg_data = {
+        "projects": {
+            "TFG": {
+                "name": "test_file_grep",
+                "github_repo": "xzyozi/test_file_grep",
+                "dir": "projects/test_file_grep",
+                "meta": "metadata/projects/TFG",
+            }
+        }
+    }
+    (metadata_dir / ".project-registry.json").write_text(
+        json.dumps(reg_data), encoding="utf-8"
+    )
+
+    sat_docs = sat_dir / "docs"
+    sat_docs.mkdir(parents=True, exist_ok=True)
+    (sat_docs / "tasks.md").write_text(
+        "- [ ] [TFG-0005] パス検証関数を追加 (issue:#5)\n", encoding="utf-8"
+    )
+
+    test_args = ["run_task.py", "https://github.com/xzyozi/test_file_grep/issues/5"]
+
+    with (
+        patch("sys.argv", test_args),
+        patch("tools.run_task.PROJECT_ROOT", project_root),
+        patch("tools.run_task.clean_satellite_repository") as mock_clean,
+        patch("subprocess.run") as mock_sub_run,
+    ):
+        mock_sub_run.return_value = MagicMock(returncode=0)
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        assert mock_clean.called
+        assert mock_sub_run.called
+        exec_cmd = mock_sub_run.call_args.args[0]
+        # 引数に --issue-id TFG-0005 --project-key TFG が渡されていること
+        assert "TFG-0005" in exec_cmd
+        assert "TFG" in exec_cmd
+

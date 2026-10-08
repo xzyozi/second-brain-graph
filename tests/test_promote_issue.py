@@ -249,3 +249,54 @@ def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.Mon
     assert "- [ ] 実装タスク1" in spec_content
     assert "- [ ] 実装タスク2" in spec_content
     assert "- `src/main.py`" in spec_content
+
+
+def test_promote_issue_main_url_driven(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() が GitHub Issue URL を位置引数に受け取って正常に実行されることを検証する。"""
+    import json
+    from unittest.mock import patch
+
+    root_dir = tmp_path
+    sat_dir = root_dir / "projects" / "test_proj"
+    sat_docs = sat_dir / "docs"
+    sat_docs.mkdir(parents=True, exist_ok=True)
+
+    meta_dir = root_dir / "metadata"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_file.write_text(
+        json.dumps({
+            "projects": {
+                "TP": {
+                    "name": "test_proj",
+                    "github_repo": "xzyozi/test_proj",
+                    "dir": "projects/test_proj",
+                    "meta": "metadata/projects/TP",
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    mock_issue = {
+        "number": 42,
+        "title": "URLからの機能改善",
+        "body": "## 2. 仕様\n- [ ] **案 1 (推奨): 方針1**\n",
+        "labels": [{"name": "stage:ideation"}],
+    }
+    monkeypatch.setattr(promote_issue, "fetch_issue", lambda _repo, _num: mock_issue)
+    monkeypatch.setattr(promote_issue.subprocess, "run", lambda *a, **kw: None)
+
+    with (
+        patch("sys.argv", ["promote_issue.py", "https://github.com/xzyozi/test_proj/issues/42", "--dry-run"]),
+        patch("pathlib.Path.cwd", return_value=root_dir),
+        patch("tools.promote_issue.Path", return_value=root_dir),
+    ):
+        # promote_issue(root_dir=...) を patch して呼び出し確認
+        with patch("tools.promote_issue.promote_issue", return_value=True) as mock_promote:
+            promote_issue.main()
+            assert mock_promote.called
+            call_kwargs = mock_promote.call_args.kwargs
+            assert call_kwargs["target_project"] == "xzyozi/test_proj"
+            assert call_kwargs["issue_num"] == 42
+
