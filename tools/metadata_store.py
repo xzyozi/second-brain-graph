@@ -116,6 +116,46 @@ def get_runtime_cache_dir(
     return cache_dir
 
 
+def self_heal_satellite_project_json(
+    project_key: str,
+    proj_entry: dict[str, Any],
+    project_root: Path,
+) -> Optional[Path]:
+    """サテライトの docs/project.json が未存在の場合、.project-registry.json 情報から自己修復生成する。"""
+    dir_rel = proj_entry.get("dir")
+    if not dir_rel:
+        return None
+    sat_dir = project_root / dir_rel
+    if not sat_dir.exists():
+        return None
+
+    docs_dir = sat_dir / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    proj_json_path = docs_dir / "project.json"
+
+    now_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    proj_data = {
+        "key": project_key,
+        "name": proj_entry.get("name", project_key),
+        "base_branch": proj_entry.get("base_branch", "develop"),
+        "created_at": now_date,
+        "description": proj_entry.get("description", f"{proj_entry.get('name', project_key)} satellite project"),
+    }
+    if "github_repo" in proj_entry:
+        proj_data["github_repo"] = proj_entry["github_repo"]
+
+    try:
+        proj_json_path.write_text(
+            json.dumps(proj_data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        logger.info(f"Self-healed: created missing project.json at '{proj_json_path}'.")
+        return proj_json_path
+    except Exception as e:
+        logger.warning(f"Failed to self-heal project.json at '{proj_json_path}': {e}")
+        return None
+
+
 def validate_project_consistency(
     issue_id: str,
     project_key: str,
@@ -125,6 +165,7 @@ def validate_project_consistency(
     """Issue ID 形式、プレフィックス、CLI project_key、台帳キー、
     ディレクトリ、project.json、project.json["key"] の必須存在と一致性を検証する (MULTI-001 §2②・§4)。
     サテライト（<dir>/docs/project.json）または母艦（<meta>/project.json）の存在を許容・検証する。
+    欠落している場合は自己修復を試行する (Zero-Failure 実行)。
     """
     if not validate_issue_id(issue_id):
         raise ValueError(
@@ -172,6 +213,12 @@ def validate_project_consistency(
             fallback_proj_json = meta_dir_path / "project.json"
             if fallback_proj_json.exists():
                 candidate_proj_json = fallback_proj_json
+
+    # 探索失敗時: サテライトディレクトリが存在すれば自己修復を試行 (Zero-Failure)
+    if candidate_proj_json is None:
+        healed_path = self_heal_satellite_project_json(project_key, proj_entry, project_root)
+        if healed_path and healed_path.exists():
+            candidate_proj_json = healed_path
 
     if candidate_proj_json is None:
         if not meta_rel and not dir_rel:

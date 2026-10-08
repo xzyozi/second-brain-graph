@@ -96,6 +96,44 @@ def test_validate_project_consistency_registry_not_found(tmp_path: Path) -> None
         validate_project_consistency("SBOS-0001", "SBOS", metadata_dir=tmp_path)
 
 
+def test_validate_project_consistency_self_heals_missing_project_json(tmp_path: Path) -> None:
+    """サテライトの docs/project.json が欠落している場合、自動自己修復されて検証がパスすることを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TFG": {
+                "name": "test_file_grep",
+                "dir": "projects/test_file_grep",
+                "meta": "projects/test_file_grep/docs",
+                "github_repo": "xzyozi/test_file_grep",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    sat_dir = tmp_path / "projects" / "test_file_grep"
+    sat_dir.mkdir(parents=True, exist_ok=True)
+
+    # project.json が未存在の状態で呼び出す
+    pjson_path = sat_dir / "docs" / "project.json"
+    assert not pjson_path.exists()
+
+    # 例外なく成功すること
+    validate_project_consistency(
+        "TFG-0005", "TFG", metadata_dir=meta_dir, project_root=tmp_path
+    )
+
+    # project.json が自動生成されていること
+    assert pjson_path.exists()
+    pdata = json.loads(pjson_path.read_text(encoding="utf-8"))
+    assert pdata["key"] == "TFG"
+    assert pdata["name"] == "test_file_grep"
+    assert pdata["github_repo"] == "xzyozi/test_file_grep"
+
+
+
 # ==============================================================================
 # 4. Project Lock Manager Tests
 # ==============================================================================
