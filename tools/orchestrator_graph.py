@@ -8,6 +8,7 @@ Rev.2.7 〜 新アーキテクチャ。
 """
 
 import argparse
+import fnmatch
 import json
 import logging
 import os
@@ -109,6 +110,49 @@ def is_in_git_workspace(cwd: Optional[str]) -> bool:
         return res.returncode == 0 and res.stdout.strip() == "true"
     except Exception:
         return False
+
+
+#: dirty 判定と Resume の WIP コミットから除外する生成物のパターン (Issue #92)。
+#: パスの各要素 (ディレクトリ名・ファイル名) に対して fnmatch で照合する。
+GENERATED_ARTIFACT_PATTERNS: tuple[str, ...] = (
+    ".aider*",
+    ".pytest_cache",
+    "__pycache__",
+    ".venv",
+    "*.pyc",
+    ".ruff_cache",
+    ".mypy_cache",
+)
+
+
+def porcelain_path(line: str) -> str:
+    """`git status --porcelain` の 1 行からパスを取り出す (リネームは新パス、引用符は除去)。"""
+    path = line[3:] if len(line) > 3 else ""
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path.strip().strip('"')
+
+
+def is_generated_artifact_path(path: str) -> bool:
+    """パスのいずれかの要素が生成物パターンに一致するか判定する (部分文字列一致は使わない)。"""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return any(
+        fnmatch.fnmatchcase(part, pattern)
+        for part in parts
+        for pattern in GENERATED_ARTIFACT_PATTERNS
+    )
+
+
+def build_wip_pathspec() -> List[str]:
+    """生成物を除外した `git add -A` 用の pathspec を返す。
+
+    `**/<pattern>` でどの階層の同名要素も、`**/<pattern>/**` でその配下も除外する。
+    """
+    excludes: List[str] = []
+    for pattern in GENERATED_ARTIFACT_PATTERNS:
+        excludes.append(f":(exclude,glob)**/{pattern}")
+        excludes.append(f":(exclude,glob)**/{pattern}/**")
+    return ["--", ".", *excludes]
 
 
 def get_satellite_python_path(sat_path: Path) -> Path:
@@ -1815,11 +1859,7 @@ def execute_issue(
                     dirty_lines = [
                         line
                         for line in init_status.stdout.splitlines()
-                        if line.strip()
-                        and not any(
-                            ignored in line
-                            for ignored in [".aider", ".pytest_cache", "__pycache__"]
-                        )
+                        if line.strip() and not is_generated_artifact_path(porcelain_path(line))
                     ]
                     if init_status.returncode != 0 or dirty_lines:
                         if is_resume_mode:
