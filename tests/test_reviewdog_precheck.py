@@ -65,8 +65,10 @@ def test_review_node_skips_reviewdog_when_not_installed(
         res = _run_review(None, run_cmd_mock)
 
     assert res["status"] == "review_lgtm"
-    assert res["reviewdog_result"]["skipped"] == "not_installed"
-    assert res["reviewdog_result"]["returncode"] is None
+    reviewdog_result = res["reviewdog_result"]
+    assert reviewdog_result is not None
+    assert reviewdog_result["skipped"] == "not_installed"
+    assert reviewdog_result["returncode"] is None
     assert not any("reviewdog" in str(c.args[0]) for c in run_cmd_mock.call_args_list)
     assert "Reviewdog is not installed" in caplog.text
     assert "WinError" not in caplog.text
@@ -79,8 +81,10 @@ def test_review_node_runs_reviewdog_when_installed() -> None:
 
     res = _run_review("/usr/bin/reviewdog", run_cmd_mock)
 
-    assert res["reviewdog_result"]["returncode"] == 0
-    assert "skipped" not in res["reviewdog_result"]
+    reviewdog_result = res["reviewdog_result"]
+    assert reviewdog_result is not None
+    assert reviewdog_result["returncode"] == 0
+    assert "skipped" not in reviewdog_result
     assert any(c.args[0][0] == "reviewdog" for c in run_cmd_mock.call_args_list)
 
 
