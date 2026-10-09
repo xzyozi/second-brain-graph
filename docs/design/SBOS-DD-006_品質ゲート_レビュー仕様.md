@@ -86,6 +86,7 @@
 ### 3.2 Reviewdog によるアノテーション
 * **実行内容**: 構造化されたLLMレビューコメントを RDJSON 形式に変換し、それを標準入力で渡して `reviewdog -f=rdjson -diff="git diff HEAD"` を実行する。
 * **副作用・失敗契約**: Reviewdogは補助的な表示機能（CLIやPR上のコメント用）であり、Reviewdog自体の非ゼロ終了や実行例外はログに記録するが、LLMレビュー結果（`review_verdict`）を無効化・中断させることはない。
+* **未導入時の扱い（Issue #106）**: 実行前に `shutil.which("reviewdog")` で存在を確認し、PATH に無い場合は実行せずスキップする（INFO ログ1行）。`reviewdog_result` には `{"returncode": null, "skipped": "not_installed"}` を記録し、導入済みで失敗した場合（`returncode` が数値）と区別できるようにする。`tools/doctor.py` の `check_reviewdog` が未導入を `WARN`（任意の依存）として報告する。
 
 ## 4. エスカレーション (`escalate_node`)
 
