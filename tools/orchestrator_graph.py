@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
 # プロジェクトルートをsys.pathに追加
@@ -1632,6 +1633,67 @@ def escalate_node(state: GraphState) -> GraphState:
     return state
 
 
+def compute_recursion_limit(max_round: int) -> int:
+    """グラフの最悪経路ステップ数から LangGraph の recursion_limit を算出する (Issue #87).
+
+    LangGraph 既定の 25 は、lint / test / review の各上限 (max_round) まで失敗が続く経路で
+    不足しうる。ラウンドカウンタは累積するため、code_node の再実行回数は次の合計が上限となる。
+      - 初回 1 回
+      - lint / test / review の各失敗による再実行 (それぞれ max_round - 1 回)
+      - LLM タイムアウトによる再試行 (最大 2 回)
+    1 サイクルは code → lint → test → test_feedback → review の最大 5 ノード。
+    これに spec_draft (適合性再試行 + タイムアウト再試行で最大 4 回) と終端ノード (2) を加える。
+    """
+    cycles = 1 + 3 * max(max_round - 1, 0) + 2
+    return cycles * 5 + 4 + 2 + 2
+
+
+def _route_unknown_status(node_name: str, state: GraphState) -> str:
+    """想定外の status で無限ループしないよう、警告を出して escalate_node へ送る (Issue #89).
+
+    escalate_node は error_category に基づいて FAILED_B7 / FAILED_SYSTEM へ安全分類する。
+    """
+    logger.warning(
+        f"Unexpected status '{state.get('status')}' after {node_name}. Routing to escalate_node."
+    )
+    return "escalate_node"
+
+
+def _fail_system(
+    project_key: str,
+    issue_id: str,
+    error: Optional[str],
+    *,
+    cwd: Optional[str],
+    metadata_dir: Optional[Path],
+    history_file: Optional[Path],
+) -> None:
+    """FAILED_SYSTEM / SYSTEM_ERROR を state.json に記録し、error 指定時は実行履歴にも追記する (Issue #88).
+
+    error が None の場合は state.json の更新のみ行う (auto-stash 失敗時の従来挙動を維持)。
+    """
+    update_task_state(
+        project_key,
+        issue_id,
+        status="FAILED_SYSTEM",
+        error_category="SYSTEM_ERROR",
+        metadata_dir=metadata_dir,
+    )
+    if error is None:
+        return
+    safe_record_execution_history(
+        {
+            "issue_id": issue_id,
+            "project_key": project_key,
+            "cwd": cwd,
+            "error_category": "SYSTEM_ERROR",
+            "error": error,
+        },
+        final_status="FAILED_SYSTEM",
+        history_file=history_file,
+    )
+
+
 def execute_issue(
     issue_id: str,
     project_key: str,
@@ -1671,22 +1733,12 @@ def execute_issue(
             logger.error(
                 f"Failsafe triggered: Invalid satellite context for project {project_key}. Aborting."
             )
-            update_task_state(
+            _fail_system(
                 project_key,
                 issue_id,
-                status="FAILED_SYSTEM",
-                error_category="SYSTEM_ERROR",
+                "Failsafe triggered: Invalid project directory or missing target_files",
+                cwd=cwd,
                 metadata_dir=metadata_dir,
-            )
-            safe_record_execution_history(
-                {
-                    "issue_id": issue_id,
-                    "project_key": project_key,
-                    "cwd": cwd,
-                    "error_category": "SYSTEM_ERROR",
-                    "error": "Failsafe triggered: Invalid project directory or missing target_files",
-                },
-                final_status="FAILED_SYSTEM",
                 history_file=history_file,
             )
             return
@@ -1761,12 +1813,14 @@ def execute_issue(
                                 logger.error(
                                     f"Failed to auto-stash uncommitted changes: {st_res.stderr}"
                                 )
-                                update_task_state(
+                                # 従来挙動を維持: auto-stash 失敗は state.json のみ更新し履歴は残さない
+                                _fail_system(
                                     project_key,
                                     issue_id,
-                                    status="FAILED_SYSTEM",
-                                    error_category="SYSTEM_ERROR",
+                                    None,
+                                    cwd=cwd,
                                     metadata_dir=metadata_dir,
+                                    history_file=history_file,
                                 )
                                 return
                             logger.info("Auto-stash completed successfully.")
@@ -1774,22 +1828,12 @@ def execute_issue(
                             logger.error(
                                 f"Dirty working tree detected before execution in {cwd}. Aborting."
                             )
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"Dirty working tree detected in satellite repo: {init_status.stdout}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
@@ -1844,22 +1888,12 @@ def execute_issue(
                         sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
                         if sw_base.returncode != 0:
                             logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"git switch {base_branch} failed: {sw_base.stderr}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git switch {base_branch} failed: {sw_base.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
@@ -1871,22 +1905,12 @@ def execute_issue(
                         )
                         if pull_res.returncode != 0 and not allow_offline_git:
                             logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"git pull --ff-only failed: {pull_res.stderr}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git pull --ff-only failed: {pull_res.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
@@ -1895,6 +1919,7 @@ def execute_issue(
                         chk_branch = run_cmd(
                             ["git", "rev-parse", "--verify", head_branch], cwd=cwd, timeout=60
                         )
+                        branch_backed_up = False
                         if chk_branch.returncode == 0:
                             prev_head_commit = chk_branch.stdout.strip()
                             unmerged_log = run_cmd(
@@ -1902,16 +1927,45 @@ def execute_issue(
                                 cwd=cwd,
                                 timeout=60,
                             )
-                            if unmerged_log.returncode == 0 and unmerged_log.stdout.strip():
-                                unmerged_commits = unmerged_log.stdout.strip().splitlines()
+                            # 監査に失敗した場合も、未マージコミットがある前提で安全側(退避)に倒す
+                            has_unmerged = unmerged_log.returncode != 0 or bool(
+                                unmerged_log.stdout.strip()
+                            )
+                            if has_unmerged:
+                                unmerged_commits = (
+                                    unmerged_log.stdout.strip().splitlines()
+                                    if unmerged_log.returncode == 0
+                                    else []
+                                )
+                                # 未マージコミットを失わないよう、強制削除せず退避ブランチへリネームする (Issue #90)
+                                backup_branch = f"backup/{head_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                 logger.warning(
-                                    f"[FRESH MODE SAFETY WARNING] Recreating work branch '{head_branch}' which contains "
-                                    f"{len(unmerged_commits)} unmerged commit(s) relative to '{base_branch}'. "
-                                    f"Previous HEAD commit was: {prev_head_commit}\nUnmerged commits:\n"
+                                    f"[FRESH MODE SAFETY WARNING] Work branch '{head_branch}' may contain "
+                                    f"unmerged commit(s) relative to '{base_branch}' "
+                                    f"({len(unmerged_commits)} detected). "
+                                    f"Previous HEAD commit was: {prev_head_commit}. "
+                                    f"Backing up to '{backup_branch}'.\n"
                                     + "\n".join(unmerged_commits[:5])
                                 )
+                                mv_res = run_cmd(
+                                    ["git", "branch", "-m", head_branch, backup_branch],
+                                    cwd=cwd,
+                                    timeout=60,
+                                )
+                                if mv_res.returncode != 0:
+                                    _fail_system(
+                                        project_key,
+                                        issue_id,
+                                        f"Failed to back up unmerged work branch '{head_branch}': {mv_res.stderr}",
+                                        cwd=cwd,
+                                        metadata_dir=metadata_dir,
+                                        history_file=history_file,
+                                    )
+                                    return
+                                branch_backed_up = True
 
-                        run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
+                        if not branch_backed_up:
+                            run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
                         sw_c = run_cmd(
                             ["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60
                         )
@@ -1919,43 +1973,23 @@ def execute_issue(
                             logger.error(
                                 f"git switch -c {head_branch} {base_branch} failed: {sw_c.stderr}"
                             )
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"git switch -c failed: {sw_c.stderr}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git switch -c failed: {sw_c.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
                 except Exception as ge:
                     logger.error(f"Failed git branch setup in {cwd}: {ge}")
-                    update_task_state(
+                    _fail_system(
                         project_key,
                         issue_id,
-                        status="FAILED_SYSTEM",
-                        error_category="SYSTEM_ERROR",
+                        f"Git branch setup failed: {ge}",
+                        cwd=cwd,
                         metadata_dir=metadata_dir,
-                    )
-                    safe_record_execution_history(
-                        {
-                            "issue_id": issue_id,
-                            "project_key": project_key,
-                            "cwd": cwd,
-                            "error_category": "SYSTEM_ERROR",
-                            "error": f"Git branch setup failed: {ge}",
-                        },
-                        final_status="FAILED_SYSTEM",
                         history_file=history_file,
                     )
                     return
@@ -2004,7 +2038,9 @@ def execute_issue(
                     return "escalate_node"
                 if s.get("status") == "retry_code":
                     return "code_node"
-                return "lint_node"
+                if s.get("status") == "code_completed":
+                    return "lint_node"
+                return _route_unknown_status("code_node", s)
 
             workflow.add_conditional_edges(
                 "code_node",
@@ -2023,7 +2059,9 @@ def execute_issue(
                     return "test_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                return _route_unknown_status("lint_node", s)
 
             workflow.add_conditional_edges(
                 "lint_node",
@@ -2042,7 +2080,9 @@ def execute_issue(
                     return "review_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "test_feedback_node"
+                if s.get("status") == "retry_code":
+                    return "test_feedback_node"
+                return _route_unknown_status("test_node", s)
 
             workflow.add_conditional_edges(
                 "test_node",
@@ -2077,7 +2117,9 @@ def execute_issue(
                     return "done_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                return _route_unknown_status("review_node", s)
 
             workflow.add_conditional_edges(
                 "review_node",
@@ -2169,7 +2211,19 @@ def execute_issue(
                 history_summary=None,
                 rdjson=None,
             )
-            final_state = app.invoke(initial_state)
+            try:
+                final_state = app.invoke(
+                    initial_state,
+                    config={"recursion_limit": compute_recursion_limit(initial_state["max_round"])},
+                )
+            except GraphRecursionError as gre:
+                # 上限超過はシステム障害ではなく「リトライ上限到達」として FAILED_B7 に分類する
+                logger.error(f"Graph recursion limit exceeded for {issue_id}: {gre}")
+                exhausted_state = GraphState(**initial_state)
+                exhausted_state["status"] = "FAILED_B7"
+                exhausted_state["error_category"] = "REVIEW_REJECTED"
+                exhausted_state["error"] = f"Graph recursion limit exceeded: {gre}"
+                final_state = escalate_node(exhausted_state)
 
             final_status = final_state.get("status", "COMPLETED")
             error_cat = final_state.get("error_category")
@@ -2225,22 +2279,12 @@ def execute_issue(
         )
     except Exception as e:
         logger.error(f"Unexpected error outside lock for {issue_id}: {e}")
-        update_task_state(
+        _fail_system(
             project_key,
             issue_id,
-            status="FAILED_SYSTEM",
-            error_category="SYSTEM_ERROR",
+            str(e),
+            cwd=None,
             metadata_dir=metadata_dir,
-        )
-        safe_record_execution_history(
-            {
-                "issue_id": issue_id,
-                "project_key": project_key,
-                "cwd": None,
-                "error_category": "SYSTEM_ERROR",
-                "error": str(e),
-            },
-            final_status="FAILED_SYSTEM",
             history_file=history_file,
         )
         raise

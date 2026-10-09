@@ -1180,7 +1180,7 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
 
     captured_initial_state = {}
 
-    def mock_invoke(state: Dict[str, Any]) -> Dict[str, Any]:
+    def mock_invoke(state: Dict[str, Any], **_kwargs: Any) -> Dict[str, Any]:
         nonlocal captured_initial_state
         captured_initial_state = state
         state["status"] = "COMPLETED"
