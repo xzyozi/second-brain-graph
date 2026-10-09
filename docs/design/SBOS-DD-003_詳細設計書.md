@@ -95,7 +95,7 @@ Fresh モードで既存の作業ブランチに未マージコミットがあ�
 
 **Resume の Git 安全性（Issue #92）**:
 
-- **WIP コミットの対象**: dirty な作業ツリーは、生成物を除外して `git add -A -- . ':(exclude,glob)…'` でステージし、`wip: preserve uncommitted changes for <ISSUE_ID> before resume` でコミットする。除外対象は定数 `GENERATED_ARTIFACT_PATTERNS`（`.aider*`、`.pytest_cache`、`__pycache__`、`.venv`、`*.pyc`、`.ruff_cache`、`.mypy_cache`）で、dirty 判定と WIP の pathspec が共有する。照合はパスの要素単位で行い、`my.aider_notes.md` のような部分一致は除外しない。
+- **WIP コミットの対象**: dirty な作業ツリーは、生成物を除外して `git add -A -- . ':(exclude,glob)…'` でステージし、`wip: preserve uncommitted changes for <ISSUE_ID> before resume` でコミットする。除外対象は `tools/metadata_store.py` の定数 `GENERATED_ARTIFACT_GITIGNORE_ENTRIES`（`.aider*`、`.pytest_cache/`、`__pycache__/`、`.venv/`、`*.pyc`、`.ruff_cache/`、`.mypy_cache/`）から導出した `GENERATED_ARTIFACT_PATTERNS` で、dirty 判定と WIP の pathspec が共有する。同じ定義を `doctor.py` の `.gitignore` チェックと `ensure_satellite_gitignore` も使い、衛星の `.gitignore` に不足があれば警告・追記する（`.gitignore` が存在しない場合は新規作成しない）。照合はパスの要素単位で行い、`my.aider_notes.md` のような部分一致は除外しない。
 - **WIP コミットの失敗**: `git add` の失敗、またはステージ済みの変更があるのに `git commit` が失敗した場合は、`FAILED_SYSTEM` で中断する。ステージ済みの変更が無い場合（除外後に何も残らない等）は、コミットを飛ばして続行する。
 - **rebase の失敗**: base branch への rebase に失敗した場合は `rebase --abort` で元に戻し、衝突内容を記録して `FAILED_SYSTEM` で中断する。人が手動で解決するか、`--fresh` で作り直す。`FAILED_SYSTEM` は `consecutive_b7` を増やさず、自動 Resume の対象にもならない。
 

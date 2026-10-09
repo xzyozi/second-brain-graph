@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
 from tools.metadata_store import (
+    GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
     MAX_CONSECUTIVE_B7,
     ErrorCategory,
@@ -110,19 +111,6 @@ def is_in_git_workspace(cwd: Optional[str]) -> bool:
         return res.returncode == 0 and res.stdout.strip() == "true"
     except Exception:
         return False
-
-
-#: dirty 判定と Resume の WIP コミットから除外する生成物のパターン (Issue #92)。
-#: パスの各要素 (ディレクトリ名・ファイル名) に対して fnmatch で照合する。
-GENERATED_ARTIFACT_PATTERNS: tuple[str, ...] = (
-    ".aider*",
-    ".pytest_cache",
-    "__pycache__",
-    ".venv",
-    "*.pyc",
-    ".ruff_cache",
-    ".mypy_cache",
-)
 
 
 def porcelain_path(line: str) -> str:

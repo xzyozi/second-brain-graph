@@ -32,7 +32,7 @@ from tools.metadata_store import (  # noqa: E402
     resolve_target_spec,
     self_heal_satellite_project_json,
 )
-from tools.run_task import ensure_satellite_gitignore  # noqa: E402
+from tools.run_task import ensure_satellite_gitignore, missing_gitignore_entries  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("doctor")
@@ -308,22 +308,16 @@ def check_gitignore(sat_dir: Path, fix: bool = False) -> CheckResult:
     if gitignore_file.exists():
         content = gitignore_file.read_text(encoding="utf-8")
 
-    needs_venv = ".venv" not in content
-    needs_aider = ".aider" not in content
+    missing_entries = missing_gitignore_entries(content)
 
-    if needs_venv or needs_aider:
+    if missing_entries:
         if fix:
             ensure_satellite_gitignore(str(sat_dir))
             return CheckResult(
                 name="Git Ignore",
                 status="FIXED",
-                message=".gitignore に .venv/ および .aider* を追記しました。",
+                message=f".gitignore に {', '.join(missing_entries)} を追記しました。",
             )
-        missing_entries = []
-        if needs_venv:
-            missing_entries.append(".venv/")
-        if needs_aider:
-            missing_entries.append(".aider*")
         return CheckResult(
             name="Git Ignore",
             status="WARN",
@@ -334,7 +328,7 @@ def check_gitignore(sat_dir: Path, fix: bool = False) -> CheckResult:
     return CheckResult(
         name="Git Ignore",
         status="OK",
-        message=".gitignore に .venv/ および .aider* が設定済み",
+        message=".gitignore に生成物パターン (.venv/, .aider* 等) が設定済み",
     )
 
 

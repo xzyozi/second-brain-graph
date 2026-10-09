@@ -533,3 +533,53 @@ def test_run_task_main_resolves_url_and_cwd(tmp_path: Path) -> None:
         # 引数に --issue-id TFG-0005 --project-key TFG が渡されていること
         assert "TFG-0005" in exec_cmd
         assert "TFG" in exec_cmd
+
+
+def test_missing_gitignore_entries_reports_all_for_empty_content() -> None:
+    """空の .gitignore では生成物の全エントリが不足として返る (Issue #98)。"""
+    from tools.metadata_store import GENERATED_ARTIFACT_GITIGNORE_ENTRIES
+    from tools.run_task import missing_gitignore_entries
+
+    assert missing_gitignore_entries("") == list(GENERATED_ARTIFACT_GITIGNORE_ENTRIES)
+
+
+def test_missing_gitignore_entries_normalizes_lines() -> None:
+    """先頭・末尾の "/" の違い、コメント行、接頭辞が一致するワイルドカードを正しく扱う。"""
+    from tools.run_task import missing_gitignore_entries
+
+    content = "\n".join(
+        [
+            "# .venv/ はコメントなので数えない",
+            "/.pytest_cache",  # 先頭 "/" 付きでも充足
+            "__pycache__",  # 末尾 "/" 無しでも充足
+            "*.pyc",
+            ".aider.chat.history.md",  # `.aider*` を接頭辞で充足
+        ]
+    )
+
+    assert missing_gitignore_entries(content) == [".venv/", ".ruff_cache/", ".mypy_cache/"]
+
+
+def test_ensure_satellite_gitignore_adds_all_generated_entries(tmp_path: Path) -> None:
+    """生成物パターンがすべて追記され、再実行しても重複しない (Issue #98)。"""
+    from tools.metadata_store import GENERATED_ARTIFACT_GITIGNORE_ENTRIES
+    from tools.run_task import ensure_satellite_gitignore
+
+    gi_file = tmp_path / ".gitignore"
+    gi_file.write_text("# existing\n", encoding="utf-8")
+
+    ensure_satellite_gitignore(str(tmp_path))
+    ensure_satellite_gitignore(str(tmp_path))
+
+    lines = gi_file.read_text(encoding="utf-8").splitlines()
+    for entry in GENERATED_ARTIFACT_GITIGNORE_ENTRIES:
+        assert lines.count(entry) == 1
+
+
+def test_ensure_satellite_gitignore_does_not_create_missing_file(tmp_path: Path) -> None:
+    """.gitignore が存在しない場合は新規作成しない (従来方針の維持)。"""
+    from tools.run_task import ensure_satellite_gitignore
+
+    ensure_satellite_gitignore(str(tmp_path))
+
+    assert not (tmp_path / ".gitignore").exists()

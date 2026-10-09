@@ -275,3 +275,23 @@ def test_diagnose_project_full(tmp_path: Path) -> None:
         assert "Satellite Directory" in names
         assert "Satellite project.json" in names
         assert "Tasks Backlog" in names
+
+
+def test_check_gitignore_covers_all_generated_artifacts(tmp_path: Path) -> None:
+    """.venv/ と .aider* 以外の生成物パターンも警告・追記の対象になる (Issue #98)。"""
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text(".venv/\n.aider*\n", encoding="utf-8")
+
+    res_warn = check_gitignore(tmp_path, fix=False)
+    assert res_warn.status == "WARN"
+    assert ".pytest_cache/" in res_warn.message
+    assert "__pycache__/" in res_warn.message
+    assert ".venv/" not in res_warn.message
+
+    res_fixed = check_gitignore(tmp_path, fix=True)
+    assert res_fixed.status == "FIXED"
+    content = gitignore.read_text(encoding="utf-8")
+    for entry in (".pytest_cache/", "__pycache__/", "*.pyc", ".ruff_cache/", ".mypy_cache/"):
+        assert content.splitlines().count(entry) == 1
+
+    assert check_gitignore(tmp_path, fix=False).status == "OK"
