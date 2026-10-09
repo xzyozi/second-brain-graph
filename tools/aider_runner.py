@@ -124,62 +124,134 @@ def get_git_diff(cwd: Optional[str] = None, base_branch: Optional[str] = None) -
         raise GitDiffError(f"Failed to execute git diff: {e}") from e
 
 
-def cleanup_unauthorized_aider_artifacts(cwd: Optional[str], target_files: List[str]) -> List[str]:
-    """Aider がプロンプトの会話文等を誤って新規ファイルとして作成した場合、
-    target_files 以外の意図しない不正ファイルを自動検知して削除し Git ステータスを正常化する。
+def _parse_porcelain_line(line: str) -> tuple[str, str, Optional[str]]:
+    """`git status --porcelain` の 1 行を (XY, パス, リネーム元) に分解する。引用符は除去する。"""
+    xy = line[:2]
+    path = line[3:].strip()
+    old_path: Optional[str] = None
+    if " -> " in path:
+        old_raw, path = path.split(" -> ", 1)
+        old_path = old_raw.strip().strip('"')
+    return xy, path.strip().strip('"'), old_path
+
+
+def _is_protected_path(posix_file: str, normalized_targets: set[str]) -> bool:
+    """サニタイザが触れてはならないパス (target_files と、Aider/pytest/.gitignore の管理ファイル)。"""
+    return (
+        posix_file in normalized_targets
+        or posix_file.startswith(".aider")
+        or posix_file.startswith(".pytest")
+        or posix_file == ".gitignore"
+    )
+
+
+def _git(cwd: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False, timeout=30
+    )
+
+
+def warn_if_working_tree_dirty(cwd: Optional[str], target_files: List[str]) -> None:
+    """Aider 実行前に作業ツリーが clean でない場合、警告ログを残す (Issue #101)。
+
+    サニタイザは「実行前は clean」という前提で、target_files 外の変更を Aider 由来とみなす。
+    前提が崩れている場合に気づけるようにする。
     """
-    removed: List[str] = []
     if not cwd:
-        return removed
+        return
+    normalized_targets = {Path(tf).as_posix() for tf in target_files}
+    try:
+        res = _git(cwd, "status", "--porcelain")
+        if res.returncode != 0:
+            return
+        dirty = [
+            line
+            for line in res.stdout.splitlines()
+            if line.strip()
+            and not _is_protected_path(
+                Path(_parse_porcelain_line(line)[1]).as_posix(), normalized_targets
+            )
+        ]
+        if dirty:
+            logger.warning(
+                "[Aider Sanitizer] Working tree is not clean before running Aider; "
+                f"changes outside target_files may be reverted: {dirty[:5]}"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to check working tree before running Aider: {e}")
+
+
+def cleanup_unauthorized_aider_artifacts(cwd: Optional[str], target_files: List[str]) -> List[str]:
+    """Aider が target_files 以外に作った・変更した意図しないファイルを元に戻し、Git ステータスを正常化する。
+
+    - 未追跡 (`??`) のファイル: プロンプトの会話文等を誤って作成したゴミとみなして削除する。
+    - 追跡済みのファイル: 削除せず `git restore --staged --worktree` で元に戻す (Issue #101)。
+      追跡済みファイルを削除すると、Aider 実行前の内容が失われるため。
+    - 新規にステージされたファイル (`A`): インデックスと作業ツリーから削除する。
+    - マージ中の衝突ファイル (`U`): 触らずに警告する。
+
+    戻り値は、元に戻した・削除したファイルのパス一覧。
+    """
+    handled: List[str] = []
+    if not cwd:
+        return handled
     cwd_path = Path(cwd)
     normalized_targets = {Path(tf).as_posix() for tf in target_files}
 
     try:
-        res = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        if res.returncode == 0:
-            for line in res.stdout.splitlines():
-                if not line.strip():
-                    continue
-                raw_filename = line[3:].strip().strip('"')
-                posix_file = Path(raw_filename).as_posix()
+        res = _git(cwd, "status", "--porcelain")
+        if res.returncode != 0:
+            return handled
 
-                if (
-                    posix_file not in normalized_targets
-                    and not posix_file.startswith(".aider")
-                    and not posix_file.startswith(".pytest")
-                    and not posix_file == ".gitignore"
-                ):
-                    file_path = cwd_path / raw_filename
-                    if file_path.exists() and file_path.is_file():
+        for line in res.stdout.splitlines():
+            if not line.strip():
+                continue
+            xy, raw_filename, old_path = _parse_porcelain_line(line)
+            posix_file = Path(raw_filename).as_posix()
+            if _is_protected_path(posix_file, normalized_targets):
+                continue
+
+            if "U" in xy or xy in ("AA", "DD"):
+                logger.warning(
+                    f"[Aider Sanitizer] Skipping unmerged file outside target_files: {raw_filename}"
+                )
+                continue
+
+            file_path = cwd_path / raw_filename
+            try:
+                if xy == "??":
+                    # 未追跡: ファイルのみ削除する (ディレクトリは従来どおり対象外)
+                    if file_path.is_file():
                         logger.warning(
-                            f"[Aider Sanitizer] Detected and removing unauthorized artifact: {raw_filename}"
+                            f"[Aider Sanitizer] Deleted untracked unauthorized artifact: {raw_filename}"
                         )
-                        try:
-                            subprocess.run(
-                                ["git", "rm", "-f", "--", raw_filename],
-                                cwd=cwd,
-                                capture_output=True,
-                                text=True,
-                                check=False,
-                                timeout=10,
-                            )
-                            if file_path.exists():
-                                file_path.unlink()
-                            removed.append(raw_filename)
-                        except Exception as ce:
-                            logger.warning(
-                                f"Failed to remove unauthorized file {raw_filename}: {ce}"
-                            )
+                        file_path.unlink()
+                        handled.append(raw_filename)
+                elif xy[0] in ("A", "C", "R"):
+                    # HEAD に存在しない新規 (コピー・リネーム先を含む) ファイルを取り消す
+                    logger.warning(
+                        f"[Aider Sanitizer] Deleted newly added unauthorized file: {raw_filename}"
+                    )
+                    _git(cwd, "rm", "-f", "--", raw_filename)
+                    if file_path.exists():
+                        file_path.unlink()
+                    handled.append(raw_filename)
+                    if old_path:
+                        # リネーム元は HEAD に存在するため復元する
+                        _git(cwd, "restore", "--staged", "--worktree", "--", old_path)
+                        handled.append(old_path)
+                else:
+                    # 追跡済みファイルの変更・削除: 内容を HEAD に戻す
+                    logger.warning(
+                        f"[Aider Sanitizer] Restored tracked file modified outside target_files: {raw_filename}"
+                    )
+                    _git(cwd, "restore", "--staged", "--worktree", "--", raw_filename)
+                    handled.append(raw_filename)
+            except Exception as ce:
+                logger.warning(f"Failed to clean up unauthorized file {raw_filename}: {ce}")
     except Exception as e:
         logger.warning(f"Failed to check git status for unauthorized artifacts: {e}")
-    return removed
+    return handled
 
 
 def get_max_target_file_lines(cwd: Optional[str], target_files: List[str]) -> int:
@@ -246,6 +318,8 @@ def _execute_aider_single(
         abs_path = cwd_path / tf
         if not abs_path.exists():
             logger.warning(f"Target file does not exist (will be created by Aider): {abs_path}")
+
+    warn_if_working_tree_dirty(cwd, target_files)
 
     env = os.environ.copy()
     env["AIDER_SHOW_MODEL_WARNINGS"] = "false"
