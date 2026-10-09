@@ -155,6 +155,36 @@ def build_wip_pathspec() -> List[str]:
     return ["--", ".", *excludes]
 
 
+def commit_wip_changes(cwd: Optional[str], issue_id: str) -> Optional[str]:
+    """Resume 前の未コミット変更を、生成物を除外して WIP コミットする (Issue #92)。
+
+    失敗時はエラーメッセージ (str) を返し、成功時およびコミット対象が無い場合は None を返す。
+    - git add が失敗した場合: エラー
+    - ステージ済みの変更が無い場合 (除外後に何も残らない等): コミットを飛ばして成功扱い
+    - ステージ済みの変更があるのに commit が失敗した場合: エラー
+    """
+    add_res = run_cmd(["git", "add", "-A", *build_wip_pathspec()], cwd=cwd, timeout=60)
+    if add_res.returncode != 0:
+        return f"git add failed before resume: {add_res.stderr}"
+
+    # 終了コード 0: ステージ済みの差分なし / 1: あり / それ以外: 異常
+    staged_res = run_cmd(["git", "diff", "--cached", "--quiet"], cwd=cwd, timeout=60)
+    if staged_res.returncode == 0:
+        logger.info("Resume Mode: nothing to commit after excluding generated artifacts.")
+        return None
+    if staged_res.returncode != 1:
+        return f"git diff --cached failed before resume: {staged_res.stderr}"
+
+    commit_res = run_cmd(
+        ["git", "commit", "-m", f"wip: preserve uncommitted changes for {issue_id} before resume"],
+        cwd=cwd,
+        timeout=60,
+    )
+    if commit_res.returncode != 0:
+        return f"git commit failed before resume: {commit_res.stderr}"
+    return None
+
+
 def get_satellite_python_path(sat_path: Path) -> Path:
     """サテライトの仮想環境内の Python 実行可能ファイルパスを取得する (OS依存対応)."""
     if os.name == "nt":
@@ -1866,17 +1896,18 @@ def execute_issue(
                             logger.info(
                                 f"Resume Mode: Auto-committing uncommitted changes before resuming in {cwd}..."
                             )
-                            run_cmd(["git", "add", "-A"], cwd=cwd, timeout=60)
-                            run_cmd(
-                                [
-                                    "git",
-                                    "commit",
-                                    "-m",
-                                    f"wip: preserve uncommitted changes for {issue_id} before resume",
-                                ],
-                                cwd=cwd,
-                                timeout=60,
-                            )
+                            wip_error = commit_wip_changes(cwd, issue_id)
+                            if wip_error is not None:
+                                logger.error(f"Resume aborted: {wip_error}")
+                                _fail_system(
+                                    project_key,
+                                    issue_id,
+                                    wip_error,
+                                    cwd=cwd,
+                                    metadata_dir=metadata_dir,
+                                    history_file=history_file,
+                                )
+                                return
                         elif auto_stash:
                             stash_msg = f"orchestrator: auto-stash before {issue_id}"
                             logger.info(
