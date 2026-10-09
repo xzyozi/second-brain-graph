@@ -86,12 +86,18 @@ LLM 関連設定の検証、Pydantic スキーマ、および intent に基づ�
 
 ### 5.2 Git ブランチ準備
 
-| モード | 選択条件                                                                                   | 振る舞い                                                                                               |
-| :----- | :----------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
-| Resume | `--resume`、または既存 state が `CHANGES_REQUESTED`、`PR_FAILED`、`FAILED_B7`、`IN_REVIEW` | 既存作業ブランチへ switch し、base branch への rebase を試みる。未コミット差分は WIP commit を試みる。 |
-| Fresh  | 上記以外、または `--fresh`                                                                 | base branch へ switch、`pull --ff-only`、既存の作業ブランチを削除し、base branch から再作成する。      |
+| モード | 選択条件                                                                                   | 振る舞い                                                                                                                   |
+| :----- | :----------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------- |
+| Resume | `--resume`、または既存 state が `CHANGES_REQUESTED`、`PR_FAILED`、`FAILED_B7`、`IN_REVIEW` | 既存作業ブランチへ switch し、base branch へ rebase する（失敗時は中断）。未コミット差分は生成物を除いて WIP commit する。 |
+| Fresh  | 上記以外、または `--fresh`                                                                 | base branch へ switch、`pull --ff-only`、既存の作業ブランチを削除し、base branch から再作成する。                          |
 
 Fresh モードで既存の作業ブランチに未マージコミットがある場合（または未マージの監査に失敗した場合）は、強制削除せず `backup/<作業ブランチ>-<YYYYMMDDHHMMSS>` へリネームして退避してから再作成する。退避に失敗した場合は `FAILED_SYSTEM` で中断する。
+
+**Resume の Git 安全性（Issue #92）**:
+
+- **WIP コミットの対象**: dirty な作業ツリーは、生成物を除外して `git add -A -- . ':(exclude,glob)…'` でステージし、`wip: preserve uncommitted changes for <ISSUE_ID> before resume` でコミットする。除外対象は定数 `GENERATED_ARTIFACT_PATTERNS`（`.aider*`、`.pytest_cache`、`__pycache__`、`.venv`、`*.pyc`、`.ruff_cache`、`.mypy_cache`）で、dirty 判定と WIP の pathspec が共有する。照合はパスの要素単位で行い、`my.aider_notes.md` のような部分一致は除外しない。
+- **WIP コミットの失敗**: `git add` の失敗、またはステージ済みの変更があるのに `git commit` が失敗した場合は、`FAILED_SYSTEM` で中断する。ステージ済みの変更が無い場合（除外後に何も残らない等）は、コミットを飛ばして続行する。
+- **rebase の失敗**: base branch への rebase に失敗した場合は `rebase --abort` で元に戻し、衝突内容を記録して `FAILED_SYSTEM` で中断する。人が手動で解決するか、`--fresh` で作り直す。`FAILED_SYSTEM` は `consecutive_b7` を増やさず、自動 Resume の対象にもならない。
 
 **連続 FAILED_B7 ガード**: `--resume` / `--fresh` を指定せず、既存 state の `status` が `FAILED_B7` で `consecutive_b7` が 2 以上のときは、自動 Resume を行わず実行を拒否して人に返す。この拒否では `state.json` を変更せず、拒否した事実だけを実行履歴に記録する。明示的な `--resume` / `--fresh` はこのガードを無視して実行できる。`consecutive_b7` の更新規則は §5.6 を参照する。
 
