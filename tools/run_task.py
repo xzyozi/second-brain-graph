@@ -26,7 +26,10 @@ logger = logging.getLogger("run_task")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.metadata_store import resolve_target_spec  # noqa: E402
+from tools.metadata_store import (  # noqa: E402
+    GENERATED_ARTIFACT_GITIGNORE_ENTRIES,
+    resolve_target_spec,
+)
 from tools.orchestrator_graph import (  # noqa: E402
     ensure_satellite_environment,
     resolve_project_context,
@@ -194,18 +197,46 @@ def sync_base_branch(cwd: str, base_branch: str = "develop") -> None:
         )
 
 
+def _normalize_gitignore_line(line: str) -> str:
+    """.gitignore の 1 行を比較用に正規化する (先頭・末尾の "/" と空白を除去)。"""
+    return line.strip().strip("/")
+
+
+def missing_gitignore_entries(content: str) -> List[str]:
+    """生成物の .gitignore エントリのうち、content に含まれていないものを返す (Issue #98)。
+
+    コメント行は無視する。`.aider*` のようなワイルドカード終端のエントリは、
+    同じ接頭辞で始まる行 (例: `.aider.chat.history.md`) があれば充足済みとみなす。
+    """
+    lines = {
+        _normalize_gitignore_line(line)
+        for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    missing: List[str] = []
+    for entry in GENERATED_ARTIFACT_GITIGNORE_ENTRIES:
+        normalized = _normalize_gitignore_line(entry)
+        if normalized in lines:
+            continue
+        if normalized.endswith("*") and any(
+            line.startswith(normalized[:-1]) for line in lines if normalized[:-1]
+        ):
+            continue
+        missing.append(entry)
+    return missing
+
+
 def ensure_satellite_gitignore(cwd: str) -> None:
-    """サテライトの .gitignore に .venv/ および .aider* が含まれていることを保証する (自己修復)."""
+    """サテライトの .gitignore に生成物パターン (.venv/, .aider* 等) が含まれていることを保証する (自己修復).
+
+    .gitignore が存在しない場合は何もしない (新規作成は行わない)。
+    """
     gi_path = Path(cwd) / ".gitignore"
     if not gi_path.exists():
         return
     try:
         content = gi_path.read_text(encoding="utf-8")
-        needed = []
-        if ".venv" not in content:
-            needed.append(".venv/")
-        if ".aider" not in content:
-            needed.append(".aider*")
+        needed = missing_gitignore_entries(content)
         if needed:
             logger.info(f"Adding {needed} to {gi_path}")
             new_content = (
