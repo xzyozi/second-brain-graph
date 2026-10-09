@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
 # プロジェクトルートをsys.pathに追加
@@ -1632,6 +1633,21 @@ def escalate_node(state: GraphState) -> GraphState:
     return state
 
 
+def compute_recursion_limit(max_round: int) -> int:
+    """グラフの最悪経路ステップ数から LangGraph の recursion_limit を算出する (Issue #87).
+
+    LangGraph 既定の 25 は、lint / test / review の各上限 (max_round) まで失敗が続く経路で
+    不足しうる。ラウンドカウンタは累積するため、code_node の再実行回数は次の合計が上限となる。
+      - 初回 1 回
+      - lint / test / review の各失敗による再実行 (それぞれ max_round - 1 回)
+      - LLM タイムアウトによる再試行 (最大 2 回)
+    1 サイクルは code → lint → test → test_feedback → review の最大 5 ノード。
+    これに spec_draft (適合性再試行 + タイムアウト再試行で最大 4 回) と終端ノード (2) を加える。
+    """
+    cycles = 1 + 3 * max(max_round - 1, 0) + 2
+    return cycles * 5 + 4 + 2 + 2
+
+
 def _route_unknown_status(node_name: str, state: GraphState) -> str:
     """想定外の status で無限ループしないよう、警告を出して escalate_node へ送る (Issue #89).
 
@@ -2197,7 +2213,19 @@ def execute_issue(
                 history_summary=None,
                 rdjson=None,
             )
-            final_state = app.invoke(initial_state)
+            try:
+                final_state = app.invoke(
+                    initial_state,
+                    config={"recursion_limit": compute_recursion_limit(initial_state["max_round"])},
+                )
+            except GraphRecursionError as gre:
+                # 上限超過はシステム障害ではなく「リトライ上限到達」として FAILED_B7 に分類する
+                logger.error(f"Graph recursion limit exceeded for {issue_id}: {gre}")
+                exhausted_state = GraphState(**initial_state)
+                exhausted_state["status"] = "FAILED_B7"
+                exhausted_state["error_category"] = "REVIEW_REJECTED"
+                exhausted_state["error"] = f"Graph recursion limit exceeded: {gre}"
+                final_state = escalate_node(exhausted_state)
 
             final_status = final_state.get("status", "COMPLETED")
             error_cat = final_state.get("error_category")
