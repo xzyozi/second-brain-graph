@@ -1928,8 +1928,8 @@ def execute_issue(
                                 timeout=60,
                             )
                             # 監査に失敗した場合も、未マージコミットがある前提で安全側(退避)に倒す
-                            has_unmerged = (
-                                unmerged_log.returncode != 0 or bool(unmerged_log.stdout.strip())
+                            has_unmerged = unmerged_log.returncode != 0 or bool(
+                                unmerged_log.stdout.strip()
                             )
                             if has_unmerged:
                                 unmerged_commits = (
@@ -1938,9 +1938,7 @@ def execute_issue(
                                     else []
                                 )
                                 # 未マージコミットを失わないよう、強制削除せず退避ブランチへリネームする (Issue #90)
-                                backup_branch = (
-                                    f"backup/{head_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                                )
+                                backup_branch = f"backup/{head_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                 logger.warning(
                                     f"[FRESH MODE SAFETY WARNING] Work branch '{head_branch}' may contain "
                                     f"unmerged commit(s) relative to '{base_branch}' "
