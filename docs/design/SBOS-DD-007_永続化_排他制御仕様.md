@@ -1,13 +1,13 @@
 # 詳細設計書（永続化・排他制御仕様）
 
-| 項目 | 内容 |
-| --- | --- |
-| 文書名 | Second Brain OS - メタデータ永続化および排他制御仕様 |
-| 版数 | Rev.2.0（サテライト仕様帰属化・ランタイムデータ完全隔離版） |
-| 改訂日 | 2026年9月20日 |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、SBOS-MULTI-001（複数リポジトリ設計書） |
-| 対象コンポーネント | `state.json`、`execution_history.json`、`ProjectLockManager`、`write_event` |
-| 役割 | サテライト仕様・タスク資産の帰属、ランタイム動的データの隔離、永続化（fsync＋原子置換）の契約、および排他制御 |
+| 項目               | 内容                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| 文書名             | Second Brain OS - メタデータ永続化および排他制御仕様                                                          |
+| 版数               | Rev.2.0（サテライト仕様帰属化・ランタイムデータ完全隔離版）                                                   |
+| 改訂日             | 2026年9月20日                                                                                                 |
+| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、SBOS-MULTI-001（複数リポジトリ設計書）  |
+| 対象コンポーネント | `state.json`、`execution_history.json`、`ProjectLockManager`、`write_event`                                   |
+| 役割               | サテライト仕様・タスク資産の帰属、ランタイム動的データの隔離、永続化（fsync＋原子置換）の契約、および排他制御 |
 
 ---
 
@@ -45,15 +45,15 @@
 
 ### 2.2 データ形式と解決優先順位
 
-| ファイル | 主な項目 | 配置場所 | 解決優先順位 |
-| :--- | :--- | :--- | :--- |
-| `.project-registry.json` | `projects.<key>.dir`、`meta` | 母艦 `metadata/` | 母艦中央台帳（SSOT） |
-| `project.json` | `key`、`base_branch`、`work_branch_prefix`、`target_files`、`exclude_files` | サテライト `docs/` | **1. サテライト docs/** → 2. 母艦 metadata/ |
-| `tasks.md` | Issue ID・タイトル・優先度・依存関係（blockedby） | サテライト `docs/` | **1. サテライト docs/** → 2. 母艦 metadata/ |
-| `issues/<ISSUE_ID>.md` | Target Files、制約、Non-goals、DoD | サテライト `docs/issues/` | **1. サテライト docs/** → 2. 母艦 metadata/ |
-| `state.json` | Issue ID ごとの `status`、`review_round`、`max_round`、`error_category`、`updated_at` | 母艦 `tools/.cache/` | ランタイムキャッシュ（Git隔離） |
-| `.lock` | プロセス排他ロック | 母艦 `tools/.cache/` | ランタイムキャッシュ（Git隔離） |
-| `events/*.json` | `execution_id`、イベント種別、タイムスタンプ | 母艦 `tools/.cache/` | ランタイムキャッシュ（Git隔離） |
+| ファイル                 | 主な項目                                                                                                | 配置場所                  | 解決優先順位                                |
+| :----------------------- | :------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------------------------------ |
+| `.project-registry.json` | `projects.<key>.dir`、`meta`                                                                            | 母艦 `metadata/`          | 母艦中央台帳（SSOT）                        |
+| `project.json`           | `key`、`base_branch`、`work_branch_prefix`、`target_files`、`exclude_files`                             | サテライト `docs/`        | **1. サテライト docs/** → 2. 母艦 metadata/ |
+| `tasks.md`               | Issue ID・タイトル・優先度・依存関係（blockedby）                                                       | サテライト `docs/`        | **1. サテライト docs/** → 2. 母艦 metadata/ |
+| `issues/<ISSUE_ID>.md`   | Target Files、制約、Non-goals、DoD                                                                      | サテライト `docs/issues/` | **1. サテライト docs/** → 2. 母艦 metadata/ |
+| `state.json`             | Issue ID ごとの `status`、`review_round`、`max_round`、`error_category`、`consecutive_b7`、`updated_at` | 母艦 `tools/.cache/`      | ランタイムキャッシュ（Git隔離）             |
+| `.lock`                  | プロセス排他ロック                                                                                      | 母艦 `tools/.cache/`      | ランタイムキャッシュ（Git隔離）             |
+| `events/*.json`          | `execution_id`、イベント種別、タイムスタンプ                                                            | 母艦 `tools/.cache/`      | ランタイムキャッシュ（Git隔離）             |
 
 ## 3. 永続化（データの保存契約）
 
@@ -64,6 +64,7 @@
 * **動的データ隔離**: デフォルトの出力先は `tools/.cache/projects/<PROJECT_KEY>/state.json` とし、母艦の Git 差分を発生させない。
 * **フォールバック**: 新パスに `state.json` が存在せず、旧パス（`metadata/projects/<KEY>/state.json`）が存在する場合は、初回移行として旧パスの内容を読み込んで新パスへ引き継ぐ。
 * **テスト後方互換**: 引数で `metadata_dir`（非標準ディレクトリ）や `state_file` が明示された場合は、指定先へ保存する。
+* **`consecutive_b7` の引き継ぎ**: Issue エントリは更新のたびに置換されるため、`consecutive_b7` を省略した更新（`FAILED_SYSTEM` 等）では既存値を引き継ぐ。未設定の旧エントリは 0 として扱う。更新規則は DD-003 §5.6 を参照する。
 * **原子性の担保**: 一時ファイルへの JSON 出力、`os.fsync` によるディスク書き込み強制、`os.replace` による原子置換の順で行い、データ破損を防ぐ。
 
 ### 3.2 実行履歴 (execution_history.json)

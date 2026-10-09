@@ -117,7 +117,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行記録は時系列で監査・追跡する。
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
-  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。
+  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。連続 `FAILED_B7` で自動 Resume が拒否された場合（`consecutive_b7` が 2 以上）は、原因を修復したうえで `--resume`（継続）または `--fresh`（作り直し）を明示して再実行する。
   3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
 ---
