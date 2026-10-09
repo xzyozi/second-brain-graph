@@ -1632,6 +1632,17 @@ def escalate_node(state: GraphState) -> GraphState:
     return state
 
 
+def _route_unknown_status(node_name: str, state: GraphState) -> str:
+    """想定外の status で無限ループしないよう、警告を出して escalate_node へ送る (Issue #89).
+
+    escalate_node は error_category に基づいて FAILED_B7 / FAILED_SYSTEM へ安全分類する。
+    """
+    logger.warning(
+        f"Unexpected status '{state.get('status')}' after {node_name}. Routing to escalate_node."
+    )
+    return "escalate_node"
+
+
 def _fail_system(
     project_key: str,
     issue_id: str,
@@ -1981,7 +1992,9 @@ def execute_issue(
                     return "escalate_node"
                 if s.get("status") == "retry_code":
                     return "code_node"
-                return "lint_node"
+                if s.get("status") == "code_completed":
+                    return "lint_node"
+                return _route_unknown_status("code_node", s)
 
             workflow.add_conditional_edges(
                 "code_node",
@@ -2000,7 +2013,9 @@ def execute_issue(
                     return "test_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                return _route_unknown_status("lint_node", s)
 
             workflow.add_conditional_edges(
                 "lint_node",
@@ -2019,7 +2034,9 @@ def execute_issue(
                     return "review_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "test_feedback_node"
+                if s.get("status") == "retry_code":
+                    return "test_feedback_node"
+                return _route_unknown_status("test_node", s)
 
             workflow.add_conditional_edges(
                 "test_node",
@@ -2054,7 +2071,9 @@ def execute_issue(
                     return "done_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                return _route_unknown_status("review_node", s)
 
             workflow.add_conditional_edges(
                 "review_node",
