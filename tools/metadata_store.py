@@ -342,6 +342,24 @@ def force_unlock_project(
 # ==============================================================================
 
 
+#: 連続 FAILED_B7 がこの回数に達した Issue は、自動 Resume を拒否して人に返す (Issue #91, DD-003 §5.6)
+MAX_CONSECUTIVE_B7 = 2
+
+
+def next_consecutive_b7(previous: int, final_status: str) -> int:
+    """実行終了時の status から、連続 FAILED_B7 回数の次の値を返す (Issue #91)。
+
+    - FAILED_B7 で終了: +1
+    - COMPLETED で終了: 0 に戻す
+    - それ以外 (FAILED_SYSTEM / PR_FAILED / ESCALATED_NEEDS_REVISION 等): 変更しない
+    """
+    if final_status == TaskStatus.FAILED_B7.value:
+        return previous + 1
+    if final_status == TaskStatus.COMPLETED.value:
+        return 0
+    return previous
+
+
 def update_task_state(
     project_key: str,
     issue_id: str,
@@ -351,10 +369,14 @@ def update_task_state(
     error_category: Optional[str] = None,
     metadata_dir: Optional[Path] = None,
     state_file: Optional[Path] = None,
+    consecutive_b7: Optional[int] = None,
 ) -> None:
     """state.json 内の該当 issue_id の状態項目をアトミックにマージ更新する (DD-003 §4.1.1)。
     state_file または非デフォルトの metadata_dir が明示された場合はそちらを優先（後方互換・テスト支援）。
     未指定または標準母艦 metadata_dir の場合は tools/.cache/projects/<PROJECT_KEY>/state.json へ隔離保存する。
+
+    consecutive_b7 が None の場合は既存エントリの値を引き継ぐ（未設定なら 0）。
+    エントリは毎回置換されるため、この引き継ぎがないと FAILED_SYSTEM 等の更新でカウンタが消える (Issue #91)。
     """
     if state_file is not None:
         target_state_file = state_file
@@ -409,11 +431,19 @@ def update_task_state(
         else (str(error_category) if error_category else None)
     )
 
+    if consecutive_b7 is None:
+        previous_entry = state_data.get(issue_id)
+        previous_value = (
+            previous_entry.get("consecutive_b7", 0) if isinstance(previous_entry, dict) else 0
+        )
+        consecutive_b7 = previous_value if isinstance(previous_value, int) else 0
+
     state_data[issue_id] = {
         "status": status_str,
         "review_round": review_round,
         "max_round": max_round,
         "error_category": err_cat_str,
+        "consecutive_b7": consecutive_b7,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

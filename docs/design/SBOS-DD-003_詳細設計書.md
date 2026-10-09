@@ -91,6 +91,10 @@ LLM 関連設定の検証、Pydantic スキーマ、および intent に基づ�
 | Resume | `--resume`、または既存 state が `CHANGES_REQUESTED`、`PR_FAILED`、`FAILED_B7`、`IN_REVIEW` | 既存作業ブランチへ switch し、base branch への rebase を試みる。未コミット差分は WIP commit を試みる。 |
 | Fresh  | 上記以外、または `--fresh`                                                                 | base branch へ switch、`pull --ff-only`、既存の作業ブランチを削除し、base branch から再作成する。      |
 
+Fresh モードで既存の作業ブランチに未マージコミットがある場合（または未マージの監査に失敗した場合）は、強制削除せず `backup/<作業ブランチ>-<YYYYMMDDHHMMSS>` へリネームして退避してから再作成する。退避に失敗した場合は `FAILED_SYSTEM` で中断する。
+
+**連続 FAILED_B7 ガード**: `--resume` / `--fresh` を指定せず、既存 state の `status` が `FAILED_B7` で `consecutive_b7` が 2 以上のときは、自動 Resume を行わず実行を拒否して人に返す。この拒否では `state.json` を変更せず、拒否した事実だけを実行履歴に記録する。明示的な `--resume` / `--fresh` はこのガードを無視して実行できる。`consecutive_b7` の更新規則は §5.6 を参照する。
+
 通常の実行で dirty working tree が見つかった場合は停止する。`allow_offline_git=True` を指定したプログラム呼び出しだけが、base branch の pull 失敗後も継続できる。作業ブランチの初期名は `project.json.work_branch_prefix` または `sbos/` と Issue ID の結合である。
 
 ### 5.3 GraphState
@@ -196,18 +200,38 @@ flowchart TD
 
 `llm_timeout_count` は planner、Aider、reviewer 間で共有される。異なる node の timeout も合算され、2回目で `FAILED_SYSTEM` となる。`spec_draft_node` の計画適合性（DoD YAGNI検問）が不適合（`rejected`）となった場合、`plan_conformance_round` を加算して最大2回まで再ドラフトを試行し、上限到達時は `FAILED_B7` となる。`escalate_node` は lint または test の上限到達時に敗因レポートの生成を試み、成功時は最終 status を `ESCALATED_NEEDS_REVISION` に更新する。
 
+#### ラウンド上限の意味（Issue #91 で確定）
+
+- `max_round`（既定 3）は、`lint_round`、`test_round`、`review_round` それぞれの**累積失敗回数**に対する上限である。フェーズを通過してもカウンタはリセットしない。
+- 上限は「失敗 3 回目で `FAILED_B7`」を意味する（`round >= max_round` で停止。再試行は最大 2 回）。
+- 各カウンタは `execute_issue` の開始ごとに 0 から数える。実行をまたぐ上限は、次の `consecutive_b7` が担う。
+- 1 回の実行で `code_node` が走る最悪回数は、初回 1 + 各フェーズの再実行 (max_round - 1) × 3 + timeout 再試行 2 となる。`recursion_limit` はこれから算出する（`compute_recursion_limit`）。
+
+#### 連続 FAILED_B7 回数（`consecutive_b7`）
+
+`state.json` の Issue エントリに保持し、実行終了時の最終 status で次のとおり更新する。
+
+| 最終 status                                                                               | `consecutive_b7`                         |
+| :---------------------------------------------------------------------------------------- | :--------------------------------------- |
+| `FAILED_B7`                                                                               | +1                                       |
+| `COMPLETED`                                                                               | 0 に戻す                                 |
+| `--fresh` で開始した実行                                                                  | 0 から数え直す（実行後の status で更新） |
+| 上記以外（`FAILED_SYSTEM`、`PR_FAILED`、`ESCALATED_NEEDS_REVISION`、`SKIPPED_LOCKED` 等） | 変更しない                               |
+
+`ESCALATED_NEEDS_REVISION` は自動 Resume の対象外（次回は Fresh）のため数えない。未設定のエントリは 0 として扱う。上限（`MAX_CONSECUTIVE_B7` = 2）に達した場合の挙動は §5.2 を参照する。
+
 ### 5.7 Node 契約
 
-| Node                 | 成功時                                                                                                                                                                                    | 再試行・エスカレーション                                                                                                                                                                                        |
-| :------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec_draft_node`    | planner 出力を `impl_plan` へ保存し、JEV 計画適合性ゲートで検証。適合（`passed`）なら `code_node` へ進行。                                                                                | YAGNI違反は制約フィードバックを付与し初回 `retry_spec_draft`、2回目は `FAILED_B7`。timeout は初回再試行、2回目は `FAILED_SYSTEM`。その他例外は `SYSTEM_ERROR`。                                                 |
-| `code_node`          | Aider 実行後、`.gitignore` の変更を戻し、Git 状態から変更済み Python ファイルを `target_files` に追加する。                                                                               | timeout は初回 `retry_code`、2回目は `FAILED_SYSTEM`。その他の Aider エラーは即時 `SYSTEM_ERROR`。                                                                                                              |
-| `lint_node`          | 対象 Python がなければ `lint_passed`。Ruff の最終 check 成功で `lint_passed`。                                                                                                            | 失敗時は `LINT_ERROR` と `lint_round` を更新し、3回目で `FAILED_B7`。                                                                                                                                           |
-| `run_pytest_node`    | pytest の JSON report を解析し、成功なら `test_passed`。                                                                                                                                  | 失敗時は `TEST_ERROR` と `test_round` を更新し、3回目で `FAILED_B7`。実行・解析例外は `SYSTEM_ERROR`。                                                                                                          |
-| `test_feedback_node` | reasoning LLM の助言を `test_feedback_instruction` と `aider_message` に保存する。                                                                                                        | 助言作成失敗時も raw テスト出力を維持して `retry_code`。                                                                                                                                                        |
-| `review_node`        | LLM 判定を実施し、`LGTM` の場合は JEV レビュー合否二次ゲート（`verify_review_conformance`）で検証。適合なら `review_lgtm` を確定して `done_node` へ進行。RDJSON・レビュー履歴を保存する。 | JEV 不適合時は `changes_requested` に上書きし `aider_message` を付与して `code_node` へ差し戻し。指摘は最大3回まで `retry_code`、超過時は `FAILED_B7`。timeout は初回 `retry_review`、2回目は `FAILED_SYSTEM`。 |
-| `done_node`          | 対象ファイルを stage・commit・push し PR を作成、または既存 PR を検出して `COMPLETED`。                                                                                                   | Git/PR 操作失敗は `PR_FAILED` / `PR_ERROR`。                                                                                                                                                                    |
-| `escalate_node`      | 最終状態を防御的に `FAILED_B7` または `FAILED_SYSTEM` とする。                                                                                                                            | lint/test の上限到達時は敗因レポート生成を試み、成功時は `ESCALATED_NEEDS_REVISION` とする。                                                                                                                    |
+| Node                 | 成功時                                                                                                                                                                                    | 再試行・エスカレーション                                                                                                                                                                                          |
+| :------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec_draft_node`    | planner 出力を `impl_plan` へ保存し、JEV 計画適合性ゲートで検証。適合（`passed`）なら `code_node` へ進行。                                                                                | YAGNI違反は制約フィードバックを付与し初回 `retry_spec_draft`、2回目は `FAILED_B7`。timeout は初回再試行、2回目は `FAILED_SYSTEM`。その他例外は `SYSTEM_ERROR`。                                                   |
+| `code_node`          | Aider 実行後、`.gitignore` の変更を戻し、Git 状態から変更済み Python ファイルを `target_files` に追加する。                                                                               | timeout は初回 `retry_code`、2回目は `FAILED_SYSTEM`。その他の Aider エラーは即時 `SYSTEM_ERROR`。                                                                                                                |
+| `lint_node`          | 対象 Python がなければ `lint_passed`。Ruff の最終 check 成功で `lint_passed`。                                                                                                            | 失敗時は `LINT_ERROR` と `lint_round` を更新し、3回目で `FAILED_B7`。                                                                                                                                             |
+| `run_pytest_node`    | pytest の JSON report を解析し、成功なら `test_passed`。                                                                                                                                  | 失敗時は `TEST_ERROR` と `test_round` を更新し、3回目で `FAILED_B7`。実行・解析例外は `SYSTEM_ERROR`。                                                                                                            |
+| `test_feedback_node` | reasoning LLM の助言を `test_feedback_instruction` と `aider_message` に保存する。                                                                                                        | 助言作成失敗時も raw テスト出力を維持して `retry_code`。                                                                                                                                                          |
+| `review_node`        | LLM 判定を実施し、`LGTM` の場合は JEV レビュー合否二次ゲート（`verify_review_conformance`）で検証。適合なら `review_lgtm` を確定して `done_node` へ進行。RDJSON・レビュー履歴を保存する。 | JEV 不適合時は `changes_requested` に上書きし `aider_message` を付与して `code_node` へ差し戻し。指摘は 3 回目で `FAILED_B7`（それ以前は `retry_code`）。timeout は初回 `retry_review`、2回目は `FAILED_SYSTEM`。 |
+| `done_node`          | 対象ファイルを stage・commit・push し PR を作成、または既存 PR を検出して `COMPLETED`。                                                                                                   | Git/PR 操作失敗は `PR_FAILED` / `PR_ERROR`。                                                                                                                                                                      |
+| `escalate_node`      | 最終状態を防御的に `FAILED_B7` または `FAILED_SYSTEM` とする。                                                                                                                            | lint/test の上限到達時は敗因レポート生成を試み、成功時は `ESCALATED_NEEDS_REVISION` とする。                                                                                                                      |
 
 ## 6. 外部ツール Adapter 契約
 
