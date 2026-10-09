@@ -666,6 +666,8 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
         patch("tools.llm_client.call_llm", return_value=mock_lgtm),
         patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        # reviewdog が導入済みの環境を模擬する (未導入ならスキップされるため、Issue #106)
+        patch("tools.orchestrator_graph.shutil.which", return_value="/usr/bin/reviewdog"),
         patch("tools.orchestrator_graph.run_cmd", return_value=mock_rd_fail),
         patch(
             "tools.jev_adapter.verify_review_conformance",

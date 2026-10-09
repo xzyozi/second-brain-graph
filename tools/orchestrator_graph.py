@@ -1265,28 +1265,43 @@ def review_node(state: GraphState) -> GraphState:
 
         # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存 (オプショナル連携のため失敗時はログ警告のみで LLM レビューを継続)
         if is_in_git_workspace(cwd):
-            try:
-                rd_input = json.dumps(state["rdjson"])
-                res_rd = run_cmd(
-                    ["reviewdog", "-f=rdjson", "-diff=git diff HEAD"],
-                    cwd=cwd,
-                    input_str=rd_input,
-                    timeout=120,
-                )
+            if shutil.which("reviewdog") is None:
+                # 未導入は例外ではなくスキップとして扱う (Issue #106)。導入済みで失敗した場合と区別できるよう
+                # reviewdog_result に skipped を残す。
+                logger.info("Reviewdog is not installed; skipping reviewdog integration.")
                 state["reviewdog_result"] = {
-                    "returncode": res_rd.returncode,
-                    "stdout": res_rd.stdout,
-                    "stderr": res_rd.stderr,
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "skipped": "not_installed",
                 }
-                if res_rd.returncode == 0:
-                    logger.info("Reviewdog execution completed successfully.")
-                else:
-                    logger.warning(
-                        f"Reviewdog execution returned non-zero ({res_rd.returncode}): {res_rd.stderr}. Continuing LLM review workflow."
+            else:
+                try:
+                    rd_input = json.dumps(state["rdjson"])
+                    res_rd = run_cmd(
+                        ["reviewdog", "-f=rdjson", "-diff=git diff HEAD"],
+                        cwd=cwd,
+                        input_str=rd_input,
+                        timeout=120,
                     )
-            except Exception as rde:
-                logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
-                state["reviewdog_result"] = {"returncode": -1, "stdout": "", "stderr": str(rde)}
+                    state["reviewdog_result"] = {
+                        "returncode": res_rd.returncode,
+                        "stdout": res_rd.stdout,
+                        "stderr": res_rd.stderr,
+                    }
+                    if res_rd.returncode == 0:
+                        logger.info("Reviewdog execution completed successfully.")
+                    else:
+                        logger.warning(
+                            f"Reviewdog execution returned non-zero ({res_rd.returncode}): {res_rd.stderr}. Continuing LLM review workflow."
+                        )
+                except Exception as rde:
+                    logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
+                    state["reviewdog_result"] = {
+                        "returncode": -1,
+                        "stdout": "",
+                        "stderr": str(rde),
+                    }
 
         if verdict == "LGTM":
             state["status"] = "review_lgtm"
