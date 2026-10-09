@@ -1903,6 +1903,7 @@ def execute_issue(
                         chk_branch = run_cmd(
                             ["git", "rev-parse", "--verify", head_branch], cwd=cwd, timeout=60
                         )
+                        branch_backed_up = False
                         if chk_branch.returncode == 0:
                             prev_head_commit = chk_branch.stdout.strip()
                             unmerged_log = run_cmd(
@@ -1910,16 +1911,47 @@ def execute_issue(
                                 cwd=cwd,
                                 timeout=60,
                             )
-                            if unmerged_log.returncode == 0 and unmerged_log.stdout.strip():
-                                unmerged_commits = unmerged_log.stdout.strip().splitlines()
+                            # 監査に失敗した場合も、未マージコミットがある前提で安全側(退避)に倒す
+                            has_unmerged = (
+                                unmerged_log.returncode != 0 or bool(unmerged_log.stdout.strip())
+                            )
+                            if has_unmerged:
+                                unmerged_commits = (
+                                    unmerged_log.stdout.strip().splitlines()
+                                    if unmerged_log.returncode == 0
+                                    else []
+                                )
+                                # 未マージコミットを失わないよう、強制削除せず退避ブランチへリネームする (Issue #90)
+                                backup_branch = (
+                                    f"backup/{head_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                )
                                 logger.warning(
-                                    f"[FRESH MODE SAFETY WARNING] Recreating work branch '{head_branch}' which contains "
-                                    f"{len(unmerged_commits)} unmerged commit(s) relative to '{base_branch}'. "
-                                    f"Previous HEAD commit was: {prev_head_commit}\nUnmerged commits:\n"
+                                    f"[FRESH MODE SAFETY WARNING] Work branch '{head_branch}' may contain "
+                                    f"unmerged commit(s) relative to '{base_branch}' "
+                                    f"({len(unmerged_commits)} detected). "
+                                    f"Previous HEAD commit was: {prev_head_commit}. "
+                                    f"Backing up to '{backup_branch}'.\n"
                                     + "\n".join(unmerged_commits[:5])
                                 )
+                                mv_res = run_cmd(
+                                    ["git", "branch", "-m", head_branch, backup_branch],
+                                    cwd=cwd,
+                                    timeout=60,
+                                )
+                                if mv_res.returncode != 0:
+                                    _fail_system(
+                                        project_key,
+                                        issue_id,
+                                        f"Failed to back up unmerged work branch '{head_branch}': {mv_res.stderr}",
+                                        cwd=cwd,
+                                        metadata_dir=metadata_dir,
+                                        history_file=history_file,
+                                    )
+                                    return
+                                branch_backed_up = True
 
-                        run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
+                        if not branch_backed_up:
+                            run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
                         sw_c = run_cmd(
                             ["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60
                         )
