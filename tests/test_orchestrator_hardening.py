@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from langgraph.errors import GraphRecursionError
@@ -18,7 +19,9 @@ from tools.orchestrator_graph import (
 
 def test_route_unknown_status_goes_to_escalate() -> None:
     """想定外の status は escalate_node へ送られる (Issue #89)。"""
-    state = GraphState(issue_id="TFG-0001", status="unexpected")
+    # 型に存在しない status を意図的に注入するため Any 経由で渡す
+    unexpected_status: Any = "unexpected"
+    state = GraphState(issue_id="TFG-0001", status=unexpected_status)
     assert _route_unknown_status("lint_node", state) == "escalate_node"
 
 
