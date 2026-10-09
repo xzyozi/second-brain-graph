@@ -342,6 +342,23 @@ def force_unlock_project(
 # ==============================================================================
 
 
+#: 自律ワーカーが生成する成果物の .gitignore 向け表記 (Issue #98)。
+#: dirty 判定・Resume の WIP コミット除外・衛星 .gitignore の保証で共通利用する唯一の定義。
+GENERATED_ARTIFACT_GITIGNORE_ENTRIES: tuple[str, ...] = (
+    ".aider*",
+    ".pytest_cache/",
+    "__pycache__/",
+    ".venv/",
+    "*.pyc",
+    ".ruff_cache/",
+    ".mypy_cache/",
+)
+
+#: パスの各要素に対する fnmatch 用パターン (末尾の "/" を除いたもの)。
+GENERATED_ARTIFACT_PATTERNS: tuple[str, ...] = tuple(
+    entry.rstrip("/") for entry in GENERATED_ARTIFACT_GITIGNORE_ENTRIES
+)
+
 #: 連続 FAILED_B7 がこの回数に達した Issue は、自動 Resume を拒否して人に返す (Issue #91, DD-003 §5.6)
 MAX_CONSECUTIVE_B7 = 2
 
