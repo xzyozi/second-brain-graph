@@ -30,12 +30,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
 from tools.metadata_store import (
     ISSUE_ID_PATTERN,
+    MAX_CONSECUTIVE_B7,
     ErrorCategory,
     ErrorCategoryLiteral,
     ProjectLockManager,
     StatusLiteral,
     TaskStatus,
     get_runtime_cache_dir,
+    next_consecutive_b7,
     record_execution_history,
     resolve_project_context,
     safe_record_execution_history,
@@ -1746,6 +1748,8 @@ def execute_issue(
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
             # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かを判定
             current_task_status = ""
+            current_error_category: Optional[str] = None
+            current_consecutive_b7 = 0
             state_json_candidates = [get_runtime_cache_dir(project_key) / "state.json"]
             if metadata_dir:
                 state_json_candidates.append(metadata_dir / "projects" / project_key / "state.json")
@@ -1754,11 +1758,45 @@ def execute_issue(
                     try:
                         with open(state_json_path, "r", encoding="utf-8") as sf:
                             sdata = json.load(sf)
-                            current_task_status = sdata.get(issue_id, {}).get("status", "")
+                            entry = sdata.get(issue_id, {})
+                            current_task_status = entry.get("status", "")
                             if current_task_status:
+                                current_error_category = entry.get("error_category")
+                                saved_b7 = entry.get("consecutive_b7", 0)
+                                current_consecutive_b7 = (
+                                    saved_b7 if isinstance(saved_b7, int) else 0
+                                )
                                 break
                     except Exception:
                         pass
+
+            # 連続 FAILED_B7 ガード (Issue #91): 状態から自動 Resume と判定される場合のみ拒否する。
+            # 明示的な --resume / --fresh は人の判断として尊重する。
+            if (
+                resume is None
+                and not fresh
+                and current_task_status == TaskStatus.FAILED_B7.value
+                and current_consecutive_b7 >= MAX_CONSECUTIVE_B7
+            ):
+                guard_message = (
+                    f"Auto-resume blocked: {issue_id} ended with FAILED_B7 "
+                    f"{current_consecutive_b7} times in a row (limit {MAX_CONSECUTIVE_B7}). "
+                    "Review the failure, then re-run with --resume (continue) or --fresh (restart)."
+                )
+                logger.error(guard_message)
+                # state.json (status / カウンタ) は変更せず、拒否した事実だけを実行履歴に残す
+                safe_record_execution_history(
+                    {
+                        "issue_id": issue_id,
+                        "project_key": project_key,
+                        "cwd": cwd,
+                        "error_category": current_error_category,
+                        "error": guard_message,
+                    },
+                    final_status=TaskStatus.FAILED_B7.value,
+                    history_file=history_file,
+                )
+                return
 
             is_resume_mode = (
                 resume
@@ -2229,6 +2267,8 @@ def execute_issue(
             error_cat = final_state.get("error_category")
 
             # 1. アトミックに state.json 更新
+            # --fresh は連続 FAILED_B7 回数を 0 から数え直す (Issue #91)
+            previous_b7 = 0 if fresh else current_consecutive_b7
             update_task_state(
                 project_key,
                 issue_id,
@@ -2237,6 +2277,7 @@ def execute_issue(
                 max_round=final_state.get("max_round", 3),
                 error_category=error_cat,
                 metadata_dir=metadata_dir,
+                consecutive_b7=next_consecutive_b7(previous_b7, str(final_status)),
             )
             # 2. 確定済ステートを保護する統一ヘルパーで execution_history.json 追記保存
             safe_record_execution_history(
