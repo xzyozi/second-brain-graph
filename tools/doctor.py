@@ -470,6 +470,21 @@ def check_github_labels(github_repo: Optional[str], fix: bool = False) -> CheckR
         )
 
 
+def check_reviewdog() -> CheckResult:
+    """Reviewdog の導入チェック (任意の依存。未導入でもパイプラインは動作するため WARN 止まり)"""
+    path = shutil.which("reviewdog")
+    if path is None:
+        return CheckResult(
+            name="Reviewdog",
+            status="WARN",
+            message=(
+                "reviewdog が未導入です (任意: 導入すると差分レビューの補助に使われます。"
+                "未導入の間は reviewdog 連携をスキップします)"
+            ),
+        )
+    return CheckResult(name="Reviewdog", status="OK", message=f"reviewdog 導入済み: {path}")
+
+
 def diagnose_project(
     project_key: str,
     project_root: Path,
@@ -513,6 +528,9 @@ def diagnose_project(
 
     # 6. GitHub ラベルチェック
     results.append(check_github_labels(github_repo, fix=fix))
+
+    # 7. Reviewdog 導入チェック (任意)
+    results.append(check_reviewdog())
 
     return results
 
