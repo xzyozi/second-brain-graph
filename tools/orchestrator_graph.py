@@ -1979,10 +1979,26 @@ def execute_issue(
                                 ["git", "rebase", base_branch], cwd=cwd, timeout=120
                             )
                             if rebase_res.returncode != 0:
+                                # 衝突した状態でコード編集を進めると解決を暗黙に LLM へ委ねてしまうため、
+                                # 元の状態へ戻したうえで中断し、人に判断を返す (Issue #92)
                                 run_cmd(["git", "rebase", "--abort"], cwd=cwd, timeout=60)
-                                logger.warning(
-                                    f"git rebase {base_branch} failed during resume mode. Continuing on current head_branch commits."
+                                rebase_detail = (
+                                    f"{rebase_res.stdout or ''}{rebase_res.stderr or ''}".strip()
+                                )[:500]
+                                logger.error(
+                                    f"git rebase {base_branch} failed during resume mode. Aborting."
                                 )
+                                _fail_system(
+                                    project_key,
+                                    issue_id,
+                                    f"git rebase {base_branch} failed during resume "
+                                    f"(rebase aborted, resolve manually or re-run with --fresh): "
+                                    f"{rebase_detail}",
+                                    cwd=cwd,
+                                    metadata_dir=metadata_dir,
+                                    history_file=history_file,
+                                )
+                                return
                         else:
                             # リモートにも無かった場合は新規作成
                             run_cmd(
