@@ -427,7 +427,9 @@ def _is_pid_alive(pid: int) -> bool:
             return False
 
 
-def test_kill_process_tree_terminates_grandchild(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_kill_process_tree_terminates_grandchild(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """kill_process_tree が子・孫プロセスツリーを確実に終了することを検証する."""
     gc_pid_file = tmp_path / "grandchild.pid"
 
@@ -611,4 +613,3 @@ def test_execute_autonomous_task_failure_exit_code(
 
     assert result is False
     assert "エラー終了しました (exit code 2)" in caplog.text
-
