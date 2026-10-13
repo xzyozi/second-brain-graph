@@ -6,8 +6,11 @@ from __future__ import annotations
 import datetime
 import logging
 import signal
+import subprocess
 import threading
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -404,3 +407,208 @@ def test_windows_does_not_register_sigterm(
     assert signal.SIGINT in registered_signals
     assert signal.SIGTERM not in registered_signals
     assert "終了理由 (Exit Reason): max_iterations" in caplog.text
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """プロセスが存在するか確認するヘルパー."""
+    if nightly_task_worker.sys.platform == "win32":
+        res = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return str(pid) in res.stdout
+    else:
+        try:
+            nightly_task_worker.os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+
+def test_kill_process_tree_terminates_grandchild(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """kill_process_tree が子・孫プロセスツリーを確実に終了することを検証する."""
+    gc_pid_file = tmp_path / "grandchild.pid"
+
+    # 子プロセススクリプト: 孫プロセスを起動して自身もスリープ
+    child_script = f"""
+import subprocess
+import sys
+import time
+
+cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+p = subprocess.Popen(cmd)
+with open({repr(str(gc_pid_file))}, "w") as f:
+    f.write(str(p.pid))
+time.sleep(30)
+"""
+
+    popen_kwargs: dict[str, Any] = {}
+    if nightly_task_worker.sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+
+    child_proc = subprocess.Popen(
+        [nightly_task_worker.sys.executable, "-c", child_script],
+        **popen_kwargs,
+    )
+
+    # 孫プロセスの PID ファイルが書き込まれるのを待機
+    gc_pid: int | None = None
+    for _ in range(50):
+        if gc_pid_file.is_file():
+            try:
+                gc_pid = int(gc_pid_file.read_text().strip())
+                break
+            except ValueError:
+                pass
+        time.sleep(0.1)
+
+    assert gc_pid is not None, "孫プロセスの起動・PID取得に失敗しました"
+    assert _is_pid_alive(gc_pid), "孫プロセスが稼働していません"
+    assert _is_pid_alive(child_proc.pid), "子プロセスが稼働していません"
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        nightly_task_worker.kill_process_tree(child_proc)
+
+    child_proc.wait(timeout=5)
+    time.sleep(0.5)
+
+    assert not _is_pid_alive(child_proc.pid), "子プロセスが残留しています"
+    assert not _is_pid_alive(gc_pid), "孫プロセスが残留しています"
+    assert "プロセスツリー強制終了を開始します" in caplog.text
+
+
+def test_execute_autonomous_task_timeout_cleans_up_process_tree(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """execute_autonomous_task がタイムアウト時に孫プロセスを含むツリー全体を強制終了することを検証する."""
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(parents=True)
+    fake_run_task = tools_dir / "run_task.py"
+    gc_pid_file = tmp_path / "task_grandchild.pid"
+
+    # ダミー run_task.py: 孫プロセスを起動して長時間スリープ
+    fake_run_task.write_text(
+        f"""
+import subprocess
+import sys
+import time
+
+cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+p = subprocess.Popen(cmd)
+with open({repr(str(gc_pid_file))}, "w") as f:
+    f.write(str(p.pid))
+time.sleep(30)
+""",
+        encoding="utf-8",
+    )
+
+    task = nightly_task_worker.CandidateTask(
+        task_id="TIMEOUT-001",
+        project_key="TEST",
+        project_name="test_proj",
+        satellite_dir=tmp_path,
+        title="Timeout Task",
+        priority="high",
+        score=100.0,
+        stage="ready",
+        issue_num=105,
+        line_raw="",
+    )
+
+    config = {
+        "execution": {
+            "timeout_seconds": 1,
+            "auto_stash": False,
+        }
+    }
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        result = nightly_task_worker.execute_autonomous_task(
+            root_dir=tmp_path,
+            task=task,
+            config=config,
+            dry_run=False,
+        )
+
+    assert result is False
+    assert "タイムアウトしました (1s)" in caplog.text
+    assert "プロセスツリー強制終了を開始します" in caplog.text
+
+    # 孫プロセスが起動していた場合、終了していることを確認
+    if gc_pid_file.is_file():
+        gc_pid = int(gc_pid_file.read_text().strip())
+        time.sleep(0.5)
+        assert not _is_pid_alive(gc_pid), "タイムアウト後に孫プロセスが残留しています"
+
+
+def test_execute_autonomous_task_success(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """execute_autonomous_task が正常終了時に True を返すことを検証する."""
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(parents=True)
+    fake_run_task = tools_dir / "run_task.py"
+    fake_run_task.write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+
+    task = nightly_task_worker.CandidateTask(
+        task_id="OK-001",
+        project_key="TEST",
+        project_name="test_proj",
+        satellite_dir=tmp_path,
+        title="Success Task",
+        priority="high",
+        score=100.0,
+        stage="ready",
+        issue_num=105,
+        line_raw="",
+    )
+
+    config = {"execution": {"timeout_seconds": 10, "auto_stash": False}}
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        result = nightly_task_worker.execute_autonomous_task(
+            root_dir=tmp_path,
+            task=task,
+            config=config,
+            dry_run=False,
+        )
+
+    assert result is True
+    assert "正常完了しました！" in caplog.text
+
+
+def test_execute_autonomous_task_failure_exit_code(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """execute_autonomous_task がエラーコード終了時に False を返すことを検証する."""
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(parents=True)
+    fake_run_task = tools_dir / "run_task.py"
+    fake_run_task.write_text("import sys; sys.exit(2)\n", encoding="utf-8")
+
+    task = nightly_task_worker.CandidateTask(
+        task_id="FAIL-001",
+        project_key="TEST",
+        project_name="test_proj",
+        satellite_dir=tmp_path,
+        title="Fail Task",
+        priority="high",
+        score=100.0,
+        stage="ready",
+        issue_num=105,
+        line_raw="",
+    )
+
+    config = {"execution": {"timeout_seconds": 10, "auto_stash": False}}
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        result = nightly_task_worker.execute_autonomous_task(
+            root_dir=tmp_path,
+            task=task,
+            config=config,
+            dry_run=False,
+        )
+
+    assert result is False
+    assert "エラー終了しました (exit code 2)" in caplog.text
+

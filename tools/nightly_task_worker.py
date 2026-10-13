@@ -16,6 +16,7 @@ import argparse
 import datetime
 import json
 import logging
+import os
 import re
 import signal
 import subprocess
@@ -242,6 +243,52 @@ def select_best_task(
     return sorted_candidates[:max_tasks]
 
 
+def kill_process_tree(proc_or_pid: subprocess.Popen[Any] | int) -> None:
+    """指定されたプロセスおよびその子孫プロセス（ツリー全体）を強制終了する.
+
+    Windows では taskkill /F /T /PID を使用し、
+    Unix 系ではプロセスグループ (killpg SIGKILL) または単一プロセス kill を使用します。
+    """
+    pid = proc_or_pid.pid if isinstance(proc_or_pid, subprocess.Popen) else proc_or_pid
+    if pid is None:
+        return
+
+    logger.warning(f"プロセスツリー強制終了を開始します (PID: {pid})")
+
+    if sys.platform == "win32":
+        try:
+            res = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res.returncode == 0:
+                logger.info(f"プロセスツリー (PID: {pid}) を正常に強制終了しました。")
+            else:
+                msg = res.stderr.strip() if res.stderr else res.stdout.strip()
+                logger.warning(
+                    f"taskkill (PID: {pid}) 実行結果: returncode={res.returncode}, msg={msg}"
+                )
+        except Exception as e:
+            logger.error(f"Windows taskkill 実行中に例外が発生しました (PID: {pid}): {e}")
+    else:
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGKILL)
+            logger.info(f"プロセスグループ (PGID: {pgid}, PID: {pid}) を正常に強制終了しました。")
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.warning(
+                f"プロセスグループ強制終了に失敗しました (PID: {pid}): {e}。単一プロセス強制終了を試みます。"
+            )
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+
 def execute_autonomous_task(
     root_dir: Path,
     task: CandidateTask,
@@ -271,13 +318,20 @@ def execute_autonomous_task(
 
     logger.info(f"自律実装パイプラインを起動中: {' '.join(cmd)}")
 
+    popen_kwargs: dict[str, Any] = {
+        "cwd": root_dir,
+    }
+    if sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=root_dir,
-            timeout=timeout,
-            check=False,
-        )
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+    except Exception as e:
+        logger.error(f"自律実装パイプライン起動中に例外が発生しました: {e}")
+        return False
+
+    try:
+        proc.communicate(timeout=timeout)
         if proc.returncode == 0:
             logger.info(f"タスク {task.task_id} の自律実装が正常完了しました！")
             return True
@@ -288,9 +342,19 @@ def execute_autonomous_task(
             return False
     except subprocess.TimeoutExpired:
         logger.error(f"タスク {task.task_id} の自律実装がタイムアウトしました ({timeout}s)")
+        kill_process_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
         return False
     except Exception as e:
         logger.error(f"タスク {task.task_id} の自律実装実行中に例外が発生しました: {e}")
+        kill_process_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
         return False
 
 
