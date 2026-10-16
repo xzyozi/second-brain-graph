@@ -16,6 +16,7 @@ import argparse
 import datetime
 import json
 import logging
+import os
 import re
 import signal
 import subprocess
@@ -242,6 +243,53 @@ def select_best_task(
     return sorted_candidates[:max_tasks]
 
 
+def _terminate_process_tree(proc: subprocess.Popen[Any]) -> None:
+    """proc とその子孫プロセスをまとめて終了する (Issue #105)."""
+    pid = proc.pid
+    if sys.platform == "win32":
+        result = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            check=False,
+        )
+        logger.warning(
+            f"プロセスツリーを終了しました (taskkill /T /F, pid={pid}, rc={result.returncode})"
+        )
+    else:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            logger.warning(f"プロセスグループを終了しました (killpg, pid={pid})")
+        except ProcessLookupError:
+            pass
+    # 直接の子が残っている場合の保険
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run_with_tree_kill(
+    cmd: list[str],
+    cwd: Path,
+    timeout: float,
+) -> subprocess.CompletedProcess[None]:
+    """cmd を実行し、タイムアウト時は子孫プロセスごと終了して TimeoutExpired を送出する."""
+    popen_kwargs: dict[str, Any] = {}
+    if sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+    with subprocess.Popen(cmd, cwd=cwd, **popen_kwargs) as proc:
+        try:
+            proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _terminate_process_tree(proc)
+            proc.wait()
+            raise
+        except BaseException:
+            _terminate_process_tree(proc)
+            raise
+    return subprocess.CompletedProcess(cmd, proc.returncode)
+
+
 def execute_autonomous_task(
     root_dir: Path,
     task: CandidateTask,
@@ -272,12 +320,7 @@ def execute_autonomous_task(
     logger.info(f"自律実装パイプラインを起動中: {' '.join(cmd)}")
 
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=root_dir,
-            timeout=timeout,
-            check=False,
-        )
+        proc = _run_with_tree_kill(cmd, cwd=root_dir, timeout=timeout)
         if proc.returncode == 0:
             logger.info(f"タスク {task.task_id} の自律実装が正常完了しました！")
             return True

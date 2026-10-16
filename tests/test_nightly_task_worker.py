@@ -404,3 +404,42 @@ def test_windows_does_not_register_sigterm(
     assert signal.SIGINT in registered_signals
     assert signal.SIGTERM not in registered_signals
     assert "終了理由 (Exit Reason): max_iterations" in caplog.text
+
+
+def test_run_with_tree_kill_terminates_grandchild(tmp_path: Path) -> None:
+    """タイムアウト時に孫プロセスも終了することを検証する (Issue #105)."""
+    import subprocess
+    import sys
+    import time
+
+    marker = tmp_path / "grandchild_done.txt"
+    grandchild_code = (
+        f"import time, pathlib; time.sleep(4); pathlib.Path({str(marker)!r}).write_text('x')"
+    )
+    child_code = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild_code!r}]); "
+        "time.sleep(60)"
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        nightly_task_worker._run_with_tree_kill(
+            [sys.executable, "-c", child_code], cwd=tmp_path, timeout=1
+        )
+
+    time.sleep(5)
+    assert not marker.exists()
+
+
+def test_run_with_tree_kill_returns_exit_code(tmp_path: Path) -> None:
+    """正常終了・異常終了の終了コードが従来どおり返ることを検証する."""
+    import sys
+
+    ok = nightly_task_worker._run_with_tree_kill(
+        [sys.executable, "-c", "raise SystemExit(0)"], cwd=tmp_path, timeout=30
+    )
+    ng = nightly_task_worker._run_with_tree_kill(
+        [sys.executable, "-c", "raise SystemExit(3)"], cwd=tmp_path, timeout=30
+    )
+    assert ok.returncode == 0
+    assert ng.returncode == 3
