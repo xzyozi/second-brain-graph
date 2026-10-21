@@ -144,6 +144,18 @@ def test_check_gitignore(tmp_path: Path) -> None:
     assert res_ok.status == "OK"
 
 
+def test_check_gitignore_missing_file_is_not_reported_as_fixed(tmp_path: Path) -> None:
+    """.gitignore が無い衛星では --fix でも FIXED と誤報告しない (Issue #100)。"""
+    for fix in (False, True):
+        res = check_gitignore(tmp_path, fix=fix)
+        assert res.status == "WARN"
+        assert res.fixable is False
+        assert ".gitignore が存在しません" in res.message
+
+    # 新規作成もしない
+    assert not (tmp_path / ".gitignore").exists()
+
+
 def test_check_issue_specs(tmp_path: Path) -> None:
     """未完了タスクに対する仕様書 docs/issues/*.md の存在チェックを検証"""
     sat_dir = tmp_path

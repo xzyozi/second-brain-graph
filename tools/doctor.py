@@ -304,10 +304,16 @@ def check_venv(sat_dir: Path, fix: bool = False) -> CheckResult:
 def check_gitignore(sat_dir: Path, fix: bool = False) -> CheckResult:
     """サテライトの .gitignore 設定チェック"""
     gitignore_file = sat_dir / ".gitignore"
-    content = ""
-    if gitignore_file.exists():
-        content = gitignore_file.read_text(encoding="utf-8")
+    if not gitignore_file.exists():
+        # ensure_satellite_gitignore は .gitignore を新規作成しないため、--fix でも直せない (Issue #100)
+        return CheckResult(
+            name="Git Ignore",
+            status="WARN",
+            message=".gitignore が存在しません (自動作成は行いません。手動で作成してください)",
+            fixable=False,
+        )
 
+    content = gitignore_file.read_text(encoding="utf-8")
     missing_entries = missing_gitignore_entries(content)
 
     if missing_entries:
