@@ -67,8 +67,8 @@ const runGit = (argumentsList) => execFileSync("git", argumentsList, { cwd: REPO
  *     Repository-relative Markdown paths under docs.
  */
 const collectChangedMarkdownFiles = (base, head) => runGit([
-    "diff", "--name-only", "--diff-filter=ACMR", normalizeBaseRevision(base), head, "--", "docs",
-]).split(/\r?\n/).filter((filePath) => filePath.endsWith(".md"));
+    "-c", "core.quotePath=false", "diff", "-z", "--name-only", "--diff-filter=ACMR", normalizeBaseRevision(base), head, "--", "docs",
+]).split("\0").filter((filePath) => filePath.endsWith(".md"));
 /**
  * Recursively collect every Markdown file under docs.
  *
