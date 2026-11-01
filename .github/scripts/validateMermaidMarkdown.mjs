@@ -141,7 +141,7 @@ const extractMermaidBlocks = (filePath) => {
  * Raises:
  *     Error: If Mermaid CLI cannot render the block.
  */
-const renderBlock = (filePath, block, temporaryDirectory) => {
+const renderBlock = (filePath, block, temporaryDirectory, puppeteerConfigPath) => {
     const fileStem = `${basename(filePath, ".md")}-${block.number}`;
     const inputPath = join(temporaryDirectory, `${fileStem}.mmd`);
     const outputPath = join(temporaryDirectory, `${fileStem}.svg`);
@@ -149,7 +149,7 @@ const renderBlock = (filePath, block, temporaryDirectory) => {
 
     const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
     const result = spawnSync(npxCommand, [
-        "--yes", "--package", MERMAID_CLI_PACKAGE, "mmdc", "--input", inputPath, "--output", outputPath,
+        "--yes", "--package", MERMAID_CLI_PACKAGE, "mmdc", "--puppeteerConfigFile", puppeteerConfigPath, "--input", inputPath, "--output", outputPath,
     ], { cwd: REPOSITORY_ROOT, encoding: "utf8" });
     if (result.status !== 0) {
         const details = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
@@ -176,6 +176,8 @@ const validateMermaid = (filePaths) => {
     }
 
     const temporaryDirectory = mkdtempSync(join(tmpdir(), "mermaid-validation-"));
+    const puppeteerConfigPath = join(temporaryDirectory, "puppeteer-config.json");
+    writeFileSync(puppeteerConfigPath, JSON.stringify({ args: ["--no-sandbox", "--disable-setuid-sandbox"] }), "utf8");
     const errors = [];
     let diagramCount = 0;
     try {
@@ -184,7 +186,7 @@ const validateMermaid = (filePaths) => {
                 const blocks = extractMermaidBlocks(filePath);
                 blocks.forEach((block) => {
                     diagramCount += 1;
-                    renderBlock(filePath, block, temporaryDirectory);
+                    renderBlock(filePath, block, temporaryDirectory, puppeteerConfigPath);
                 });
             } catch (error) {
                 errors.push(error instanceof Error ? error.message : String(error));
