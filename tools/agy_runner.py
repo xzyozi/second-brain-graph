@@ -16,7 +16,13 @@ from tools.agy_client import (
     AgyTimeoutError,
     run_agy_in_workdir,
 )
-from tools.aider_runner import AiderRunError, cleanup_unauthorized_aider_artifacts
+from tools.aider_runner import AiderRunError
+from tools.edit_guard import (
+    MotherRepositoryProtectionError,
+    cleanup_unauthorized_aider_artifacts,
+    validate_cwd_is_satellite,
+    warn_if_working_tree_dirty,
+)
 
 logger = logging.getLogger("agy_runner")
 
@@ -44,6 +50,13 @@ def run_agy_edit(
     """
     if not cwd:
         raise AgyRunError("run_agy_edit requires a non-empty cwd")
+
+    try:
+        validate_cwd_is_satellite(cwd)
+    except MotherRepositoryProtectionError as e:
+        raise AgyRunError(f"Security violation: {e}") from e
+
+    warn_if_working_tree_dirty(cwd, target_files)
 
     try:
         run_agy_in_workdir(instruction, cwd=cwd, timeout=timeout)
