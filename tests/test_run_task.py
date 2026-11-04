@@ -554,6 +554,7 @@ def test_missing_gitignore_entries_normalizes_lines() -> None:
             "__pycache__",  # 末尾 "/" 無しでも充足
             "*.pyc",
             ".aider.chat.history.md",  # `.aider*` を接頭辞で充足
+            ".agy.session.json",  # `.agy*` を接頭辞で充足
         ]
     )
 

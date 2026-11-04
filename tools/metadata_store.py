@@ -350,6 +350,7 @@ def force_unlock_project(
 #: dirty 判定・Resume の WIP コミット除外・衛星 .gitignore の保証で共通利用する唯一の定義。
 GENERATED_ARTIFACT_GITIGNORE_ENTRIES: tuple[str, ...] = (
     ".aider*",
+    ".agy*",
     ".pytest_cache/",
     "__pycache__/",
     ".venv/",

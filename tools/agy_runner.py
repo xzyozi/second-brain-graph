@@ -1,9 +1,6 @@
 """agy によるコード編集実行の薄いランナー.
 
-既存の Aider 実行 (tools/aider_runner.run_aider) と code_node から見た外側契約を
-揃えるため、AgyRunError は AiderRunError のサブクラスとする。これにより、
-code_node の既存の `except AiderRunError` がそのまま agy の例外も捕捉できる
-(#128 で CoderRunError へ整理するまでの暫定措置、SBOS-DD-004 §3.2)。
+コード編集エンジンの実行例外として CoderRunError を定義し、AgyRunError はそのサブクラスとする。
 """
 
 import logging
@@ -16,7 +13,6 @@ from tools.agy_client import (
     AgyTimeoutError,
     run_agy_in_workdir,
 )
-from tools.aider_runner import AiderRunError
 from tools.edit_guard import (
     MotherRepositoryProtectionError,
     cleanup_unauthorized_aider_artifacts,
@@ -27,8 +23,14 @@ from tools.edit_guard import (
 logger = logging.getLogger("agy_runner")
 
 
-class AgyRunError(AiderRunError):
-    """agy 実行時のエラー。code_node から見た契約は AiderRunError と同一とする。"""
+class CoderRunError(Exception):
+    """コード編集エンジンの実行時エラー（タイムアウト・プロセス失敗等）."""
+
+    pass
+
+
+class AgyRunError(CoderRunError):
+    """agy 実行時のエラー."""
 
     pass
 

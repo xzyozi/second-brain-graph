@@ -93,9 +93,9 @@ class BackendExecutionConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    aider: AiderConfig
     models: Dict[str, RoleConfig]
     backend_execution: BackendExecutionConfig
+    aider: Optional[AiderConfig] = None
 
 
 # 後方互換性のためのエイリアス
@@ -116,9 +116,9 @@ class CoderPromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope_restriction_template: str
     execution_strategy_step_by_step: str
-    strict_output_rules: str
     agy_edit_rules: str
-    read_only_test_enforcement: str
+    strict_output_rules: Optional[str] = None
+    read_only_test_enforcement: Optional[str] = None
 
 
 class AdvisorPromptConfig(BaseModel):
@@ -238,6 +238,6 @@ def get_backend_execution_config() -> BackendExecutionConfig:
 
 
 def get_aider_config() -> AiderConfig:
-    """Get Aider execution configuration."""
+    """Get Aider execution configuration (deprecated)."""
     config = load_model_config()
-    return config.aider
+    return config.aider or AiderConfig()

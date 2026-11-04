@@ -1,4 +1,4 @@
-"""aider_runner のサニタイザ (Issue #101) のテスト。実際の git リポジトリで検証する。"""
+"""edit_guard のサニタイザ (Issue #101, #102) のテスト。実際の git リポジトリで検証する。"""
 
 import logging
 import os
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.aider_runner import cleanup_unauthorized_aider_artifacts, warn_if_working_tree_dirty
+from tools.edit_guard import cleanup_unauthorized_aider_artifacts, warn_if_working_tree_dirty
 
 GIT_ENV = {
     **os.environ,
@@ -116,7 +116,7 @@ def test_warns_when_working_tree_is_dirty_before_aider(
 ) -> None:
     (repo / "settings.json").write_text('{"a": 2}\n', encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING, logger="aider_runner"):
+    with caplog.at_level(logging.WARNING, logger="edit_guard"):
         warn_if_working_tree_dirty(str(repo), ["src/target.py"])
 
     assert "Working tree is not clean" in caplog.text
@@ -129,7 +129,7 @@ def test_no_warning_when_only_targets_or_aider_files_changed(
     (repo / "src" / "target.py").write_text("t = 2\n", encoding="utf-8")
     (repo / ".aider.tags").write_text("x\n", encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING, logger="aider_runner"):
+    with caplog.at_level(logging.WARNING, logger="edit_guard"):
         warn_if_working_tree_dirty(str(repo), ["src/target.py"])
 
     assert "Working tree is not clean" not in caplog.text

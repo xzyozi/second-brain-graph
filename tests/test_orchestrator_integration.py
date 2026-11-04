@@ -1,4 +1,4 @@
-"""Integration tests for orchestrator_graph Aider handling, state transitions, history isolation, failsafe, git switch, reviewer validation, RDJSON, audit schema, regex validation, and CLI commands."""
+"""Integration tests for orchestrator_graph coder handling, state transitions, history isolation, failsafe, git switch, reviewer validation, RDJSON, audit schema, regex validation, and CLI commands."""
 
 import json
 import os
@@ -9,9 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.aider_runner import AiderRunError, GitDiffError
+from tools.agy_runner import CoderRunError
 from tools.backend_coordinator import get_coordinator
 from tools.config_loader import BackendExecutionConfig, get_backend_execution_config
+from tools.git_utils import GitDiffError
 from tools.orchestrator_graph import (
     GraphState,
     ProjectLockManager,
@@ -31,23 +32,23 @@ from tools.orchestrator_graph import (
 
 
 @pytest.fixture(autouse=True)
-def _force_aider_routes(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Aider 統合テストのため、バックエンド routes を Aider / Ollama プロファイルに固定する。"""
+def _force_test_routes(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """統合テストのため、バックエンド routes を agy_default プロファイルに固定する。"""
     original_get_config = get_backend_execution_config
 
     def mock_get_config() -> BackendExecutionConfig:
         cfg = original_get_config()
-        aider_routes = {
-            "spec_draft": "reasoning_ollama",
-            "task_decomposition": "reasoning_ollama",
-            "task_prioritization": "reasoning_ollama",
-            "code_edit": "coding_ollama",
-            "aider_edit": "coding_ollama",
-            "code_review": "reasoning_ollama",
-            "failure_analysis": "reasoning_ollama",
-            "test_feedback": "reasoning_ollama",
+        agy_routes = {
+            "spec_draft": "agy_default",
+            "task_decomposition": "agy_default",
+            "task_prioritization": "agy_default",
+            "code_edit": "agy_default",
+            "aider_edit": "agy_default",
+            "code_review": "agy_default",
+            "failure_analysis": "agy_default",
+            "test_feedback": "agy_default",
         }
-        return cfg.model_copy(update={"routes": aider_routes})
+        return cfg.model_copy(update={"routes": agy_routes})
 
     monkeypatch.setattr("tools.backend_coordinator.get_backend_execution_config", mock_get_config)
     monkeypatch.setattr("tools.config_loader.get_backend_execution_config", mock_get_config)
@@ -430,8 +431,8 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
     )
 
     with patch(
-        "tools.orchestrator_graph.run_aider",
-        side_effect=AiderRunError("Aider execution timed out after 300 seconds"),
+        "tools.agy_runner.run_agy_edit",
+        side_effect=CoderRunError("Coder execution timed out after 300 seconds"),
     ):
         # First timeout -> retry
         state_after_first = code_node(initial_state)
@@ -447,7 +448,7 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
 
 
 def test_code_node_handles_aider_nonzero_exit_as_failed_system() -> None:
-    """Test that code_node normalizes non-timeout AiderRunError to FAILED_SYSTEM and SYSTEM_ERROR without retry."""
+    """Test that code_node normalizes non-timeout CoderRunError to FAILED_SYSTEM and SYSTEM_ERROR without retry."""
     initial_state = GraphState(
         issue_id="TFG-0004",
         project_key="TFG",
@@ -478,8 +479,8 @@ def test_code_node_handles_aider_nonzero_exit_as_failed_system() -> None:
     )
 
     with patch(
-        "tools.orchestrator_graph.run_aider",
-        side_effect=AiderRunError("Aider process failed with returncode 1"),
+        "tools.agy_runner.run_agy_edit",
+        side_effect=CoderRunError("Coder process failed with returncode 1"),
     ):
         state_after_failure = code_node(initial_state)
         assert state_after_failure["status"] == "FAILED_SYSTEM"
@@ -709,12 +710,12 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
         assert res["reviewdog_result"]["stderr"] == "reviewdog error"
 
 
-@patch("tools.orchestrator_graph.run_aider", side_effect=AiderRunError("Aider execution timed out"))
+@patch("tools.agy_runner.run_agy_edit", side_effect=CoderRunError("Coder execution timed out"))
 @patch("tools.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []})
 def test_execute_issue_aider_timeout_flow_fully_isolated(
-    mock_call_llm: MagicMock, mock_run_aider: MagicMock, tmp_path: Path
+    mock_call_llm: MagicMock, mock_run_coder: MagicMock, tmp_path: Path
 ) -> None:
-    """Verify full graph execution flow when Aider times out using isolated project_root and metadata_dir."""
+    """Verify full graph execution flow when coder times out using isolated project_root and metadata_dir."""
     project_root = tmp_path
     metadata_dir = project_root / "metadata"
     history_file = project_root / "tools" / ".cache" / "execution_history.json"
@@ -780,7 +781,7 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
 
         mock_acquire.assert_called_once()
         mock_release.assert_called_once()
-        assert mock_run_aider.call_count == 2
+        assert mock_run_coder.call_count == 2
 
     # 1. Verify isolated state.json was created with SSOT dictionary schema
     state_file = metadata_dir / "projects" / project_key / "state.json"
@@ -842,7 +843,7 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with patch("tools.orchestrator_graph.run_aider") as mock_run_aider:
+    with patch("tools.agy_runner.run_agy_edit") as mock_run_coder:
         execute_issue(
             issue_id,
             project_key,
@@ -850,7 +851,7 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
             history_file=history_file,
             project_root=tmp_path,
         )
-        mock_run_aider.assert_not_called()
+        mock_run_coder.assert_not_called()
 
     state_file = metadata_dir / "projects" / project_key / "state.json"
     assert state_file.exists()
@@ -1059,8 +1060,8 @@ def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
     assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"
 
 
-@patch("tools.orchestrator_graph.run_aider", return_value=True)
-def test_code_node_target_files_keyerror_prevention(mock_run_aider: MagicMock) -> None:
+@patch("tools.agy_runner.run_agy_edit", return_value=True)
+def test_code_node_target_files_keyerror_prevention(mock_run_coder: MagicMock) -> None:
     """state に target_files キーが存在しない場合でも、KeyError を起こさず安全にセットされることを検証する。"""
     state: GraphState = {"issue_id": "TFG-0010", "cwd": "."}
     res = code_node(state)
