@@ -24,6 +24,10 @@
   * [`ollama_gguf_registration.md`](how-to/ollama_gguf_registration.md): 独立GGUFファイルのOllamaローカルモデル登録手順
 * **`docs/analysis/`**: 実装調査・フロー解析の記録
   * [`flow-gguf-20260907.md`](analysis/flow-gguf-20260907.md): GGUFバックエンド処理フローの解析記録
+* **`docs/adr/`**: アーキテクチャ決定記録 (Architectural Decision Records)
+  * [`0001-adopt-agy-backend-and-route-architecture.md`](adr/0001-adopt-agy-backend-and-route-architecture.md): agy バックエンド追加と routes 抽象による移行方針
+  * [`0002-agy-availability-quota-and-nightly-worker-guard.md`](adr/0002-agy-availability-quota-and-nightly-worker-guard.md): agy 障害分類・指数バックオフと夜間ワーカー安全中断方針
+  * [`0003-edit-guard-and-allowed-new-file-globs.md`](adr/0003-edit-guard-and-allowed-new-file-globs.md): 書き込み境界ガード (edit_guard) と新規ファイル許可 (allowed_new_file_globs)
 * **サテライト生成文書**: サテライト側の `docs/issues/<TASK_ID>.md` は、Issue起票・昇格・定周期同期時に自動生成・自己修復されます。仕様は [`SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md`](design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md) を参照してください。
 
 ---
