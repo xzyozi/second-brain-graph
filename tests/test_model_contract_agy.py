@@ -41,6 +41,7 @@ def test_agy_text_response_contract(live_agy_available: None) -> None:
     """planner (spec_draft) がテキスト応答契約を満たすことを確認する."""
     result = call_llm(
         role="planner",
+        system_prompt="You are a senior software architect.",
         intent="spec_draft",
         user_prompt="Issue: Add a simple add(a, b) function in math_util.py. Draft a short plan.",
     )
@@ -53,6 +54,7 @@ def test_agy_json_response_contract(live_agy_available: None) -> None:
     """reviewer (code_review) が expect_json=True で dict (verdict 等) を返す契約を満たすことを確認する."""
     result = call_llm(
         role="reviewer",
+        system_prompt="You are a strict code reviewer. Return valid JSON only.",
         intent="code_review",
         user_prompt=(
             "Review this diff:\n"
