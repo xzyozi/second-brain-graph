@@ -37,15 +37,25 @@ backend_execution:
   gpu_lease_timeout: 120 # GPU ロック解放待ちのタイムアウト上限 (秒)
 
   # タスクインテントから実行プロファイルへのマッピング
+  # [ロールバック手順]
+  # 従来のローカルLLM (Ollama) に戻す場合は、各ルートを以下のように戻してください:
+  #   spec_draft: "reasoning_ollama"
+  #   task_decomposition: "reasoning_ollama"
+  #   task_prioritization: "reasoning_ollama"
+  #   code_edit: "coding_ollama"
+  #   aider_edit: "coding_ollama"
+  #   code_review: "reasoning_ollama"
+  #   failure_analysis: "reasoning_ollama"
+  #   test_feedback: "reasoning_ollama"
   routes:
-    spec_draft: "reasoning_ollama"
-    task_decomposition: "reasoning_ollama"
-    task_prioritization: "reasoning_ollama"
-    code_edit: "coding_ollama"
-    aider_edit: "coding_ollama"
-    code_review: "reasoning_ollama"
-    failure_analysis: "reasoning_ollama"
-    test_feedback: "reasoning_ollama"
+    spec_draft: "agy_default"
+    task_decomposition: "agy_default"
+    task_prioritization: "agy_default"
+    code_edit: "agy_default"
+    aider_edit: "agy_default"
+    code_review: "agy_default"
+    failure_analysis: "agy_default"
+    test_feedback: "agy_default"
 
   # バックエンドプロファイル定義
   profiles:
