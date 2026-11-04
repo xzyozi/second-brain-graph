@@ -58,6 +58,9 @@ timeout_seconds = 1800
 # テスト不合格時のエスカレーション前に試行する最大リトライ回数
 max_retries = 1
 
+# agy の認証・クォータエラーが連続した場合の中断閾値（連続失敗時に以降のバッチを中断）
+max_consecutive_auth_quota_failures = 2
+
 [logging]
 # 実行ログの保存先ディレクトリ（母艦ルートからの相対パス）
 log_dir = "logs/nightly"

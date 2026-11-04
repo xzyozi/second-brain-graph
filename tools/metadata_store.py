@@ -52,7 +52,7 @@ class TaskStatus(str, Enum):
 
 
 class ErrorCategory(str, Enum):
-    """DD-003 §2.1 のエラー分類（7分類）."""
+    """DD-003 §2.1 のエラー分類."""
 
     LINT_ERROR = "LINT_ERROR"
     TEST_ERROR = "TEST_ERROR"
@@ -61,6 +61,8 @@ class ErrorCategory(str, Enum):
     SYSTEM_ERROR = "SYSTEM_ERROR"
     LOCKED = "LOCKED"
     PR_ERROR = "PR_ERROR"
+    AGY_AUTH = "AGY_AUTH"
+    AGY_QUOTA = "AGY_QUOTA"
 
 
 # 後方互換性および TypedDict アノテーション用の Literal エイリアス
@@ -89,6 +91,8 @@ ErrorCategoryLiteral = Literal[
     "SYSTEM_ERROR",
     "LOCKED",
     "PR_ERROR",
+    "AGY_AUTH",
+    "AGY_QUOTA",
 ]
 
 
