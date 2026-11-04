@@ -46,6 +46,57 @@ class AgyExitError(AgyError):
         self.returncode = returncode
 
 
+class AgyAuthError(AgyExitError):
+    """agy の認証エラー（未ログイン、トークン失効、401/403等）."""
+
+    pass
+
+
+class AgyQuotaError(AgyExitError):
+    """agy のクォータ超過・レート制限エラー（429、ResourceExhausted等）."""
+
+    pass
+
+
+def classify_agy_exit(message: str, returncode: int) -> AgyExitError:
+    """stderr / メッセージ / 終了コードから AgyExitError のサブクラスを判定・生成する."""
+    lower_msg = message.lower()
+    auth_keywords = (
+        "unauthorized",
+        "authentication",
+        "not logged in",
+        "auth error",
+        "invalid api key",
+        "token expired",
+        "permission denied",
+        "status 401",
+        "status 403",
+        "http 401",
+        "http 403",
+        "error 401",
+        "error 403",
+    )
+    if any(kw in lower_msg for kw in auth_keywords):
+        return AgyAuthError(message, returncode=returncode)
+
+    quota_keywords = (
+        "quota",
+        "rate limit",
+        "resource exhausted",
+        "resource_exhausted",
+        "too many requests",
+        "status 429",
+        "http 429",
+        "error 429",
+        "credit limit",
+        "credits exhausted",
+    )
+    if any(kw in lower_msg for kw in quota_keywords):
+        return AgyQuotaError(message, returncode=returncode)
+
+    return AgyExitError(message, returncode=returncode)
+
+
 def resolve_agy_executable() -> str:
     """agy 実行ファイルのパスを解決する.
 
@@ -134,10 +185,8 @@ def _run_agy(prompt: str, *, cwd: Optional[str], timeout: int) -> str:
         raise AgyTimeoutError(f"agy execution timed out after {timeout} seconds") from None
 
     if proc.returncode != 0:
-        raise AgyExitError(
-            f"agy process failed with returncode {proc.returncode}: {(stderr or '')[:500]}",
-            returncode=proc.returncode,
-        )
+        err_msg = f"agy process failed with returncode {proc.returncode}: {(stderr or '')[:500]}"
+        raise classify_agy_exit(err_msg, returncode=proc.returncode)
 
     return stdout or ""
 

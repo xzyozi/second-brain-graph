@@ -112,3 +112,51 @@ def test_code_node_handles_agy_nonzero_exit_as_failed_system(
 
     assert result["status"] == "FAILED_SYSTEM"
     assert result["error_category"] == "SYSTEM_ERROR"
+
+
+@patch("tools.agy_runner.run_agy_edit")
+@patch("tools.orchestrator_graph.get_coordinator")
+def test_code_node_handles_agy_auth_error_as_agy_auth(
+    mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
+) -> None:
+    """agy の認証エラーは即時 FAILED_SYSTEM / AGY_AUTH とすることを検証する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default", timeout=1200)
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_edit.side_effect = AgyRunError(
+        "agy process failed with returncode 1: unauthorized access, login required"
+    )
+
+    state: GraphState = {
+        "issue_id": "TFG-0096",
+        "target_files": [],
+        "instruction": "x",
+        "cwd": None,
+    }
+    result = code_node(state)
+
+    assert result["status"] == "FAILED_SYSTEM"
+    assert result["error_category"] == "AGY_AUTH"
+
+
+@patch("tools.agy_runner.run_agy_edit")
+@patch("tools.orchestrator_graph.get_coordinator")
+def test_code_node_handles_agy_quota_error_as_agy_quota(
+    mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
+) -> None:
+    """agy のクォータ超過・レート制限エラーは即時 FAILED_SYSTEM / AGY_QUOTA とすることを検証する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default", timeout=1200)
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_edit.side_effect = AgyRunError(
+        "agy process failed with returncode 1: Resource exhausted (status 429), quota exceeded"
+    )
+
+    state: GraphState = {
+        "issue_id": "TFG-0095",
+        "target_files": [],
+        "instruction": "x",
+        "cwd": None,
+    }
+    result = code_node(state)
+
+    assert result["status"] == "FAILED_SYSTEM"
+    assert result["error_category"] == "AGY_QUOTA"

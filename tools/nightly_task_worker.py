@@ -290,6 +290,22 @@ def _run_with_tree_kill(
     return subprocess.CompletedProcess(cmd, proc.returncode)
 
 
+def get_task_error_category(root_dir: Path, task: CandidateTask) -> str | None:
+    """実行後の state.json から error_category を取得する."""
+    paths = [
+        root_dir / "metadata" / "projects" / task.project_key / "state.json",
+        task.satellite_dir / "docs" / "state.json",
+    ]
+    for p in paths:
+        if p.is_file():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                return data.get("error_category")
+            except Exception:
+                pass
+    return None
+
+
 def execute_autonomous_task(
     root_dir: Path,
     task: CandidateTask,
@@ -515,10 +531,30 @@ def run_batch_cycle(
 
     # 7. 自律実装の実行
     success_count = 0
+    consecutive_auth_quota_failures = 0
+    exec_cfg = config.get("execution", {})
+    max_consecutive_auth_quota = exec_cfg.get("max_consecutive_auth_quota_failures", 2)
+
     for task in tasks_to_execute:
         ok = execute_autonomous_task(root_dir, task, config, dry_run=opts.dry_run)
         if ok:
             success_count += 1
+            consecutive_auth_quota_failures = 0
+        else:
+            cat = get_task_error_category(root_dir, task)
+            if cat in ("AGY_AUTH", "AGY_QUOTA"):
+                consecutive_auth_quota_failures += 1
+                logger.warning(
+                    f"agy 障害検知 ({cat}): 連続失敗回数 {consecutive_auth_quota_failures}/{max_consecutive_auth_quota}"
+                )
+                if consecutive_auth_quota_failures >= max_consecutive_auth_quota:
+                    logger.critical(
+                        f"agy の認証またはクォータ障害 ({cat}) が {consecutive_auth_quota_failures} 回連続したため、"
+                        "以降のタスク実行を安全に中断します。"
+                    )
+                    break
+            else:
+                consecutive_auth_quota_failures = 0
 
     logger.info(
         f"バッチサイクル終了: {success_count}/{len(tasks_to_execute)} 件完了 (dry_run={opts.dry_run})"

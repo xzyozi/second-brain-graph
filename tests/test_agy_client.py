@@ -11,9 +11,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tools.agy_client import (
+    AgyAuthError,
     AgyExitError,
     AgyNotFoundError,
+    AgyQuotaError,
     AgyTimeoutError,
+    classify_agy_exit,
     resolve_agy_executable,
     run_agy_in_workdir,
     run_agy_text,
@@ -191,3 +194,43 @@ def test_run_agy_in_workdir_propagates_not_found_error(mock_resolve: MagicMock) 
     """resolve_agy_executable が AgyNotFoundError を送出した場合、run_agy_in_workdir がそのまま伝播することを検証する。"""
     with pytest.raises(AgyNotFoundError):
         run_agy_in_workdir("編集指示", cwd="/tmp/satellite-worktree")
+
+
+# ---------------------------------------------------------------------------
+# エラー分類 (AgyAuthError / AgyQuotaError)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_agy_exit_auth_keywords() -> None:
+    """認証エラーのキーワードを含むメッセージは AgyAuthError に分類されることを検証する。"""
+    for msg in [
+        "Error: Unauthorized access (status 401)",
+        "Authentication failed: invalid api key",
+        "User is not logged in",
+        "Token expired. Please login again.",
+        "Permission denied (HTTP 403)",
+    ]:
+        err = classify_agy_exit(msg, returncode=1)
+        assert isinstance(err, AgyAuthError)
+        assert err.returncode == 1
+
+
+def test_classify_agy_exit_quota_keywords() -> None:
+    """クォータ・レート制限のキーワードを含むメッセージは AgyQuotaError に分類されることを検証する。"""
+    for msg in [
+        "Error: Resource exhausted (status 429)",
+        "Rate limit exceeded: too many requests",
+        "Daily quota exceeded for user",
+        "Credit limit reached (error 429)",
+        "Credits exhausted",
+    ]:
+        err = classify_agy_exit(msg, returncode=1)
+        assert isinstance(err, AgyQuotaError)
+        assert err.returncode == 1
+
+
+def test_classify_agy_exit_generic_error() -> None:
+    """認証やクォータに該当しない一般エラーは通常の AgyExitError に分類されることを検証する。"""
+    err = classify_agy_exit("Syntax error in template file", returncode=2)
+    assert type(err) is AgyExitError
+    assert err.returncode == 2

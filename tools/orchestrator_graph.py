@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -453,6 +454,48 @@ class GraphState(TypedDict, total=False):
     already_satisfied: Optional[bool]
 
 
+def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
+    """例外から ErrorCategory（LLM_TIMEOUT, AGY_AUTH, AGY_QUOTA, SYSTEM_ERROR等）を分類する."""
+    from tools.agy_client import AgyAuthError, AgyQuotaError
+
+    if isinstance(e, AgyAuthError):
+        return "AGY_AUTH"
+    if isinstance(e, AgyQuotaError):
+        return "AGY_QUOTA"
+
+    lower_msg = str(e).lower()
+    if any(kw in lower_msg for kw in ("timeout", "timed out", "timedout")):
+        return "LLM_TIMEOUT"
+
+    auth_keywords = (
+        "unauthorized",
+        "authentication",
+        "not logged in",
+        "auth error",
+        "invalid api key",
+        "token expired",
+        "permission denied",
+        "status 401",
+        "status 403",
+    )
+    if any(kw in lower_msg for kw in auth_keywords):
+        return "AGY_AUTH"
+
+    quota_keywords = (
+        "quota",
+        "rate limit",
+        "resource exhausted",
+        "resource_exhausted",
+        "too many requests",
+        "status 429",
+        "credit limit",
+    )
+    if any(kw in lower_msg for kw in quota_keywords):
+        return "AGY_QUOTA"
+
+    return "SYSTEM_ERROR"
+
+
 def spec_draft_node(state: GraphState) -> GraphState:
     """Issue に対する実装方針計画を策定し、impl_plan へ構造保存するノード (DD-003 §4).
     JEV による計画適合性検問 (Defense 0: DoD Conformance Gate, PM-053) を実施し、
@@ -529,20 +572,20 @@ def spec_draft_node(state: GraphState) -> GraphState:
                     "Issue要件を満たす最小限の実装計画を再策定してください。"
                 )
     except Exception as e:
-        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")):
+        cat = classify_error_category(e)
+        state["error"] = str(e)
+        state["error_category"] = cat
+        if cat == "LLM_TIMEOUT":
             logger.warning(f"Timeout caught in spec_draft_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
-            state["error_category"] = "LLM_TIMEOUT"
-            state["error"] = str(e)
             if state["llm_timeout_count"] >= 2:
                 state["status"] = "FAILED_SYSTEM"
             else:
                 state["status"] = "retry_spec_draft"
+                time.sleep(min(2 ** (state["llm_timeout_count"] - 1), 5))
         else:
-            logger.error(f"Error in spec_draft_node: {e}")
+            logger.error(f"Error in spec_draft_node ({cat}): {e}")
             state["status"] = "FAILED_SYSTEM"
-            state["error_category"] = "SYSTEM_ERROR"
-            state["error"] = str(e)
     return state
 
 
@@ -632,20 +675,21 @@ def code_node(state: GraphState) -> GraphState:
     except AiderRunError as e:
         logger.warning(f"AiderRunError caught in code_node: {e}")
         state["error"] = str(e)
-        if "timed out" in str(e).lower():
+        cat = classify_error_category(e)
+        state["error_category"] = cat
+        if cat == "LLM_TIMEOUT":
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
-            state["error_category"] = "LLM_TIMEOUT"
             if state["llm_timeout_count"] >= 2:
                 state["status"] = "FAILED_SYSTEM"
             else:
                 state["status"] = "retry_code"
+                time.sleep(min(2 ** (state["llm_timeout_count"] - 1), 5))
         else:
             state["status"] = "FAILED_SYSTEM"
-            state["error_category"] = "SYSTEM_ERROR"
     except Exception as e:
         logger.error(f"Unexpected error in code_node: {e}")
         state["status"] = "FAILED_SYSTEM"
-        state["error_category"] = "SYSTEM_ERROR"
+        state["error_category"] = classify_error_category(e)
         state["error"] = str(e)
     return state
 

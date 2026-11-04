@@ -443,3 +443,116 @@ def test_run_with_tree_kill_returns_exit_code(tmp_path: Path) -> None:
     )
     assert ok.returncode == 0
     assert ng.returncode == 3
+
+
+def test_get_task_error_category(tmp_path: Path) -> None:
+    """state.json から error_category が取得できることを検証する."""
+    task = nightly_task_worker.CandidateTask(
+        task_id="T1",
+        project_key="TEST_PROJ",
+        project_name="test_proj",
+        satellite_dir=tmp_path / "satellite",
+        title="Title",
+        priority="high",
+        score=100.0,
+        stage="ready",
+        issue_num=101,
+        line_raw="",
+    )
+
+    # 1. どちらも存在しない場合
+    assert nightly_task_worker.get_task_error_category(tmp_path, task) is None
+
+    # 2. satellite_dir/docs/state.json に存在する場合
+    state_file = task.satellite_dir / "docs" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"error_category": "AGY_AUTH"}', encoding="utf-8")
+    assert nightly_task_worker.get_task_error_category(tmp_path, task) == "AGY_AUTH"
+
+    # 3. metadata/projects/TEST_PROJ/state.json が優先されること
+    meta_state = tmp_path / "metadata" / "projects" / "TEST_PROJ" / "state.json"
+    meta_state.parent.mkdir(parents=True, exist_ok=True)
+    meta_state.write_text('{"error_category": "AGY_QUOTA"}', encoding="utf-8")
+    assert nightly_task_worker.get_task_error_category(tmp_path, task) == "AGY_QUOTA"
+
+
+def test_run_batch_cycle_aborts_on_consecutive_auth_quota_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """agy 認証・クォータエラーが連続した場合にバッチ実行が中断されることを検証する."""
+    # プロジェクトレジストリ作成
+    reg_file = tmp_path / "metadata" / ".project-registry.json"
+    reg_file.parent.mkdir(parents=True, exist_ok=True)
+    reg_file.write_text('{"projects": {"P1": {"name": "p1", "dir": "p1"}}}', encoding="utf-8")
+
+    task1 = nightly_task_worker.CandidateTask(
+        task_id="T1",
+        project_key="P1",
+        project_name="p1",
+        satellite_dir=tmp_path / "p1",
+        title="Task 1",
+        priority="high",
+        score=100.0,
+        stage="ready",
+        issue_num=1,
+        line_raw="",
+    )
+    task2 = nightly_task_worker.CandidateTask(
+        task_id="T2",
+        project_key="P1",
+        project_name="p1",
+        satellite_dir=tmp_path / "p1",
+        title="Task 2",
+        priority="high",
+        score=90.0,
+        stage="ready",
+        issue_num=2,
+        line_raw="",
+    )
+    task3 = nightly_task_worker.CandidateTask(
+        task_id="T3",
+        project_key="P1",
+        project_name="p1",
+        satellite_dir=tmp_path / "p1",
+        title="Task 3",
+        priority="high",
+        score=80.0,
+        stage="ready",
+        issue_num=3,
+        line_raw="",
+    )
+
+    monkeypatch.setattr(
+        nightly_task_worker, "parse_tasks_md_candidates", lambda **kwargs: [task1, task2, task3]
+    )
+
+    executed_tasks: list[str] = []
+
+    def fake_execute(
+        root: Path, task: nightly_task_worker.CandidateTask, cfg: dict, dry_run: bool = False
+    ) -> bool:
+        executed_tasks.append(task.task_id)
+        return False
+
+    monkeypatch.setattr(nightly_task_worker, "execute_autonomous_task", fake_execute)
+    monkeypatch.setattr(
+        nightly_task_worker, "get_task_error_category", lambda root, task: "AGY_QUOTA"
+    )
+
+    config: dict = {
+        "enabled": True,
+        "max_tasks_per_run": 5,
+        "target_projects": ["all"],
+        "execution": {
+            "max_consecutive_auth_quota_failures": 2,
+        },
+    }
+    opts = nightly_task_worker.parse_args([])
+
+    with caplog.at_level(logging.WARNING, logger="nightly_worker"):
+        success = nightly_task_worker.run_batch_cycle(tmp_path, config, opts)
+
+    assert success == 0
+    # 2回失敗した時点で中断されたため、T1 と T2 のみ実行され T3 は実行されない
+    assert executed_tasks == ["T1", "T2"]
+    assert "agy の認証またはクォータ障害 (AGY_QUOTA) が 2 回連続したため" in caplog.text
