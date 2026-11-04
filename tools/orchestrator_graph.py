@@ -29,6 +29,7 @@ from langgraph.graph import END, StateGraph
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.backend_coordinator import get_coordinator
 from tools.metadata_store import (
     GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
@@ -571,7 +572,6 @@ def code_node(state: GraphState) -> GraphState:
         # #25: Aider も GPU リース配下で実行し、planner/reviewer の LLM 呼出しと
         # GPU/VRAM を奪い合わないようにする。従来は run_aider を直接 subprocess 起動して
         # GpuLeaseAdapter を迂回していた。Coordinator 経由に統一する。
-        from tools.backend_coordinator import get_coordinator
 
         def _do_aider(profile: Any) -> bool:
             # 編集エンジンは route が指す profile の backend で決まる。指示文は
