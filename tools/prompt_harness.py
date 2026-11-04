@@ -4,11 +4,14 @@
 system prompt の配置や prompt version の扱いを意識しない。
 """
 
+import logging
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from tools.config_loader import PromptConfig, load_prompt_config
+
+logger = logging.getLogger("prompt_harness")
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,26 @@ _PROMPT_BINDINGS: Dict[Tuple[str, str], Tuple[str, str]] = {
     ("reviewer", "code_review"): ("reviewer", "code_review_system"),
     ("reviewer", "failure_analysis"): ("reviewer", "failure_analysis_system"),
 }
+
+# コード編集エンジンごとに、指示文へ追加する coder ブロックを切り替える。
+# aider は出力形式の規則を必要とし、agy はツールで直接編集するため必要としない。
+_CODER_ENGINE_RULES: Dict[str, str] = {
+    "aider": "strict_output_rules",
+    "agy": "agy_edit_rules",
+}
+
+
+def engine_for_backend(backend: str) -> str:
+    """profile.backend からコード編集エンジン名を決める。
+
+    agy 以外(ollama / llama_server)は、従来どおり Aider で編集する。
+    """
+    return "agy" if backend == "agy" else "aider"
+
+
+def _log_resolved(prompt_id: str, version: str, digest: str) -> None:
+    """監査用に prompt の識別子だけをログへ残す。本文は記録しない。"""
+    logger.info("Prompt resolved: id=%s version=%s digest=%s", prompt_id, version, digest)
 
 
 def resolve_prompt(
@@ -61,11 +84,62 @@ def resolve_prompt(
 
     version = str(getattr(config, "version", "1.0"))
     digest = sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
+    prompt_id = f"{section_name}.{field_name}"
+    _log_resolved(prompt_id, version, digest)
     return ResolvedPrompt(
         role=role,
         intent=intent,
-        prompt_id=f"{section_name}.{field_name}",
+        prompt_id=prompt_id,
         version=version,
         system_prompt=system_prompt.strip(),
         digest=digest,
     )
+
+
+def build_coder_instruction(
+    *,
+    engine: str,
+    base_instruction: str,
+    impl_plan: Optional[str],
+    target_files: List[str],
+    feedback: Optional[str],
+    prompt_config: Optional[PromptConfig] = None,
+) -> str:
+    """コード編集エンジンへ渡す指示文を組み立てる。
+
+    構成は、基本指示、実装計画、編集範囲の制限、実行戦略、エンジン別の規則、
+    フィードバックの順とする。エンジン別の規則だけがエンジンで異なり、
+    それ以外は共通である。未知のエンジンは fail-closed で拒否する。
+    """
+    rules_field = _CODER_ENGINE_RULES.get(engine)
+    if rules_field is None:
+        supported = ", ".join(sorted(_CODER_ENGINE_RULES))
+        raise ValueError(f"Unsupported coder engine '{engine}'. Supported engines: {supported}")
+
+    config = prompt_config or load_prompt_config()
+    coder = config.coder
+    engine_rules = getattr(coder, rules_field)
+    if not isinstance(engine_rules, str) or not engine_rules.strip():
+        raise ValueError(f"Prompt 'coder.{rules_field}' must be a non-empty string")
+
+    instruction = base_instruction
+    if impl_plan:
+        instruction += f"\n\nImplementation Plan:\n{impl_plan}"
+
+    if target_files:
+        target_files_str = ", ".join(target_files)
+        scope = coder.scope_restriction_template.strip().replace(
+            "{target_files_str}", target_files_str
+        )
+        instruction += f"\n\n{scope}"
+
+    instruction += f"\n\n{coder.execution_strategy_step_by_step.strip()}"
+    instruction += f"\n\n{engine_rules.strip()}"
+
+    if feedback:
+        instruction += f"\n\nFeedback:\n{feedback}"
+
+    version = str(getattr(config, "version", "1.0"))
+    digest = sha256(engine_rules.encode("utf-8")).hexdigest()[:16]
+    _log_resolved(f"coder.{rules_field}", version, digest)
+    return instruction

@@ -117,6 +117,7 @@ class CoderPromptConfig(BaseModel):
     scope_restriction_template: str
     execution_strategy_step_by_step: str
     strict_output_rules: str
+    agy_edit_rules: str
     read_only_test_enforcement: str
 
 

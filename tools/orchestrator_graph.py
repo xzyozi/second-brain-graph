@@ -555,31 +555,6 @@ def code_node(state: GraphState) -> GraphState:
     target_files = state.setdefault("target_files", [])
     cwd = state.get("cwd")
 
-    instruction = state.get("instruction", "Apply edits")
-    if state.get("impl_plan"):
-        instruction += f"\n\nImplementation Plan:\n{state['impl_plan']}"
-
-    if target_files:
-        target_files_str = ", ".join(target_files)
-        instruction += f"\n\n[SCOPE RESTRICTION]\nYou are ONLY permitted to modify the following files: {target_files_str}. DO NOT modify, touch, or create any other files."
-
-    instruction += (
-        "\n\n[EXECUTION STRATEGY - STEP-BY-STEP]\n"
-        "Follow a strict 2-phase approach:\n"
-        "1. Phase 1 (Core Logic): Focus first on implementing the core logic, classes, and exceptions under `src/`.\n"
-        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass.\n\n"
-        "[STRICT AIDER OUTPUT FORMAT RULES]\n"
-        "- Output ONLY the target file modifications.\n"
-        "- For each file, the FIRST line must be the exact relative file path without backticks, quotes, or markdown formatting (e.g. src/utils/file_utils.py).\n"
-        "- Follow immediately with a markdown code block containing the complete source code.\n"
-        "- DO NOT output any introductory text, conversational filler, greetings, thoughts, or explanations outside code blocks.\n"
-        "- DO NOT replace implementations or tests with ellipses (...), pass, or placeholder comments. Always write complete, runnable Python code.\n"
-        "- DO NOT create or modify any files not listed in Target Files."
-    )
-
-    if state.get("aider_message"):
-        instruction += f"\n\nFeedback:\n{state['aider_message']}"
-
     # #26: .gitignore の巻き戻しは Aider 由来の変更に限定する。Aider 実行前の内容を
     # スナップショットし、実行後に変化した場合のみ戻す。無条件の checkout は人手変更や
     # 必要な ignore 設定を失わせるため行わない。
@@ -598,7 +573,19 @@ def code_node(state: GraphState) -> GraphState:
         # GpuLeaseAdapter を迂回していた。Coordinator 経由に統一する。
         from tools.backend_coordinator import get_coordinator
 
-        def _do_aider(_profile: Any) -> bool:
+        def _do_aider(profile: Any) -> bool:
+            # 編集エンジンは route が指す profile の backend で決まる。指示文は
+            # prompt.yaml を正本とするハーネスが、エンジンごとの規則を付けて組み立てる。
+            # 実行は現時点で Aider のみ。agy の実行分岐 (run_agy_edit) は #122 で追加する。
+            from tools.prompt_harness import build_coder_instruction, engine_for_backend
+
+            instruction = build_coder_instruction(
+                engine=engine_for_backend(profile.backend),
+                base_instruction=state.get("instruction", "Apply edits"),
+                impl_plan=state.get("impl_plan"),
+                target_files=target_files,
+                feedback=state.get("aider_message"),
+            )
             return run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
 
         coordinator = get_coordinator()

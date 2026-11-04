@@ -36,6 +36,13 @@ coder:
     - DO NOT replace implementations or tests with ellipses (...), pass, or placeholder comments. Always write complete, runnable Python code.
     - DO NOT create or modify any files not listed in Target Files.
 
+  agy_edit_rules: |
+    [AGY EDIT RULES]
+    - Edit the files directly in the working tree. Do not print the file contents as your answer.
+    - Modify or create ONLY the files listed in Target Files.
+    - Write complete, runnable implementations. DO NOT use ellipses (...), pass, or placeholder comments.
+    - DO NOT run git commit, git push, or any other git command that changes history or the remote.
+
   read_only_test_enforcement: |
     [TEST INTEGRITY - STRICT READ-ONLY ENFORCEMENT]
     This task is classified as a BUG FIX / REFACTORING task.
