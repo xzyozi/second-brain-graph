@@ -95,13 +95,23 @@ Aider は非対話型のサブプロセスとして呼び出され、以下の�
 
 ```python
 class AgyError(Exception): ...
-class AgyNotFoundError(AgyError): ...      # 実行ファイルが見つからない
-class AgyTimeoutError(AgyError): ...       # メッセージに必ず "timed out" を含める
-class AgyExitError(AgyError): ...          # 非0終了（returncode と stderr の要約を保持）
 
-class AgyRunError(AiderRunError): ...      # 移行段階の暫定。#128 で CoderRunError に整理
 
-def run_agy_edit(instruction: str, target_files: list[str], cwd: str, *, timeout: int = 1200) -> bool:
+class AgyNotFoundError(AgyError): ...  # 実行ファイルが見つからない
+
+
+class AgyTimeoutError(AgyError): ...  # メッセージに必ず "timed out" を含める
+
+
+class AgyExitError(AgyError): ...  # 非0終了（returncode と stderr の要約を保持）
+
+
+class AgyRunError(AiderRunError): ...  # 移行段階の暫定。#128 で CoderRunError に整理
+
+
+def run_agy_edit(
+    instruction: str, target_files: list[str], cwd: str, *, timeout: int = 1200
+) -> bool:
     """成功時 True。非0終了・タイムアウト・未導入は AgyRunError。"""
 ```
 
