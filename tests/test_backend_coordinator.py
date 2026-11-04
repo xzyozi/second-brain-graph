@@ -1,10 +1,12 @@
 """Unit tests for tools.backend_coordinator."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tools.backend_coordinator import (
+    AgyBackendAdapter,
     BackendExecutionCoordinator,
     LlamaServerBackendAdapter,
 )
@@ -326,3 +328,79 @@ def test_coordinator_passes_gpu_lease_timeout_from_config(
 
     # Verify GpuLeaseAdapter initialized with timeout=45
     mock_gpu_lease_class.assert_called_once_with(timeout=45)
+
+
+def _make_agy_config() -> BackendExecutionConfig:
+    return BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        routes={"code_edit": "agy_default"},
+        profiles={"agy_default": ProfileConfig(backend="agy", model="agy-default")},
+    )
+
+
+@patch("tools.backend_coordinator.get_backend_execution_config")
+@patch("tools.backend_coordinator.GpuLeaseAdapter")
+def test_coordinator_agy_does_not_acquire_gpu_lease(
+    mock_gpu_lease_class: MagicMock, mock_get_config: MagicMock
+) -> None:
+    mock_get_config.return_value = _make_agy_config()
+    mock_gpu_lease = MagicMock()
+    mock_gpu_lease_class.return_value = mock_gpu_lease
+
+    coordinator = BackendExecutionCoordinator()
+    action_mock = MagicMock(return_value="agy-ok")
+    result = coordinator.execute("code_edit", {"action": action_mock})
+
+    assert result == "agy-ok"
+    mock_gpu_lease.__enter__.assert_not_called()
+    action_mock.assert_called_once_with(mock_get_config.return_value.profiles["agy_default"])
+
+
+@patch("tools.backend_coordinator.get_backend_execution_config")
+@patch("tools.backend_coordinator.GpuLeaseAdapter")
+def test_coordinator_ollama_acquires_gpu_lease(
+    mock_gpu_lease_class: MagicMock, mock_get_config: MagicMock
+) -> None:
+    mock_get_config.return_value = BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        routes={"aider_edit": "coding_ollama"},
+        profiles={
+            "coding_ollama": ProfileConfig(
+                backend="ollama",
+                model="test-model",
+                openai_endpoint="http://localhost:11434/v1",
+                ollama_management_endpoint="http://localhost:11434",
+            )
+        },
+    )
+    mock_gpu_lease = MagicMock()
+    mock_gpu_lease_class.return_value = mock_gpu_lease
+
+    coordinator = BackendExecutionCoordinator()
+    with patch("tools.backend_coordinator.OllamaBackendAdapter") as mock_adapter_class:
+        mock_adapter_class.return_value.execute.return_value = "ok"
+        coordinator.execute("aider_edit", {"action": MagicMock()})
+
+    mock_gpu_lease.__enter__.assert_called_once()
+
+
+def test_agy_adapter_requires_action() -> None:
+    adapter = AgyBackendAdapter(ProfileConfig(backend="agy", model="agy-default"))
+    with pytest.raises(ValueError, match="AgyBackendAdapter requires an 'action' callable"):
+        adapter.execute({})
+
+
+def test_agy_adapter_does_not_change_environment() -> None:
+    adapter = AgyBackendAdapter(ProfileConfig(backend="agy", model="agy-default"))
+    before = dict(os.environ)
+    seen: dict[str, str] = {}
+
+    def action(_profile: ProfileConfig) -> str:
+        seen.update(os.environ)
+        return "done"
+
+    assert adapter.execute({"action": action}) == "done"
+    assert seen == before
+    assert dict(os.environ) == before
