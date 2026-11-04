@@ -452,6 +452,7 @@ class GraphState(TypedDict, total=False):
     review_conformance_score: Optional[float]
     empty_diff_detected: Optional[bool]
     already_satisfied: Optional[bool]
+    allowed_new_file_globs: Optional[List[str]]
 
 
 def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
@@ -616,6 +617,8 @@ def code_node(state: GraphState) -> GraphState:
         # GPU/VRAM を奪い合わないようにする。従来は run_aider を直接 subprocess 起動して
         # GpuLeaseAdapter を迂回していた。Coordinator 経由に統一する。
 
+        allowed_globs = state.get("allowed_new_file_globs") or []
+
         def _do_aider(profile: Any) -> bool:
             # 編集エンジンは route が指す profile の backend で決まる。指示文は
             # prompt.yaml を正本とするハーネスが、エンジンごとの規則を付けて組み立てる。
@@ -638,8 +641,14 @@ def code_node(state: GraphState) -> GraphState:
                     target_files=target_files,
                     cwd=cwd,
                     timeout=agy_timeout,
+                    allowed_new_file_globs=allowed_globs,
                 )
-            return run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
+            return run_aider(
+                instruction=instruction,
+                target_files=target_files,
+                cwd=cwd,
+                allowed_new_file_globs=allowed_globs,
+            )
 
         coordinator = get_coordinator()
         coordinator.execute("aider_edit", {"action": _do_aider})
@@ -658,7 +667,7 @@ def code_node(state: GraphState) -> GraphState:
                 run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
 
         state["status"] = "code_completed"
-        # Aider が編集・新規作成したファイルを動的に target_files へ追加
+        # 編集エンジンが編集・新規作成したファイルを動的に target_files へ追加
         if cwd and is_in_git_workspace(cwd):
             st_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=30)
             if st_res.returncode == 0:
@@ -670,7 +679,13 @@ def code_node(state: GraphState) -> GraphState:
                             if " -> " in raw_path:
                                 raw_path = raw_path.split(" -> ")[1].strip()
                             rel_path = raw_path.replace("\\", "/")
-                            if rel_path.endswith(".py") and rel_path not in target_files:
+                            if (
+                                not rel_path.startswith(".aider")
+                                and not rel_path.startswith(".agy")
+                                and not rel_path.startswith(".pytest")
+                                and rel_path != ".gitignore"
+                                and rel_path not in target_files
+                            ):
                                 target_files.append(rel_path)
     except AiderRunError as e:
         logger.warning(f"AiderRunError caught in code_node: {e}")
@@ -1821,6 +1836,7 @@ def execute_issue(
         target_files = ctx.get("target_files", [])
         base_branch = ctx.get("base_branch", "develop")
         work_branch_prefix = ctx.get("work_branch_prefix", "sbos/")
+        allowed_new_file_globs = ctx.get("allowed_new_file_globs", [])
         is_valid = ctx.get("valid", False)
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
@@ -2354,6 +2370,7 @@ def execute_issue(
                 reviewdog_result=None,
                 history_summary=None,
                 rdjson=None,
+                allowed_new_file_globs=allowed_new_file_globs,
             )
             try:
                 final_state = app.invoke(

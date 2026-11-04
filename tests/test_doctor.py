@@ -98,6 +98,25 @@ def test_check_project_json(tmp_path: Path) -> None:
     res_ok = check_project_json("TP", sat_dir, proj_entry, project_root=project_root, fix=False)
     assert res_ok.status == "OK"
 
+    # 4. allowed_new_file_globs の形式検証 (Issue #102)
+    # 正しい形式: 文字列のリスト
+    p_json = sat_docs / "project.json"
+    p_json.write_text(
+        '{"key": "TP", "allowed_new_file_globs": ["tests/**", "src/**"]}', encoding="utf-8"
+    )
+    res_globs_ok = check_project_json(
+        "TP", sat_dir, proj_entry, project_root=project_root, fix=False
+    )
+    assert res_globs_ok.status == "OK"
+
+    # 不正な形式: 文字列以外が含まれるか、リストでない
+    p_json.write_text('{"key": "TP", "allowed_new_file_globs": "invalid_string"}', encoding="utf-8")
+    res_globs_invalid = check_project_json(
+        "TP", sat_dir, proj_entry, project_root=project_root, fix=False
+    )
+    assert res_globs_invalid.status == "WARN"
+    assert "allowed_new_file_globs は文字列の配列である必要があります" in res_globs_invalid.message
+
 
 def test_check_tasks_md(tmp_path: Path) -> None:
     """docs/tasks.md の存在および --fix による作成を検証"""

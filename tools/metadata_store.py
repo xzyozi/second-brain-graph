@@ -789,6 +789,7 @@ def resolve_project_context(
         work_branch_prefix = "sbos/"
         raw_target_files: List[str] = []
         exclude_files: List[str] = []
+        allowed_new_file_globs: List[str] = []
 
         # 優先順位1: サテライト側の docs/project.json
         # 優先順位2: 母艦側の meta_dir/project.json
@@ -811,6 +812,14 @@ def resolve_project_context(
                             raw_target_files.extend(pdata["target_files"])
                         if "exclude_files" in pdata and isinstance(pdata["exclude_files"], list):
                             exclude_files.extend(pdata["exclude_files"])
+                        if "allowed_new_file_globs" in pdata and isinstance(
+                            pdata["allowed_new_file_globs"], list
+                        ):
+                            allowed_new_file_globs = [
+                                str(g)
+                                for g in pdata["allowed_new_file_globs"]
+                                if isinstance(g, str)
+                            ]
                         break
                 except Exception as ex:
                     logger.warning(f"Failed to read project.json at {pjson_path}: {ex}")
@@ -861,6 +870,7 @@ def resolve_project_context(
                 "target_files": [],
                 "base_branch": base_branch,
                 "work_branch_prefix": work_branch_prefix,
+                "allowed_new_file_globs": allowed_new_file_globs,
                 "valid": False,
             }
 
@@ -869,6 +879,7 @@ def resolve_project_context(
             "target_files": valid_target_files,
             "base_branch": base_branch,
             "work_branch_prefix": work_branch_prefix,
+            "allowed_new_file_globs": allowed_new_file_globs,
             "valid": True,
         }
     except Exception as e:
@@ -878,6 +889,7 @@ def resolve_project_context(
             "target_files": [],
             "base_branch": "develop",
             "work_branch_prefix": "sbos/",
+            "allowed_new_file_globs": [],
             "valid": False,
         }
 

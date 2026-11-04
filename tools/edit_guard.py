@@ -6,11 +6,12 @@
 """
 
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger("edit_guard")
 
@@ -33,6 +34,49 @@ class GuardReport:
 
     violations: List[str] = field(default_factory=list)
     reverted: List[str] = field(default_factory=list)
+    retained_new_files: List[str] = field(default_factory=list)
+
+
+def glob_to_regex(pat: str) -> re.Pattern[str]:
+    """ワイルドカード/glob パターン (**, *, ?) を正規表現に変換する."""
+    pat = pat.replace("\\", "/")
+    i, n = 0, len(pat)
+    res: List[str] = []
+    while i < n:
+        c = pat[i]
+        if c == "*":
+            if i + 1 < n and pat[i + 1] == "*":
+                i += 2
+                if i < n and pat[i] == "/":
+                    i += 1
+                    res.append("(?:.*/)?")
+                else:
+                    res.append(".*")
+            else:
+                res.append("[^/]*")
+                i += 1
+        elif c == "?":
+            res.append("[^/]")
+            i += 1
+        else:
+            res.append(re.escape(c))
+            i += 1
+    return re.compile("^" + "".join(res) + "$")
+
+
+def matches_any_glob(path: str, globs: Sequence[str]) -> bool:
+    """指定パスがいずれかの glob パターンにマッチするか判定する."""
+    posix_path = path.replace("\\", "/")
+    for glob in globs:
+        if not glob:
+            continue
+        try:
+            pattern = glob_to_regex(glob)
+            if pattern.match(posix_path):
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to match glob '{glob}' against '{path}': {e}")
+    return False
 
 
 SECRET_FILE_PATTERNS = [
@@ -195,6 +239,7 @@ class GuardSnapshot:
 
     cwd: Path
     target_files: List[str]
+    allowed_new_file_globs: List[str] = field(default_factory=list)
     gitignore_content: Optional[str] = None
     gitignore_existed: bool = False
     manage_gitignore: bool = False
@@ -204,6 +249,7 @@ class GuardSnapshot:
 def prepare_guard(
     cwd: Optional[str | Path],
     target_files: List[str],
+    allowed_new_file_globs: Optional[Sequence[str]] = None,
     mother_root: Optional[Path] = None,
 ) -> GuardSnapshot:
     """実行前の境界検証とスナップショットの取得を行う.
@@ -231,6 +277,7 @@ def prepare_guard(
     return GuardSnapshot(
         cwd=cwd_path,
         target_files=target_files,
+        allowed_new_file_globs=list(allowed_new_file_globs or []),
         gitignore_content=gitignore_content,
         gitignore_existed=gitignore_existed,
         manage_gitignore=True,
@@ -241,23 +288,30 @@ def prepare_guard(
 def rollback_unauthorized_changes(
     snapshot: GuardSnapshot,
     target_files: Optional[List[str]] = None,
+    allowed_new_file_globs: Optional[Sequence[str]] = None,
 ) -> GuardReport:
     """target_files 以外の変更を取り消し、Git ステータスを正常化する.
 
-    - 未追跡のファイルおよびディレクトリ: ゴミとみなして削除
-    - 追跡済みファイル: `git restore --staged --worktree` で HEAD の状態に復元
-    - 新規ステージされたファイル: インデックスと作業ツリーから削除
+    - 未追跡のファイルおよびディレクトリ: allowed_new_file_globs に一致すれば保持、それ以外は削除
+    - 追跡済みファイル: `git restore --staged --worktree` で HEAD の状態に復元（glob 一致でも復元）
+    - 新規ステージされたファイル: allowed_new_file_globs に一致すれば保持、それ以外はインデックスと作業ツリーから削除
     - .gitignore: 実行前のスナップショットと異なっていれば復元
     """
     cwd = snapshot.cwd
     effective_targets = target_files if target_files is not None else snapshot.target_files
     normalized_targets = {Path(tf).as_posix() for tf in effective_targets}
+    effective_globs = (
+        list(allowed_new_file_globs)
+        if allowed_new_file_globs is not None
+        else snapshot.allowed_new_file_globs
+    )
 
     reverted: List[str] = []
     violations: List[str] = []
+    retained_new_files: List[str] = []
 
     try:
-        res = _git(cwd, "status", "--porcelain")
+        res = _git(cwd, "status", "--porcelain", "-uall")
         if res.returncode == 0:
             for line in res.stdout.splitlines():
                 if not line.strip():
@@ -266,6 +320,27 @@ def rollback_unauthorized_changes(
                 posix_file = Path(raw_filename).as_posix()
 
                 if _is_protected_path(posix_file, normalized_targets):
+                    continue
+
+                # 未追跡ファイルが allowed_new_file_globs に一致する場合は保持
+                if xy == "??" and effective_globs and matches_any_glob(posix_file, effective_globs):
+                    logger.info(
+                        f"[Edit Guard] Retained new untracked file matching allowed_new_file_globs: {raw_filename}"
+                    )
+                    retained_new_files.append(raw_filename)
+                    continue
+
+                # 新規追加ステージされたファイルが allowed_new_file_globs に一致する場合も保持
+                if (
+                    xy[0] in ("A", "C")
+                    and old_path is None
+                    and effective_globs
+                    and matches_any_glob(posix_file, effective_globs)
+                ):
+                    logger.info(
+                        f"[Edit Guard] Retained new staged file matching allowed_new_file_globs: {raw_filename}"
+                    )
+                    retained_new_files.append(raw_filename)
                     continue
 
                 violations.append(f"{xy} {raw_filename}")
@@ -280,6 +355,12 @@ def rollback_unauthorized_changes(
                             )
                             file_path.unlink()
                             reverted.append(raw_filename)
+                            # 親ディレクトリが空になっていればクリーンアップ（cwd は除く）
+                            parent = file_path.parent
+                            while parent != cwd and parent.is_dir() and not any(parent.iterdir()):
+                                parent.rmdir()
+                                reverted.append(parent.relative_to(cwd).as_posix())
+                                parent = parent.parent
                         elif file_path.is_dir():
                             logger.warning(
                                 f"[Edit Guard] Deleted untracked unauthorized directory: {raw_filename}"
@@ -302,7 +383,7 @@ def rollback_unauthorized_changes(
                             _git(cwd, "restore", "--staged", "--worktree", "--", old_path)
                             reverted.append(old_path)
                     else:
-                        # 追跡済みファイルの変更・削除の復元
+                        # 追跡済みファイルの変更・削除の復元（glob 一致でも既存ファイルの改変は許可しない）
                         logger.warning(
                             f"[Edit Guard] Restored tracked file modified outside target_files: {raw_filename}"
                         )
@@ -335,12 +416,17 @@ def rollback_unauthorized_changes(
     except Exception as e:
         logger.warning(f"[Edit Guard] Error during rollback: {e}")
 
-    return GuardReport(violations=violations, reverted=reverted)
+    return GuardReport(
+        violations=violations,
+        reverted=reverted,
+        retained_new_files=retained_new_files,
+    )
 
 
 def cleanup_unauthorized_aider_artifacts(
     cwd: Optional[str | Path],
     target_files: List[str],
+    allowed_new_file_globs: Optional[Sequence[str]] = None,
 ) -> List[str]:
     """後方互換性API: aider_runner / 既存テストから呼ばれる関数のアダプター."""
     if not cwd:
@@ -351,6 +437,7 @@ def cleanup_unauthorized_aider_artifacts(
     snapshot = GuardSnapshot(
         cwd=cwd_path,
         target_files=target_files,
+        allowed_new_file_globs=list(allowed_new_file_globs or []),
         gitignore_content=None,
     )
     report = rollback_unauthorized_changes(snapshot, target_files)

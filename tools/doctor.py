@@ -160,6 +160,15 @@ def check_project_json(
                 message=f"docs/project.json の key ('{data.get('key')}') が母艦のキー ('{project_key}') と異なります。",
                 fixable=False,
             )
+        if "allowed_new_file_globs" in data:
+            globs = data["allowed_new_file_globs"]
+            if not isinstance(globs, list) or not all(isinstance(g, str) for g in globs):
+                return CheckResult(
+                    name="Satellite project.json",
+                    status="WARN",
+                    message=f"docs/project.json の allowed_new_file_globs は文字列の配列である必要があります: {globs}",
+                    fixable=False,
+                )
         return CheckResult(
             name="Satellite project.json",
             status="OK",

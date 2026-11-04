@@ -186,3 +186,87 @@ def test_rollback_removes_newly_created_gitignore(tmp_path: Path) -> None:
 
     assert not (repo / ".gitignore").exists()
     assert ".gitignore" in report.reverted
+
+
+def test_glob_to_regex_and_matches_any_glob() -> None:
+    """glob パターンマッチングが正しく判定されることを検証する (Issue #102)."""
+    from tools.edit_guard import matches_any_glob
+
+    globs = ["tests/**", "src/**/*.rs", "docs/*.md"]
+
+    assert matches_any_glob("tests/test_foo.py", globs) is True
+    assert matches_any_glob("tests/nested/test_bar.py", globs) is True
+    assert matches_any_glob("src/sub/worker.rs", globs) is True
+    assert matches_any_glob("src/main.rs", globs) is True
+    assert matches_any_glob("docs/spec.md", globs) is True
+    assert matches_any_glob("docs/nested/spec.md", globs) is False
+    assert matches_any_glob("other/junk.txt", globs) is False
+    assert matches_any_glob("settings.json", globs) is False
+
+
+def test_rollback_retains_untracked_file_matching_allowed_new_file_globs(
+    mother_and_satellites: tuple[Path, Path],
+) -> None:
+    """allowed_new_file_globs に一致する未追跡ファイルが保持され、それ以外は削除される (Issue #102)."""
+    mother, sat = mother_and_satellites
+    snapshot = prepare_guard(
+        sat,
+        ["src/main.py"],
+        allowed_new_file_globs=["tests/**", "src/**/*.rs"],
+        mother_root=mother,
+    )
+
+    # 1. 許可される未追跡ファイル
+    (sat / "tests").mkdir(parents=True, exist_ok=True)
+    allowed_test = sat / "tests" / "test_feature.py"
+    allowed_test.write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    allowed_rs = sat / "src" / "helper.rs"
+    allowed_rs.write_text("pub fn helper() {}\n", encoding="utf-8")
+
+    # 2. 許可されない未追跡ファイル
+    unauthorized_file = sat / "unauthorized.txt"
+    unauthorized_file.write_text("junk", encoding="utf-8")
+
+    report = rollback_unauthorized_changes(snapshot, ["src/main.py"])
+
+    # 許可されたファイルは保持される
+    assert allowed_test.exists()
+    assert allowed_rs.exists()
+    assert "tests/test_feature.py" in report.retained_new_files
+    assert "src/helper.rs" in report.retained_new_files
+
+    # 許可されないファイルは削除される
+    assert not unauthorized_file.exists()
+    assert any("unauthorized.txt" in item for item in report.reverted)
+
+
+def test_rollback_reverts_tracked_outside_file_even_if_matching_allowed_globs(
+    mother_and_satellites: tuple[Path, Path],
+) -> None:
+    """追跡済みファイルの変更は allowed_new_file_globs に一致していても target_files 外なら元に戻る (Issue #102)."""
+    mother, sat = mother_and_satellites
+
+    # src/main.py 以外の追跡済みファイルを src/ 配下に作成・コミットしておく
+    tracked_in_src = sat / "src" / "existing.py"
+    tracked_in_src.write_text("version = 1\n", encoding="utf-8")
+    git(sat, "add", "-A")
+    git(sat, "commit", "-q", "-m", "add existing")
+
+    # allowed_new_file_globs=["src/**"] を指定（新規ファイルのみ許可）
+    snapshot = prepare_guard(
+        sat,
+        ["src/main.py"],
+        allowed_new_file_globs=["src/**"],
+        mother_root=mother,
+    )
+
+    # 追跡済みファイルを改変
+    tracked_in_src.write_text("version = 2\n", encoding="utf-8")
+
+    report = rollback_unauthorized_changes(snapshot, ["src/main.py"])
+
+    # 追跡済みファイルは元に戻される
+    assert tracked_in_src.read_text(encoding="utf-8") == "version = 1\n"
+    assert any("src/existing.py" in item for item in report.reverted)
+    assert "src/existing.py" not in report.retained_new_files
