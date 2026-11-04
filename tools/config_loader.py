@@ -115,10 +115,12 @@ class AdvisorPromptConfig(BaseModel):
 class ReviewerPromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code_review_system: str
+    failure_analysis_system: str
 
 
 class PromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    version: str = "1.0"
     planner: PlannerPromptConfig
     coder: CoderPromptConfig
     advisor: AdvisorPromptConfig

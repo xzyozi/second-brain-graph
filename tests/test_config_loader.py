@@ -180,6 +180,8 @@ def test_load_prompt_config_loads_yaml() -> None:
     assert len(prompt_config.coder.scope_restriction_template.strip()) > 0
     assert len(prompt_config.advisor.test_feedback_system.strip()) > 0
     assert len(prompt_config.reviewer.code_review_system.strip()) > 0
+    assert len(prompt_config.reviewer.failure_analysis_system.strip()) > 0
+    assert prompt_config.version == "1.0"
     assert "[TEST INTEGRITY AUDIT" in prompt_config.reviewer.code_review_system
 
 
