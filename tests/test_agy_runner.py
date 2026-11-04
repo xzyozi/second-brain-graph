@@ -88,8 +88,8 @@ def test_run_agy_edit_cleanup_runs_on_success(
     mock_cleanup.assert_called_once_with("/tmp/satellite", ["src/a.py"])
 
 
-def test_agy_run_error_is_aider_run_error_subclass() -> None:
-    """code_node の既存の except AiderRunError が AgyRunError も捕捉できることを確認する。"""
-    from tools.aider_runner import AiderRunError
+def test_agy_run_error_is_coder_run_error_subclass() -> None:
+    """code_node の except CoderRunError が AgyRunError を捕捉できることを確認する。"""
+    from tools.agy_runner import CoderRunError
 
-    assert issubclass(AgyRunError, AiderRunError)
+    assert issubclass(AgyRunError, CoderRunError)

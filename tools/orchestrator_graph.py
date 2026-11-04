@@ -29,8 +29,9 @@ from langgraph.graph import END, StateGraph
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.agy_runner import CoderRunError, run_agy_edit
 from tools.backend_coordinator import get_coordinator
+from tools.git_utils import GitDiffError, get_git_diff
 from tools.metadata_store import (
     GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
@@ -619,7 +620,7 @@ def code_node(state: GraphState) -> GraphState:
 
         allowed_globs = state.get("allowed_new_file_globs") or []
 
-        def _do_aider(profile: Any) -> bool:
+        def _do_code_edit(profile: Any) -> bool:
             # 編集エンジンは route が指す profile の backend で決まる。指示文は
             # prompt.yaml を正本とするハーネスが、エンジンごとの規則を付けて組み立てる。
             from tools.prompt_harness import build_coder_instruction, engine_for_backend
@@ -633,8 +634,6 @@ def code_node(state: GraphState) -> GraphState:
                 feedback=state.get("aider_message"),
             )
             if engine == "agy":
-                from tools.agy_runner import run_agy_edit
-
                 agy_timeout = profile.timeout or 1200
                 return run_agy_edit(
                     instruction=instruction,
@@ -643,16 +642,13 @@ def code_node(state: GraphState) -> GraphState:
                     timeout=agy_timeout,
                     allowed_new_file_globs=allowed_globs,
                 )
-            return run_aider(
-                instruction=instruction,
-                target_files=target_files,
-                cwd=cwd,
-                allowed_new_file_globs=allowed_globs,
+            raise CoderRunError(
+                f"Unsupported coder engine '{engine}' for backend '{profile.backend}'"
             )
 
         coordinator = get_coordinator()
-        coordinator.execute("aider_edit", {"action": _do_aider})
-        # #26: Aider が .gitignore を変更した場合のみ元に戻す（規約違反・レビュー拒否を防止）。
+        coordinator.execute("code_edit", {"action": _do_code_edit})
+        # 編集エンジンが .gitignore を変更した場合のみ元に戻す（規約違反・レビュー拒否を防止）。
         # 実行前後で内容が変わっていなければ何もしない。
         if cwd and gitignore_before is not None and is_in_git_workspace(cwd):
             gitignore_path = Path(cwd) / ".gitignore"
@@ -663,7 +659,7 @@ def code_node(state: GraphState) -> GraphState:
             except Exception:
                 gitignore_after = None
             if gitignore_after != gitignore_before:
-                logger.info("Aider modified .gitignore; reverting to pre-Aider state.")
+                logger.info("Coder engine modified .gitignore; reverting to pre-edit state.")
                 run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
 
         state["status"] = "code_completed"
@@ -687,8 +683,8 @@ def code_node(state: GraphState) -> GraphState:
                                 and rel_path not in target_files
                             ):
                                 target_files.append(rel_path)
-    except AiderRunError as e:
-        logger.warning(f"AiderRunError caught in code_node: {e}")
+    except CoderRunError as e:
+        logger.warning(f"CoderRunError caught in code_node: {e}")
         state["error"] = str(e)
         cat = classify_error_category(e)
         state["error_category"] = cat
