@@ -4,8 +4,8 @@
 | 項目     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-OP-001                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 版数     | Rev.4.7（詳細設計書分離に伴うマップおよびステータス対応反映版）                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 改訂日   | 2026年8月9日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 版数     | Rev.4.8（Epic #116: agy 移行に伴う障害対応・ロールバック手順の追記）                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 改訂日   | 2026年11月4日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 作成日   | 2026年7月27日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
@@ -61,7 +61,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    uv run python tools/orchestrator_graph.py execute --issue-id EC-012
    ```
    - ① `plan_node` (LiteLLM / Planner による要件指示書生成)
-   - ② `code_node` (Aider による衛星コード編集 `--no-auto-commits`)
+   - ② `code_node` (コード編集エンジンによる衛星コード編集。【現行】Aider `--no-auto-commits`、【移行設計】agy)
    - ③ `lint_node` (Ruff 高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
@@ -91,18 +91,19 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - 対象 Issue の説明文が長すぎる場合は、タスクを分割して指示文を簡潔にする。
 
 ### ケース2: テスト/静的解析の継続失敗 (`max_round` 到達)
-- **症状:** Aider による修復が `max_round`（デフォルト3回）連続で失敗し、`escalate_node` に遷移して `final_status: "FAILED_B7"` として記録される。
+- **症状:** コード編集エンジン（Aider / agy）による修復が `max_round`（デフォルト3回）連続で失敗し、`escalate_node` に遷移して `final_status: "FAILED_B7"` として記録される。
 - **対処:**
   - `orchestrator_graph.py` の実行ログから直近の pytest / Ruff エラーログを確認。
   - テストコードや型定義の直接編集が必要な場合は、人間が `projects/<name>/` を編集する。
 
-### ケース3: Aider CLI / LiteLLM 推論のタイムアウト
-- **症状:** `AiderRunError: Aider実行がタイムアウトしました (timeout=600)` や LiteLLM タイムアウトが発生。
+### ケース3: コード編集エンジン（Aider / agy）/ LLM 推論のタイムアウト
+- **症状:** 【現行】`AiderRunError: Aider実行がタイムアウトしました (timeout=600)` や LiteLLM タイムアウトが発生。【移行設計】agy 経路では `AgyRunError`（メッセージに `timed out` を含む）が発生する。判定は例外メッセージの `timed out` で行うため、現行・移行後とも同じ再試行規則が適用される。
 - **対処:**
   - Issue実行全体を通して再試行は1回のみとする。
   - `llm_timeout_count == 0` の場合: `llm_timeout_count` を 1 にして同一ノードを自動再試行する。
   - `llm_timeout_count == 1` の場合: 直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
-  - 根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
+  - 【現行】根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
+  - 【移行設計】agy 経路には VRAM は関係しない。agy の応答遅延・ネットワーク・クォータを確認する。内側のタイムアウト（`profile.timeout`、既定 1200 秒）は外側の worker タイムアウト（`nightly_worker.toml` の `timeout_seconds`、1800 秒）より短く保つ。
 
 ### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
 - **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止し、ロックが解放された。
@@ -120,6 +121,23 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。連続 `FAILED_B7` で自動 Resume が拒否された場合（`consecutive_b7` が 2 以上）は、原因を修復したうえで `--resume`（継続）または `--fresh`（作り直し）を明示して再実行する。
   3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
+### ケース6: agy 経路の障害と、旧経路へのロールバック【移行設計・Epic #116】
+> 本ケースは agy への `routes` 切り替え（Issue #123）の完了後に適用される。移行前の環境には当てはまらない。
+
+- **症状:** 次のいずれかで、複数の Issue が `FAILED_SYSTEM`（`SYSTEM_ERROR`）で連続して失敗する。
+  - agy の認証切れ、クォータ・レート制限、ネットワーク障害、`agy` 実行ファイルの未導入（PATH 解決失敗）。
+  - 移行直後は、**これらの原因は区別されず**、すべて `FAILED_SYSTEM` として記録される。原因は実行ログ（agy の終了コードと stderr の要約）で判断する。種別の分類と、連続失敗時の自動中断は Issue #126 で対応する。
+- **確認:**
+  1. 実行ログで、失敗が `AgyRunError`（編集）か、`call_llm` 経路の `AgyError`（計画・レビュー等）かを確認する。
+  2. 手動で `agy` を単独起動し、認証とネットワークが有効か確認する。認証情報の中身は読まない。
+  3. `FAILED_SYSTEM` は `consecutive_b7` を増やさず、自動 Resume の対象にもならない（DD-003 §5.2）。復旧後に `--resume` または `--fresh` を明示して再実行する。
+- **旧経路へのロールバック（`routes` の切り戻し）:**
+  1. `config/models.yaml` の `backend_execution.routes` の向き先を、旧 profile へ戻す（`spec_draft`・`task_decomposition`・`task_prioritization`・`code_review`・`failure_analysis`・`test_feedback` → `reasoning_ollama`、`code_edit`・`aider_edit` → `coding_ollama`）。**移行期間は旧 profile を削除しないため、この変更だけで戻せる。**
+  2. 設定は `lru_cache` でプロセス内にキャッシュされるため、**新しい Python プロセスで再実行する**（常駐プロセスがある場合は再起動する）。
+  3. Ollama が起動しており、`coding_ollama` と `reasoning_ollama` のモデルが利用可能なことを確認し、GPU 使用状況を確認する（現行の運用）。
+  4. 旧 profile が削除された後（Issue #128 完了後）は、この手順は使えない。その場合の復元は、退避した資産（`legacy/local_llm/` と `archive/local-llm-*` タグ、Issue #118）による。
+- **自動フォールバックはない**: agy の失敗時に、システムが自動で旧経路へ切り替えることはない（DD-003 §10.1）。切り替えは運用者の判断で行う。
+
 ---
 
 ## 4. 中長期メンテナンス・モデル定期更新ランブック
@@ -129,7 +147,9 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 2. Aider によるリファクタリングマージテスト。
 3. Reviewer による監査厳密性テスト。
 
-### 4.2 ロールバック（切り戻し）手順
+### 4.2 ロールバック（切り戻し）手順【現行・ローカルモデル更新時】
+> agy 経路から旧経路へ戻す手順は、§3 ケース6 を参照すること。以下は、ローカルモデルを更新して不安定だった場合の手順である。
+
 ```bash
 # 1. tools/llm_client.py のモデル指定を安定版へ戻す
 git checkout ~/second-brain/tools/llm_client.py

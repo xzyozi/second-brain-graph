@@ -3,9 +3,9 @@
 | 項目               | 内容                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書名             | Second Brain OS - 品質ゲートおよびレビュー制御仕様                                                                                                            |
-| 版数               | Rev.1.2（Defense 3.1: JEV レビュー合否二次検問ゲートの追記）                                                                                                  |
-| 改訂日             | 2026年9月24日                                                                                                                                                 |
-| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、PM-053、PM-054                                                                          |
+| 版数               | Rev.1.3（Epic #116: planner / reviewer LLM の agy 移行に伴う記述の一般化と、JEV 据え置きの明記）                                                              |
+| 改訂日             | 2026年11月4日                                                                                                                                                 |
+| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-005（Backend 仕様）、PM-053、PM-054、Epic #116                                                  |
 | 対象コンポーネント | `spec_draft_node (JEV 計画適合性ゲート)`、`lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node (JEV レビュー合否二次ゲート)`、`reviewdog`       |
 | 役割               | 計画段階のYAGNI検問、コード生成後の静的解析、自動テスト、LLMによるコードレビューとJEV決定論的二次検問、およびRDJSONフォーマットへの変換とエスカレーション処理 |
 
@@ -16,9 +16,16 @@
 本仕様は、エージェントの自律実行ループにおける「多層防衛品質ゲート」を定義する。
 品質ゲートは、コード生成前の「計画適合性検問（Defense 0: JEV Plan Conformance）」、生成直後の「Ruff 静的解析（Defense 1）」、「pytest 自動テスト（Defense 2）」、および「LLM 静的コードレビュー ＋ JEV 決定論的二次検問（Defense 3: JEV Review Conformance）」の多層防衛で構成される。
 
+### 1.0 Epic #116（agy 移行）との関係
+
+* **LLM による判定（計画策定 `spec_draft`、テスト助言 `test_feedback`、レビュー `code_review`、敗因分析 `failure_analysis`）**: 実行基盤が Ollama から agy へ移る【移行設計・未実装、Issue #121・#123】。呼び出し側のシグネチャ・返り値・状態遷移は変えない。詳細は SBOS-DD-005 §4.1。
+* **JEV（Defense 0 と Defense 3.1）は据え置き**: JEV は本書の Backend 設定を経由せず、Ollama（既定 `qwen2.5:0.5b`）へ直接接続する（SBOS-DD-005 §1.1）。agy への移行後も JEV を使う限り、**Ollama の実行環境が必要**である。JEV が利用できない場合は、従来どおり判定をバイパスする（フェイルオープン）。
+* **品質ゲートの順序・上限（`max_round` など）は変えない。** Ruff と pytest は LLM に依存しない。
+* **用語**: 本書中の「Aider」は、コード編集エンジン全般（現行は Aider、移行後は agy）を指す箇所がある。状態フィールド名 `aider_message` は、グラフ契約の維持のため名称を変更しない（SBOS-DD-004 §5.1）。
+
 ### 1.1 計画適合性検問ゲート (`spec_draft_node` / Defense 0: JEV Plan Conformance)
 
-* **目的**: Aider による本格的なコード生成に入る前に、Planner LLM が策定した `impl_plan`（Definition of Done / 実装方針計画）が Issue の要求仕様を逸脱・肥大化（YAGNI 違反・勝手な機能追加）させていないかを水際で検証し、GPU リソースの無駄な浪費と後段爆死を未然に防止する。
+* **目的**: コード編集エンジン（現行 Aider、移行後 agy）による本格的なコード生成に入る前に、Planner LLM が策定した `impl_plan`（Definition of Done / 実装方針計画）が Issue の要求仕様を逸脱・肥大化（YAGNI 違反・勝手な機能追加）させていないかを水際で検証し、計算資源（現行はローカル GPU、移行後は agy の利用枠）の無駄な浪費と後段の失敗を未然に防止する。
 * **判定方式**: Zero-Decode 高速判定基盤 JEV (`submodules/jev-localsystem`) の `NoulTask`（規程適合判定）による 39ms 1トークン推論。
 * **入力パラメータ**:
   1. `instruction`: Issue 本文および要求仕様
@@ -51,7 +58,7 @@
   * テストが失敗した場合、`TEST_ERROR` として `test_round` を加算し、累積失敗が `max_round`（3回）に達した時点（3回目の失敗）で `FAILED_B7` にエスカレーションされる。
 
 ### 2.3 テスト助言 (`test_feedback_node`)
-* **実行内容**: テストが失敗した場合、`test_feedback` intentを用いてPlanner LLMに失敗ログを渡し、修正のための助言を生成させる。
+* **実行内容**: テストが失敗した場合、`test_feedback` intent を用いて Planner LLM に失敗ログを渡し、修正のための助言を生成させる（`call_llm` 経由。実行基盤は移行後 agy、SBOS-DD-005 §4.1）。
 * **副作用・失敗契約**: 助言生成自体がLLMエラー等で失敗した場合でも、テスト失敗の事実（rawテスト出力）は維持し、そのまま修正ループ（`retry_code`）へ継続させる。
 
 ## 3. Review Adapter (`review_node` / Reviewdog)
@@ -62,8 +69,10 @@
   * LLMからのコメントは `file`、`line`、`message`、`severity` を補完して構造化される。
   * `changes_requested` と判定されたにもかかわらずコメントが空の場合は、フェイルセーフとして `LGTM` に自動補正される。
 * **フィードバックの反映**:
-  * severityが `structural`、`major`、`error` 等の重大な指摘、または対象外ファイルへの指摘がある場合は、その内容を Aider への次回のフィードバック指示（`aider_message`）に優先的に追加する。
-  * 修正要求（`changes_requested`）は最大3回まで `retry_code` で Aider に差し戻される。
+  * severityが `structural`、`major`、`error` 等の重大な指摘、または対象外ファイルへの指摘がある場合は、その内容をコード編集エンジンへの次回のフィードバック指示（`aider_message`）に優先的に追加する。
+  * 修正要求（`changes_requested`）は最大3回まで `retry_code` でコード編集エンジンに差し戻される。
+* **応答の契約**: `review_node` は `expect_json=True` で呼び出し、応答の `verdict` が `LGTM` または `changes_requested` でない場合は `FAILED_SYSTEM`（`SYSTEM_ERROR`）として停止する。
+* **agy 経路の留意点【移行設計】**: 移行後は agy がレビューを行う。agy が JSON の指示を守らない場合、JSON 抽出のフォールバックは `changes_requested` を返すため、**差し戻しが繰り返されうる**。agy の JSON 遵守率は Issue #127 で確認し、合格基準（100%）を満たすまで、実サテライトでの運用を始めない。JSON のみを出力させる指示は `call_llm` が末尾に追加する（SBOS-DD-005 §4.1）。
 
 ### 3.1.1 JEV レビュー合否二次検問ゲート (`review_node` / Defense 3.1: JEV Review Conformance)
 
@@ -81,6 +90,7 @@
   * **適合 (`is_valid == True`)**: `state["review_lgtm"] = True` を確定し、`done_node` へ進行。
   * **不適合 (`is_valid == False`)**: `verdict` を `"changes_requested"` に強制上書き。Aider への次回復帰メッセージ（`aider_message`）に `【JEV REVIEW REJECTED】JEV二次検問により不適合と判定されました: <理由>` を注入し、`retry_code` で差し戻す。
   * **フェイルオープン契約**: JEV 未展開、初期化例外、モデル通信エラー等の異常時は安全にバイパス（`True`）し、Reviewer LLM の判定をそのまま採用してシステム停止を防ぐ。
+  * **Ollama 停止時の注意【Epic #116 後】**: JEV は Ollama に依存するため、Ollama を停止すると二次検問は無言でバイパスされ、Reviewer LLM（移行後は agy）の判定のみが採用される。agy 移行後の E2E 検証（Issue #123）は、Ollama を起動したまま行い、JEV を含めた動作を確認する。
   * **監査ログ**: JEV の判定確信度（`confidence`）、レイテンシ、判定ステータスを `review_rounds` 履歴オブジェクトに記録する。
 
 ### 3.2 Reviewdog によるアノテーション
@@ -93,3 +103,4 @@
 lint または test が上限回数に到達し修正不可能な場合、`escalate_node` が呼び出される。
 * **敗因レポートの生成**: 失敗原因とログを含む敗因レポート（`FAILURE_REPORT_<ISSUE_ID>.md`）の生成を試みる。
 * **状態の確定**: レポート作成に成功した場合は最終状態を `ESCALATED_NEEDS_REVISION` とし、失敗時は防御的に `FAILED_B7` または `FAILED_SYSTEM` にフォールバックする。
+* **敗因分析の LLM 呼び出し**: `failure_analysis` intent の `call_llm` 呼び出しが例外となった場合は、警告ログのみを残して終了し、`status` は変更しない。レポートは母艦の `metadata/projects/<PROJECT_KEY>/` へ出力し、出力時に `sanitize_text` で機密情報をマスクする（Issue #20・#26）。
