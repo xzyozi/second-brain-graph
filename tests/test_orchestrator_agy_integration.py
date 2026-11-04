@@ -4,6 +4,8 @@
 run_agy_edit をモックして、呼び出しの配線と既存の状態遷移契約を検証する。
 """
 
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from tools.agy_runner import AgyRunError
@@ -160,3 +162,48 @@ def test_code_node_handles_agy_quota_error_as_agy_quota(
 
     assert result["status"] == "FAILED_SYSTEM"
     assert result["error_category"] == "AGY_QUOTA"
+
+
+@patch("tools.agy_runner.run_agy_edit")
+@patch("tools.orchestrator_graph.get_coordinator")
+def test_code_node_dynamically_registers_new_files_non_python(
+    mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock, tmp_path: Path
+) -> None:
+    """code_node 実行後にサニタイザを通過した非Pythonファイル(.rs, .ts)も target_files に追加される (Issue #102)."""
+    import subprocess
+
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default", timeout=1200)
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+
+    # テスト用 git リポジトリ作成
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    (repo / "src").mkdir()
+    (repo / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    def fake_edit(*args: Any, **kwargs: Any) -> bool:
+        # 編集エンジンが新しい .rs ファイルと .ts ファイルを作成したと仮定
+        (repo / "src" / "helper.rs").write_text("pub fn h() {}\n", encoding="utf-8")
+        (repo / "app.ts").write_text("export const a = 1;\n", encoding="utf-8")
+        return True
+
+    mock_run_agy_edit.side_effect = fake_edit
+
+    state: GraphState = {
+        "issue_id": "TFG-0097",
+        "target_files": ["src/main.rs"],
+        "instruction": "add helper",
+        "cwd": str(repo),
+        "allowed_new_file_globs": ["src/**/*.rs", "*.ts"],
+    }
+    result = code_node(state)
+
+    assert result["status"] == "code_completed"
+    assert "src/main.rs" in result["target_files"]
+    assert "src/helper.rs" in result["target_files"]
+    assert "app.ts" in result["target_files"]

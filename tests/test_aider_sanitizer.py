@@ -133,3 +133,35 @@ def test_no_warning_when_only_targets_or_aider_files_changed(
         warn_if_working_tree_dirty(str(repo), ["src/target.py"])
 
     assert "Working tree is not clean" not in caplog.text
+
+
+def test_cleanup_with_allowed_new_file_globs(repo: Path) -> None:
+    """allowed_new_file_globs で未追跡新規ファイルが許可され、追跡済みファイルは元に戻る (Issue #102)."""
+    # 1. 許可される新規ファイル
+    (repo / "src" / "new_helper.rs").write_text("fn test() {}\n", encoding="utf-8")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_api.ts").write_text("export const x = 1;\n", encoding="utf-8")
+
+    # 2. 許可されない新規ファイル
+    (repo / "junk.txt").write_text("junk\n", encoding="utf-8")
+
+    # 3. 追跡済みファイルの変更（glob に一致していても元に戻るべき）
+    (repo / "other.py").write_text("o = 999\n", encoding="utf-8")
+
+    handled = cleanup_unauthorized_aider_artifacts(
+        str(repo),
+        ["src/target.py"],
+        allowed_new_file_globs=["src/**/*.rs", "tests/**", "*.py"],
+    )
+
+    # 許可されたファイルは残る
+    assert (repo / "src" / "new_helper.rs").exists()
+    assert (repo / "tests" / "test_api.ts").exists()
+
+    # 許可されない新規ファイルは削除される
+    assert not (repo / "junk.txt").exists()
+    assert any("junk.txt" in h for h in handled)
+
+    # 追跡済みファイルは元に戻る
+    assert (repo / "other.py").read_text(encoding="utf-8") == "o = 1\n"
+    assert any("other.py" in h for h in handled)

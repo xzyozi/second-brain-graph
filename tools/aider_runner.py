@@ -167,7 +167,11 @@ def resolve_effective_edit_format(
     return fmt
 
 
-def revert_working_tree_files(cwd: Optional[str], target_files: List[str]) -> None:
+def revert_working_tree_files(
+    cwd: Optional[str],
+    target_files: List[str],
+    allowed_new_file_globs: Optional[List[str]] = None,
+) -> None:
     """フォールバック実行前に target_files の変更を元に戻す。"""
     if not target_files:
         return
@@ -176,7 +180,12 @@ def revert_working_tree_files(cwd: Optional[str], target_files: List[str]) -> No
         subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
     except Exception as e:
         logger.warning(f"Failed to revert files with git checkout: {e}")
-    cleanup_unauthorized_aider_artifacts(cwd, target_files)
+    if allowed_new_file_globs is not None:
+        cleanup_unauthorized_aider_artifacts(
+            cwd, target_files, allowed_new_file_globs=allowed_new_file_globs
+        )
+    else:
+        cleanup_unauthorized_aider_artifacts(cwd, target_files)
 
 
 def _execute_aider_single(
@@ -186,6 +195,7 @@ def _execute_aider_single(
     model: str,
     timeout: int,
     format_to_run: str,
+    allowed_new_file_globs: Optional[List[str]] = None,
 ) -> bool:
     """指定された edit_format で Aider CLI プロセスを単一実行する。"""
     cwd_path = Path(cwd) if cwd else Path.cwd()
@@ -240,7 +250,12 @@ def _execute_aider_single(
             text=True,
             timeout=timeout,
         )
-        cleanup_unauthorized_aider_artifacts(cwd, target_files)
+        if allowed_new_file_globs is not None:
+            cleanup_unauthorized_aider_artifacts(
+                cwd, target_files, allowed_new_file_globs=allowed_new_file_globs
+            )
+        else:
+            cleanup_unauthorized_aider_artifacts(cwd, target_files)
 
         if result.returncode != 0:
             logger.error(
@@ -251,12 +266,22 @@ def _execute_aider_single(
             )
         return True
     except subprocess.TimeoutExpired as e:
-        cleanup_unauthorized_aider_artifacts(cwd, target_files)
+        if allowed_new_file_globs is not None:
+            cleanup_unauthorized_aider_artifacts(
+                cwd, target_files, allowed_new_file_globs=allowed_new_file_globs
+            )
+        else:
+            cleanup_unauthorized_aider_artifacts(cwd, target_files)
         raise AiderRunError(f"Aider execution timed out after {timeout} seconds") from e
     except AiderRunError:
         raise
     except Exception as e:
-        cleanup_unauthorized_aider_artifacts(cwd, target_files)
+        if allowed_new_file_globs is not None:
+            cleanup_unauthorized_aider_artifacts(
+                cwd, target_files, allowed_new_file_globs=allowed_new_file_globs
+            )
+        else:
+            cleanup_unauthorized_aider_artifacts(cwd, target_files)
         raise AiderRunError(f"Failed to run Aider CLI: {e}") from e
     finally:
         if msg_file and msg_file.exists():
@@ -275,6 +300,7 @@ def run_aider(
     edit_format: Optional[str] = None,
     hybrid_line_threshold: Optional[int] = None,
     fallback_to_whole: Optional[bool] = None,
+    allowed_new_file_globs: Optional[List[str]] = None,
 ) -> bool:
     """Aider CLI を subprocess 経由で非対話形式で実行する。
     - config/models.yaml から edit_format, timeout, hybrid_line_threshold, fallback_to_whole を動的に取得。
@@ -336,13 +362,19 @@ def run_aider(
                 model=model,
                 timeout=timeout,
                 format_to_run=effective_format,
+                allowed_new_file_globs=allowed_new_file_globs,
             )
         except AiderRunError as e:
             logger.warning(
                 f"Aider execution with format '{effective_format}' failed: {e}. "
                 "Reverting changes and falling back to 'whole' format for safe recovery."
             )
-            revert_working_tree_files(cwd, target_files)
+            if allowed_new_file_globs is not None:
+                revert_working_tree_files(
+                    cwd, target_files, allowed_new_file_globs=allowed_new_file_globs
+                )
+            else:
+                revert_working_tree_files(cwd, target_files)
             return _execute_aider_single(
                 instruction=instruction,
                 target_files=target_files,
@@ -350,6 +382,7 @@ def run_aider(
                 model=model,
                 timeout=timeout,
                 format_to_run="whole",
+                allowed_new_file_globs=allowed_new_file_globs,
             )
 
     return _execute_aider_single(
@@ -359,4 +392,5 @@ def run_aider(
         model=model,
         timeout=timeout,
         format_to_run=effective_format,
+        allowed_new_file_globs=allowed_new_file_globs,
     )

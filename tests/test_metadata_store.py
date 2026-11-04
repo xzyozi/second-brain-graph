@@ -426,11 +426,18 @@ def test_resolve_project_context_prioritizes_satellite_docs(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    # サテライト側の docs/project.json (新設定: base_branch = develop, target_files = ['satellite_code.py'])
+    # サテライト側の docs/project.json (新設定: base_branch = develop, target_files = ['satellite_code.py'], allowed_new_file_globs)
     sat_docs = sat_dir / "docs"
     sat_docs.mkdir(parents=True)
     (sat_docs / "project.json").write_text(
-        json.dumps({"key": "SAT", "base_branch": "develop", "target_files": ["satellite_code.py"]}),
+        json.dumps(
+            {
+                "key": "SAT",
+                "base_branch": "develop",
+                "target_files": ["satellite_code.py"],
+                "allowed_new_file_globs": ["tests/**", "src/**/*.rs"],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -443,6 +450,7 @@ def test_resolve_project_context_prioritizes_satellite_docs(tmp_path: Path) -> N
     assert ctx["valid"] is True
     assert ctx["base_branch"] == "develop"
     assert ctx["target_files"] == ["satellite_code.py"]
+    assert ctx["allowed_new_file_globs"] == ["tests/**", "src/**/*.rs"]
 
 
 def test_reset_task_state(tmp_path: Path) -> None:

@@ -39,12 +39,14 @@ def run_agy_edit(
     cwd: Optional[str],
     *,
     timeout: int = 1200,
+    allowed_new_file_globs: Optional[List[str]] = None,
 ) -> bool:
     """agy にコード編集を行わせる.
 
     - cwd は必須 (衛星ワークツリー)。母艦でないことの検証は呼び出し側の責務とする。
     - 成功・失敗にかかわらず、target_files 外の変更は cleanup_unauthorized_aider_artifacts で
       後始末する (SBOS-DD-004 §2.1。この関数は git status のみに依存し engine 非依存)。
+    - allowed_new_file_globs にマッチする未追跡ファイルは許可・保持される。
     - タイムアウトのメッセージには 'timed out' を含む (AgyTimeoutError のメッセージをそのまま使う)。
       code_node の LLM_TIMEOUT 判定が部分文字列一致のため。
     """
@@ -70,6 +72,11 @@ def run_agy_edit(
     except AgyError as e:
         raise AgyRunError(str(e)) from e
     finally:
-        handled = cleanup_unauthorized_aider_artifacts(cwd, target_files)
+        if allowed_new_file_globs is not None:
+            handled = cleanup_unauthorized_aider_artifacts(
+                cwd, target_files, allowed_new_file_globs=allowed_new_file_globs
+            )
+        else:
+            handled = cleanup_unauthorized_aider_artifacts(cwd, target_files)
         if handled:
             logger.warning(f"[agy_runner] Reverted/removed files outside target_files: {handled}")

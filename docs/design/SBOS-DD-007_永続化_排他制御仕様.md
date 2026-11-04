@@ -48,7 +48,7 @@
 | ファイル                 | 主な項目                                                                                                | 配置場所                  | 解決優先順位                                |
 | :----------------------- | :------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------------------------------ |
 | `.project-registry.json` | `projects.<key>.dir`、`meta`                                                                            | 母艦 `metadata/`          | 母艦中央台帳（SSOT）                        |
-| `project.json`           | `key`、`base_branch`、`work_branch_prefix`、`target_files`、`exclude_files`                             | サテライト `docs/`        | **1. サテライト docs/** → 2. 母艦 metadata/ |
+| `project.json`           | `key`、`base_branch`、`work_branch_prefix`、`target_files`、`exclude_files`、`allowed_new_file_globs` | サテライト `docs/`        | **1. サテライト docs/** → 2. 母艦 metadata/ |
 | `tasks.md`               | Issue ID・タイトル・優先度・依存関係（blockedby）                                                       | サテライト `docs/`        | **1. サテライト docs/** → 2. 母艦 metadata/ |
 | `issues/<ISSUE_ID>.md`   | Target Files、制約、Non-goals、DoD                                                                      | サテライト `docs/issues/` | **1. サテライト docs/** → 2. 母艦 metadata/ |
 | `state.json`             | Issue ID ごとの `status`、`review_round`、`max_round`、`error_category`、`consecutive_b7`、`updated_at` | 母艦 `tools/.cache/`      | ランタイムキャッシュ（Git隔離）             |
