@@ -93,24 +93,16 @@ def test_resolve_prompt_rejects_unknown_binding() -> None:
         resolve_prompt("coder", "code_review", prompt_config=make_prompt_config())
 
 
-def test_engine_for_backend_maps_agy_and_defaults_to_aider() -> None:
+def test_engine_for_backend_maps_agy() -> None:
     assert engine_for_backend("agy") == "agy"
-    assert engine_for_backend("ollama") == "aider"
-    assert engine_for_backend("llama_server") == "aider"
+    assert engine_for_backend("ollama") == "agy"
+    assert engine_for_backend("llama_server") == "agy"
 
 
-def test_build_coder_instruction_uses_engine_specific_rules() -> None:
+def test_build_coder_instruction_uses_agy_rules() -> None:
     config = make_prompt_config()
     targets = ["src/a.py", "tests/test_a.py"]
 
-    aider = build_coder_instruction(
-        engine="aider",
-        base_instruction="Implement X",
-        impl_plan="the plan",
-        target_files=targets,
-        feedback=None,
-        prompt_config=config,
-    )
     agy = build_coder_instruction(
         engine="agy",
         base_instruction="Implement X",
@@ -120,16 +112,14 @@ def test_build_coder_instruction_uses_engine_specific_rules() -> None:
         prompt_config=config,
     )
 
-    assert "[AIDER RULES]" in aider and "[AGY RULES]" not in aider
-    assert "[AGY RULES]" in agy and "[AIDER RULES]" not in agy
-    assert "[SCOPE] only src/a.py, tests/test_a.py" in aider
+    assert "[AGY RULES]" in agy
     assert "[SCOPE] only src/a.py, tests/test_a.py" in agy
     assert "Implementation Plan:\nthe plan" in agy
 
 
 def test_build_coder_instruction_omits_optional_sections() -> None:
     result = build_coder_instruction(
-        engine="aider",
+        engine="agy",
         base_instruction="Apply edits",
         impl_plan=None,
         target_files=[],
@@ -154,27 +144,20 @@ def test_build_coder_instruction_rejects_unknown_engine() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("base", "plan", "targets", "feedback"),
-    [
-        ("Implement X", "plan text", ["src/a.py", "tests/test_a.py"], "fix this"),
-        ("Apply edits", None, ["src/a.py"], None),
-        ("Apply edits", "plan", [], "fb"),
-        ("Apply edits", None, [], None),
-        ("Do {x}", "plan {y}", ["src/{z}.py"], "{w}"),
-    ],
-)
-def test_aider_instruction_is_byte_identical_to_legacy_code_node(
-    base: str, plan: Optional[str], targets: List[str], feedback: Optional[str]
-) -> None:
-    """実運用の prompt.yaml から組み立てた Aider 指示文が、導入前の直書きと一致すること。"""
+def test_agy_instruction_contains_core_sections() -> None:
+    """実運用の prompt.yaml から組み立てた agy 指示文に必要な各セクションが含まれていること。"""
     actual = build_coder_instruction(
-        engine="aider",
-        base_instruction=base,
-        impl_plan=plan,
-        target_files=targets,
-        feedback=feedback,
+        engine="agy",
+        base_instruction="Implement X",
+        impl_plan="plan text",
+        target_files=["src/a.py", "tests/test_a.py"],
+        feedback="fix this",
         prompt_config=load_prompt_config(),
     )
 
-    assert actual == legacy_aider_instruction(base, plan, targets, feedback)
+    assert "Implement X" in actual
+    assert "Implementation Plan:\nplan text" in actual
+    assert "[SCOPE RESTRICTION]" in actual
+    assert "src/a.py, tests/test_a.py" in actual
+    assert "[AGY EDIT RULES]" in actual
+    assert "Feedback:\nfix this" in actual

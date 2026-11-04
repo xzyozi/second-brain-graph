@@ -164,7 +164,7 @@ def test_load_model_config_loads_yaml() -> None:
     from tools.config_loader import load_model_config
 
     config = load_model_config()
-    assert config.aider.no_auto_commits is True
+    assert config.aider is None
     assert "planner" in config.models
     assert "coder" in config.models
     assert "reviewer" in config.models
@@ -194,7 +194,7 @@ def test_get_config_returns_unified_app_config() -> None:
     assert isinstance(app_config, AppConfig)
     assert app_config.models is not None
     assert app_config.prompt is not None
-    assert app_config.models.aider.timeout == 1200
+    assert "spec_draft" in app_config.models.backend_execution.routes
 
 
 # ---------------------------------------------------------------------------

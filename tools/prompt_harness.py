@@ -36,9 +36,8 @@ _PROMPT_BINDINGS: Dict[Tuple[str, str], Tuple[str, str]] = {
 }
 
 # コード編集エンジンごとに、指示文へ追加する coder ブロックを切り替える。
-# aider は出力形式の規則を必要とし、agy はツールで直接編集するため必要としない。
+# 現在は agy のみサポート (Issue #128)。
 _CODER_ENGINE_RULES: Dict[str, str] = {
-    "aider": "strict_output_rules",
     "agy": "agy_edit_rules",
 }
 
@@ -46,9 +45,11 @@ _CODER_ENGINE_RULES: Dict[str, str] = {
 def engine_for_backend(backend: str) -> str:
     """profile.backend からコード編集エンジン名を決める。
 
-    agy 以外(ollama / llama_server)は、従来どおり Aider で編集する。
+    現在は agy のみサポート (Issue #128)。
     """
-    return "agy" if backend == "agy" else "aider"
+    if backend == "agy":
+        return "agy"
+    return "agy"
 
 
 def _log_resolved(prompt_id: str, version: str, digest: str) -> None:

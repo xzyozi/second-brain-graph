@@ -2,51 +2,33 @@
 # Second Brain OS - モデルおよび実行バックエンド構成定義 (models.yaml)
 # ==============================================================================
 # 本設定は、自律マルチエージェントパイプライン（Planner, Coder, Reviewer 等）が
-# 利用する推論モデル、Aider 実行環境、および GPU 排他リースを定義します。
+# 利用する推論モデルおよび agy バックエンドルーティングを定義します。
+# 従来のローカルLLM設定は legacy/local_llm/ および v0.9.0-pre-agy-migration を参照。
 
 # 各ロール別モデルハイパーパラメータ
 models:
   planner:
     description: "汎用・設計・計画用モデル (spec_draft / task_decomposition)"
     temperature: 0.2
-    max_tokens: 35000  # 長大な仕様書・DoD・ステップ分解を生成するために十分なトークン枠を確保
+    max_tokens: 35000
 
   coder:
-    description: "Python・コード記述特化モデル (code_edit / aider_edit)"
-    temperature: 0.1  # 構文・インデント・ロジックのブレを抑えるため低温度に設定
+    description: "コード記述特化モデル (code_edit / aider_edit)"
+    temperature: 0.1
     max_tokens: 35000
 
   reviewer:
     description: "汎用・コード監査・レビュー用モデル (code_review / failure_analysis)"
-    temperature: 0.1  # 厳格な判定と安定したJSON出力を得るため低温度に設定
+    temperature: 0.1
     max_tokens: 35000
 
-# Aider CLI 自動コード編集エンジン設定
-aider:
-  description: "Aider 自動コード編集用モデル設定"
-  no_auto_commits: true       # オーケストレーター側で境界検証とアトミックコミットを統制するため無効化
-  edit_format: "diff"         # diff で高速・安全に差分編集 (wholeによるCoT思考爆発と18分超タイムアウトを防止)
-  hybrid_line_threshold: 0    # 常に diff を優先して巨大トークン生成を防止
-  fallback_to_whole: false    # ローカルLLMで whole は CoT 爆発・パース不能リスクがあるため原則無効化
-  timeout: 1200               # 複数ファイルの推論・編集を考慮し十分なタイムアウト (秒) を確保
-
-# GPU 排他リースおよびバックエンドルーティング
+# バックエンド実行およびルーティング
 backend_execution:
-  mode: "exclusive"      # VRAM 枯渇 (OOM) を防ぐため、単一モデルの排他起動を強制
-  fallback: "disabled"   # サイレントな意図しないフォールバックによる品質劣化を防止
-  gpu_lease_timeout: 120 # GPU ロック解放待ちのタイムアウト上限 (秒)
+  mode: "exclusive"
+  fallback: "disabled"
+  gpu_lease_timeout: 120
 
   # タスクインテントから実行プロファイルへのマッピング
-  # [ロールバック手順]
-  # 従来のローカルLLM (Ollama) に戻す場合は、各ルートを以下のように戻してください:
-  #   spec_draft: "reasoning_ollama"
-  #   task_decomposition: "reasoning_ollama"
-  #   task_prioritization: "reasoning_ollama"
-  #   code_edit: "coding_ollama"
-  #   aider_edit: "coding_ollama"
-  #   code_review: "reasoning_ollama"
-  #   failure_analysis: "reasoning_ollama"
-  #   test_feedback: "reasoning_ollama"
   routes:
     spec_draft: "agy_default"
     task_decomposition: "agy_default"
@@ -59,27 +41,7 @@ backend_execution:
 
   # バックエンドプロファイル定義
   profiles:
-    reasoning_economy:
-      backend: "llama_server"
-      model: "gemma-4-12B-it-qat-UD-Q4_K_XL"
-      openai_endpoint: "http://localhost:8080/v1"
-      port: 8080
-      model_path: "./models/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
-
-    reasoning_ollama:
-      backend: "ollama"
-      model: "gemma4-12b-it-Q4_K_M:latest"
-      openai_endpoint: "http://localhost:11434/v1"
-      ollama_management_endpoint: "http://localhost:11434"
-
-    coding_ollama:
-      backend: "ollama"
-      model: "ornith-1.5-9b:latest"
-      openai_endpoint: "http://localhost:11434/v1"
-      ollama_management_endpoint: "http://localhost:11434"
-
-    # agy 用プロファイル (GPU リース対象外。routes からはまだ参照しない)
     agy_default:
       backend: "agy"
-      model: "agy-default"  # 識別ラベル。agy のモデル指定オプションが判明したら見直す
+      model: "agy-default"
       timeout: 1200

@@ -27,15 +27,6 @@ coder:
     1. Phase 1 (Core Logic): Focus first on implementing the core logic, classes, and exceptions under `src/`.
     2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass.
 
-  strict_output_rules: |
-    [STRICT AIDER OUTPUT FORMAT RULES]
-    - Output ONLY the target file modifications.
-    - For each file, the FIRST line must be the exact relative file path without backticks, quotes, or markdown formatting (e.g. src/utils/file_utils.py).
-    - Follow immediately with a markdown code block containing the complete source code.
-    - DO NOT output any introductory text, conversational filler, greetings, thoughts, or explanations outside code blocks.
-    - DO NOT replace implementations or tests with ellipses (...), pass, or placeholder comments. Always write complete, runnable Python code.
-    - DO NOT create or modify any files not listed in Target Files.
-
   agy_edit_rules: |
     [AGY EDIT RULES]
     - Edit the files directly in the working tree. Do not print the file contents as your answer.
