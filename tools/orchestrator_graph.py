@@ -29,6 +29,7 @@ from langgraph.graph import END, StateGraph
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.backend_coordinator import get_coordinator
 from tools.metadata_store import (
     GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
@@ -571,21 +572,30 @@ def code_node(state: GraphState) -> GraphState:
         # #25: Aider も GPU リース配下で実行し、planner/reviewer の LLM 呼出しと
         # GPU/VRAM を奪い合わないようにする。従来は run_aider を直接 subprocess 起動して
         # GpuLeaseAdapter を迂回していた。Coordinator 経由に統一する。
-        from tools.backend_coordinator import get_coordinator
 
         def _do_aider(profile: Any) -> bool:
             # 編集エンジンは route が指す profile の backend で決まる。指示文は
             # prompt.yaml を正本とするハーネスが、エンジンごとの規則を付けて組み立てる。
-            # 実行は現時点で Aider のみ。agy の実行分岐 (run_agy_edit) は #122 で追加する。
             from tools.prompt_harness import build_coder_instruction, engine_for_backend
 
+            engine = engine_for_backend(profile.backend)
             instruction = build_coder_instruction(
-                engine=engine_for_backend(profile.backend),
+                engine=engine,
                 base_instruction=state.get("instruction", "Apply edits"),
                 impl_plan=state.get("impl_plan"),
                 target_files=target_files,
                 feedback=state.get("aider_message"),
             )
+            if engine == "agy":
+                from tools.agy_runner import run_agy_edit
+
+                agy_timeout = profile.timeout or 1200
+                return run_agy_edit(
+                    instruction=instruction,
+                    target_files=target_files,
+                    cwd=cwd,
+                    timeout=agy_timeout,
+                )
             return run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
 
         coordinator = get_coordinator()
