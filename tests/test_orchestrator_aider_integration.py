@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tools.aider_runner import AiderRunError, GitDiffError
+from tools.backend_coordinator import get_coordinator
+from tools.config_loader import BackendExecutionConfig, get_backend_execution_config
 from tools.orchestrator_graph import (
     GraphState,
     ProjectLockManager,
@@ -26,6 +28,32 @@ from tools.orchestrator_graph import (
     validate_issue_id,
     validate_project_consistency,
 )
+
+
+@pytest.fixture(autouse=True)
+def _force_aider_routes(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Aider 統合テストのため、バックエンド routes を Aider / Ollama プロファイルに固定する。"""
+    original_get_config = get_backend_execution_config
+
+    def mock_get_config() -> BackendExecutionConfig:
+        cfg = original_get_config()
+        aider_routes = {
+            "spec_draft": "reasoning_ollama",
+            "task_decomposition": "reasoning_ollama",
+            "task_prioritization": "reasoning_ollama",
+            "code_edit": "coding_ollama",
+            "aider_edit": "coding_ollama",
+            "code_review": "reasoning_ollama",
+            "failure_analysis": "reasoning_ollama",
+            "test_feedback": "reasoning_ollama",
+        }
+        return cfg.model_copy(update={"routes": aider_routes})
+
+    monkeypatch.setattr("tools.backend_coordinator.get_backend_execution_config", mock_get_config)
+    monkeypatch.setattr("tools.config_loader.get_backend_execution_config", mock_get_config)
+    get_coordinator.cache_clear()
+    yield
+    get_coordinator.cache_clear()
 
 
 def test_validate_issue_id_format() -> None:
