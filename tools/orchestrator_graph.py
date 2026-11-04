@@ -29,7 +29,7 @@ from langgraph.graph import END, StateGraph
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.agy_runner import CoderRunError, run_agy_edit
+from tools.agy_runner import CoderRunError
 from tools.backend_coordinator import get_coordinator
 from tools.git_utils import GitDiffError, get_git_diff
 from tools.metadata_store import (
@@ -634,6 +634,8 @@ def code_node(state: GraphState) -> GraphState:
                 feedback=state.get("aider_message"),
             )
             if engine == "agy":
+                from tools.agy_runner import run_agy_edit
+
                 agy_timeout = profile.timeout or 1200
                 return run_agy_edit(
                     instruction=instruction,

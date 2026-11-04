@@ -431,7 +431,7 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
     )
 
     with patch(
-        "tools.orchestrator_graph.run_agy_edit",
+        "tools.agy_runner.run_agy_edit",
         side_effect=CoderRunError("Coder execution timed out after 300 seconds"),
     ):
         # First timeout -> retry
@@ -479,7 +479,7 @@ def test_code_node_handles_aider_nonzero_exit_as_failed_system() -> None:
     )
 
     with patch(
-        "tools.orchestrator_graph.run_agy_edit",
+        "tools.agy_runner.run_agy_edit",
         side_effect=CoderRunError("Coder process failed with returncode 1"),
     ):
         state_after_failure = code_node(initial_state)
@@ -710,9 +710,7 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
         assert res["reviewdog_result"]["stderr"] == "reviewdog error"
 
 
-@patch(
-    "tools.orchestrator_graph.run_agy_edit", side_effect=CoderRunError("Coder execution timed out")
-)
+@patch("tools.agy_runner.run_agy_edit", side_effect=CoderRunError("Coder execution timed out"))
 @patch("tools.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []})
 def test_execute_issue_aider_timeout_flow_fully_isolated(
     mock_call_llm: MagicMock, mock_run_coder: MagicMock, tmp_path: Path
@@ -845,7 +843,7 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with patch("tools.orchestrator_graph.run_agy_edit") as mock_run_coder:
+    with patch("tools.agy_runner.run_agy_edit") as mock_run_coder:
         execute_issue(
             issue_id,
             project_key,
@@ -1062,7 +1060,7 @@ def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
     assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"
 
 
-@patch("tools.orchestrator_graph.run_agy_edit", return_value=True)
+@patch("tools.agy_runner.run_agy_edit", return_value=True)
 def test_code_node_target_files_keyerror_prevention(mock_run_coder: MagicMock) -> None:
     """state に target_files キーが存在しない場合でも、KeyError を起こさず安全にセットされることを検証する。"""
     state: GraphState = {"issue_id": "TFG-0010", "cwd": "."}
