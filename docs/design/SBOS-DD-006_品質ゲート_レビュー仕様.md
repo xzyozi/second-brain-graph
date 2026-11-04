@@ -18,7 +18,7 @@
 
 ### 1.0 Epic #116（agy 移行）との関係
 
-* **LLM による判定（計画策定 `spec_draft`、テスト助言 `test_feedback`、レビュー `code_review`、敗因分析 `failure_analysis`）**: 実行基盤が Ollama から agy へ移る【移行設計・未実装、Issue #121・#123】。呼び出し側のシグネチャ・返り値・状態遷移は変えない。詳細は SBOS-DD-005 §4.1。
+* **LLM による判定（計画策定 `spec_draft`、テスト助言 `test_feedback`、レビュー `code_review`、敗因分析 `failure_analysis`）**: 実行基盤が Ollama から agy へ移行完了（PR #135・#137）。呼び出し側のシグネチャ・返り値・状態遷移は不変。詳細は SBOS-DD-005 §4.1。
 * **JEV（Defense 0 と Defense 3.1）は据え置き**: JEV は本書の Backend 設定を経由せず、Ollama（既定 `qwen2.5:0.5b`）へ直接接続する（SBOS-DD-005 §1.1）。agy への移行後も JEV を使う限り、**Ollama の実行環境が必要**である。JEV が利用できない場合は、従来どおり判定をバイパスする（フェイルオープン）。
 * **品質ゲートの順序・上限（`max_round` など）は変えない。** Ruff と pytest は LLM に依存しない。
 * **用語**: 本書中の「Aider」は、コード編集エンジン全般（現行は Aider、移行後は agy）を指す箇所がある。状態フィールド名 `aider_message` は、グラフ契約の維持のため名称を変更しない（SBOS-DD-004 §5.1）。

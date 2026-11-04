@@ -35,16 +35,18 @@
 │
 ├── tools/                          # オーケストレータ ＆ 自動化ツール群
 │   ├── lang/                       # 多言語コード品質・構文検証基盤 (Tree-sitter)
-│   ├── templates/                  # LLMエージェント用プロンプトテンプレート
-│   │   ├── planner.md
-│   │   ├── coder.md
-│   │   └── reviewer.md
+│   ├── templates/                  # Modelfile サンプルテンプレート
+│   │   └── Modelfile_qwen3.6.example
+│   ├── prompt_harness.py           # プロンプトSSOTハーネス
 │   ├── orchestrator_graph.py       # LangGraph本体 ＆ CLI (JEV計画適合性ゲート内包)
 │   ├── jev_adapter.py              # JEV (Zero-Decode判定エンジン) 連携アダプター
 │   ├── metadata_store.py           # プロジェクト台帳・タスク状態・実行履歴・排他ロック管理
 │   ├── sanitizer.py                # 機密情報マスキング共通モジュール
-│   ├── llm_client.py               # LiteLLMラッパー
-│   ├── aider_runner.py             # Aider自動制御モジュール
+│   ├── edit_guard.py               # コード編集境界ガード（母艦保護・秘密検知・ロールバック）
+│   ├── llm_client.py               # LiteLLMラッパー / agyテキスト応答
+│   ├── agy_client.py               # agy CLI プロセス制御・タイムアウト・エラー分類
+│   ├── agy_runner.py               # agy コード編集実行エンジン
+│   ├── aider_runner.py             # Aider自動制御モジュール (フォールバック・互換)
 │   ├── add_project.py              # 新規衛星プロジェクト登録・ラベル同期
 │   ├── screen_issues.py            # Issueの重複・カテゴリスクリーニング
 │   ├── close_stale_issues.py       # 放置Issueの自動クローズ
@@ -54,7 +56,7 @@
 │   ├── periodic_review_runner.py   # 定周期レビュー・Issue/tasks.md同期
 │   ├── run_task.py                 # タスク単位の実行CLI
 │   ├── nightly_task_worker.py      # 夜間タスクワーカー
-│   ├── backend_coordinator.py      # LLMバックエンドの実行調停
+│   ├── backend_coordinator.py      # LLMバックエンドの実行調停 (GPUリース・agy)
 │   ├── build_modelfile.py          # Ollama Modelfile生成
 │   ├── register_ollama_model.py    # Ollamaモデル登録
 │   └── gguf_manager.py             # GGUFモデル管理
