@@ -464,15 +464,9 @@ def spec_draft_node(state: GraphState) -> GraphState:
     state.setdefault("plan_conformance_round", 0)
 
     try:
-        system_prompt = (
-            "You are a technical planner. You must define a strict Definition of Done (DoD) and implementation plan based strictly on the provided issue requirements.\n"
-            "DO NOT invent unrequested functions, features, or alternate requirements. Strictly follow the provided issue specifications.\n"
-            "Your plan MUST explicitly state:\n"
-            "1. Allowed Files: Which specific files are permitted to be modified.\n"
-            "2. Forbidden Actions: Existing signatures, interfaces, or unrelated configuration files (like settings.json) that MUST NOT be altered.\n"
-            "3. Minimal Scope (YAGNI): Keep the plan strictly focused on the requested issue. DO NOT invent unrequested features, extra parameters, or complex unneeded validation logic.\n"
-            "4. Step-by-step implementation logic."
-        )
+        from tools.prompt_harness import resolve_prompt
+
+        system_prompt = resolve_prompt("planner", "spec_draft").system_prompt
         target_files_str = ", ".join(state.get("target_files", []))
         instruction_text = state.get("instruction", "").strip()
         user_prompt = (
@@ -1007,20 +1001,9 @@ def test_feedback_node(state: GraphState) -> GraphState:
         test_res: Dict[str, Any] = state.get("test_result") or {}
         stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
 
-        system_prompt = (
-            "You are a Senior Software Architect advising an automated coding agent (Coder).\n"
-            "The Coder failed a Pytest execution. Your task is to analyze the failure traceback and captured logs, "
-            "categorize the root cause, and generate CLEAR, STEP-BY-STEP INSTRUCTIONS for the Coder to fix the issue.\n\n"
-            "Categorize the error into one of the following and tailor your instructions accordingly:\n"
-            "1. ASSERTION_MISMATCH: If test assertions failed (e.g. len(results) == 3 vs 2), analyze whether the test expectation or core implementation logic is wrong. Explicitly tell Coder which one to adjust.\n"
-            "2. DEPENDENCY_OR_IMPORT: If ModuleNotFoundError or ImportError occurred, instruct Coder to fix import paths or remove forbidden external dependencies.\n"
-            "3. TEST_SYNTAX_OR_FIXTURE: If pytest fixtures or syntax failed, instruct Coder to use standard pytest functions.\n"
-            "4. UNHANDLED_EXCEPTION: If I/O or decode exceptions occurred, instruct Coder to add proper try-except error handling.\n"
-            "5. REPEATED_STUCK: If this is a repeated failure, instruct Coder to drop invalid assumptions and rewrite with clean logic.\n\n"
-            "Rules:\n"
-            "- Do NOT write full file rewrites. Provide concise, direct action items.\n"
-            "- Provide clear actionable guidance in Japanese."
-        )
+        from tools.prompt_harness import resolve_prompt
+
+        system_prompt = resolve_prompt("planner", "test_feedback").system_prompt
 
         user_prompt = (
             f"Issue ID: {state['issue_id']}\n"
@@ -1115,17 +1098,12 @@ def review_node(state: GraphState) -> GraphState:
     )
 
     try:
+        from tools.prompt_harness import resolve_prompt
+
         res = call_llm(
             role="reviewer",
             intent="code_review",
-            system_prompt=(
-                "You are a reviewer. You must respond with JSON containing a 'verdict' "
-                "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity). "
-                "severity MUST be one of: 'INFO', 'WARNING', 'ERROR', 'MAJOR', 'STRUCTURAL'. "
-                "Focus on critical correctness, security, and functional completeness. "
-                "Benign stylistic differences (e.g. for vs while loop) that fully satisfy requirements MUST NOT trigger changes_requested. "
-                "If the implementation correctly satisfies the requirements and tests are passing, give 'LGTM'."
-            ),
+            system_prompt=resolve_prompt("reviewer", "code_review").system_prompt,
             user_prompt=user_prompt,
             expect_json=True,
         )
@@ -1661,12 +1639,9 @@ def escalate_node(state: GraphState) -> GraphState:
             lint_res = (state.get("lint_result") or {}).get("stdout", "")
             latest_error = test_res if state.get("error_category") == "TEST_ERROR" else lint_res
 
-            system_prompt = (
-                "You are an Expert Technical Architect reviewing a failed auto-coding session. "
-                "The AI agent failed to pass the tests/linting after maximum retries. "
-                "Analyze the final error log and identify the ROOT CAUSE of the failure (e.g., missing domain knowledge, incorrect library usage, hallucinated magic strings, logic bugs). "
-                "Output a concise Markdown report specifying WHY it failed and WHAT needs to be changed in the issue requirements or core logic."
-            )
+            from tools.prompt_harness import resolve_prompt
+
+            system_prompt = resolve_prompt("reviewer", "failure_analysis").system_prompt
             user_prompt = f"Target Files: {state.get('target_files')}\n\nFinal Error Log:\n{latest_error[:2000]}"
 
             res = call_llm(
