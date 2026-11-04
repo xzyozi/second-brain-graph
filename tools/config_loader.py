@@ -32,15 +32,28 @@ class RoleConfig(BaseModel):
 
 class ProfileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    backend: Literal["ollama", "llama_server"]
+    backend: Literal["ollama", "llama_server", "agy"]
     model: str = Field(min_length=1)
-    openai_endpoint: str = Field(min_length=1, pattern=r"^https?://")
+    openai_endpoint: Annotated[Optional[str], Field(min_length=1, pattern=r"^https?://")] = None
     ollama_management_endpoint: Annotated[Optional[str], Field(pattern=r"^https?://")] = None
     port: Annotated[Optional[int], Field(ge=1, le=65535)] = None
     model_path: Annotated[Optional[str], Field(min_length=1)] = None
+    timeout: Annotated[Optional[int], Field(ge=1)] = None
 
     @model_validator(mode="after")
     def check_backend_fields(self) -> "ProfileConfig":
+        if self.backend == "agy":
+            for field_name in (
+                "openai_endpoint",
+                "port",
+                "model_path",
+                "ollama_management_endpoint",
+            ):
+                if getattr(self, field_name) is not None:
+                    raise ValueError(f"{field_name} must not be specified when backend is agy")
+            return self
+        if self.openai_endpoint is None:
+            raise ValueError(f"openai_endpoint must be specified when backend is {self.backend}")
         if self.backend == "llama_server":
             if self.port is None:
                 raise ValueError("port must be specified when backend is llama_server")

@@ -67,3 +67,9 @@ backend_execution:
       model: "ornith-1.5-9b:latest"
       openai_endpoint: "http://localhost:11434/v1"
       ollama_management_endpoint: "http://localhost:11434"
+
+    # agy 用プロファイル (GPU リース対象外。routes からはまだ参照しない)
+    agy_default:
+      backend: "agy"
+      model: "agy-default"  # 識別ラベル。agy のモデル指定オプションが判明したら見直す
+      timeout: 1200

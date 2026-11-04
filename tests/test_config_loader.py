@@ -194,3 +194,70 @@ def test_get_config_returns_unified_app_config() -> None:
     assert app_config.models is not None
     assert app_config.prompt is not None
     assert app_config.models.aider.timeout == 1200
+
+
+# ---------------------------------------------------------------------------
+# agy バックエンド (#120)
+# ---------------------------------------------------------------------------
+
+
+def test_profile_agy_is_valid_without_endpoint() -> None:
+    """agy profile は openai_endpoint 等なしで有効となることを確認する。"""
+    profile = ProfileConfig(backend="agy", model="agy-default", timeout=1200)
+    assert profile.backend == "agy"
+    assert profile.openai_endpoint is None
+    assert profile.timeout == 1200
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("openai_endpoint", "http://localhost:8080/v1"),
+        ("port", 8080),
+        ("model_path", "./models/test.gguf"),
+        ("ollama_management_endpoint", "http://localhost:11434"),
+    ],
+)
+def test_profile_agy_rejects_local_backend_fields(field: str, value: object) -> None:
+    """agy で ollama/llama_server 用フィールドを指定するとエラーとなることを確認する。"""
+    kwargs = {field: value}
+    with pytest.raises(ValidationError, match=field):
+        ProfileConfig(backend="agy", model="agy-default", **kwargs)  # type: ignore[arg-type]
+
+
+def test_profile_timeout_rejects_zero() -> None:
+    """timeout が 0 の場合に検証エラーとなることを確認する。"""
+    with pytest.raises(ValidationError):
+        ProfileConfig(backend="agy", model="agy-default", timeout=0)
+
+
+def test_profile_ollama_requires_openai_endpoint() -> None:
+    """ollama で openai_endpoint を省略すると検証エラーとなることを確認する。"""
+    with pytest.raises(ValidationError, match="openai_endpoint must be specified"):
+        ProfileConfig(
+            backend="ollama",
+            model="test-model",
+            ollama_management_endpoint="http://localhost:11434",
+        )
+
+
+def test_profile_llama_server_requires_openai_endpoint() -> None:
+    """llama_server で openai_endpoint を省略すると検証エラーとなることを確認する。"""
+    with pytest.raises(ValidationError, match="openai_endpoint must be specified"):
+        ProfileConfig(
+            backend="llama_server",
+            model="test-model",
+            port=8080,
+            model_path="./models/test.gguf",
+        )
+
+
+def test_backend_config_allows_route_to_agy_profile() -> None:
+    """routes が agy profile を指していても BackendExecutionConfig として有効であることを確認する。"""
+    config = BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        routes={"code_edit": "agy_default"},
+        profiles={"agy_default": ProfileConfig(backend="agy", model="agy-default")},
+    )
+    assert config.routes["code_edit"] == "agy_default"

@@ -173,6 +173,8 @@ class OllamaBackendAdapter:
         logger.info(f"Executing workload on Ollama backend with profile: {self.profile}")
 
         endpoint = self.profile.openai_endpoint
+        if endpoint is None:
+            raise ValueError("OllamaBackendAdapter requires 'openai_endpoint' in profile")
         ollama_base = self.profile.ollama_management_endpoint or endpoint.removesuffix(
             "/v1"
         ).removesuffix("/v1/")
@@ -225,6 +227,8 @@ class LlamaServerBackendAdapter:
         # Pydantic validates port and model_path for llama_server
         assert model_path is not None
         assert port is not None
+        if openai_endpoint is None:
+            raise ValueError("LlamaServerBackendAdapter requires 'openai_endpoint' in profile")
 
         logger.info(f"Executing workload on llama-server backend with profile: {self.profile}")
 
@@ -261,6 +265,26 @@ class LlamaServerBackendAdapter:
                 return action(self.profile)
 
 
+class AgyBackendAdapter:
+    """
+    agy バックエンドのタスク実行アダプタ。
+
+    GPU リースは取得せず、環境変数のパッチも行わない。
+    agy の起動処理は後続の agy_client の責務であり、ここでは action を呼ぶだけとする。
+    """
+
+    def __init__(self, profile: ProfileConfig) -> None:
+        self.profile = profile
+
+    def execute(self, request: Dict[str, Any]) -> Any:
+        action: Optional[Callable[..., Any]] = request.get("action")
+        if action is None:
+            raise ValueError("AgyBackendAdapter requires an 'action' callable in request")
+
+        logger.info(f"Executing workload on agy backend with profile: {self.profile}")
+        return action(self.profile)
+
+
 class BackendExecutionCoordinator:
     def __init__(self) -> None:
         self.config = get_backend_execution_config()
@@ -289,13 +313,19 @@ class BackendExecutionCoordinator:
         logger.info(
             f"Resolved intent '{intent}' to profile '{profile_name}' (backend: {backend_type})"
         )
-        adapter: Union[LlamaServerBackendAdapter, OllamaBackendAdapter]
+        adapter: Union[LlamaServerBackendAdapter, OllamaBackendAdapter, AgyBackendAdapter]
         if backend_type == "llama_server":
             adapter = LlamaServerBackendAdapter(profile, self.config)
         elif backend_type == "ollama":
             adapter = OllamaBackendAdapter(profile)
+        elif backend_type == "agy":
+            adapter = AgyBackendAdapter(profile)
         else:
             raise ValueError(f"Unknown backend type: {backend_type}")
+
+        if backend_type == "agy":
+            # agy はローカル GPU を使用しないため GPU リースの外で実行する
+            return adapter.execute(request)
 
         with self.gpu_lease:
             return adapter.execute(request)
