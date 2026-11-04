@@ -43,10 +43,10 @@ flowchart LR
     LLM --> COORD[Backend Coordinator]
     COORD --> OLLAMA[Ollama Adapter]
     COORD --> LLAMA[llama-server Adapter]
-    COORD -.移行設計.-> AGYB[agy Adapter]
+    COORD -. "移行設計" .-> AGYB[agy Adapter]
     GRAPH --> EDIT[Code Edit Engine]
     EDIT --> AIDER[Aider Adapter]
-    EDIT -.移行設計.-> AGYE[agy Runner]
+    EDIT -. "移行設計" .-> AGYE[agy Runner]
     AGYB -.-> AGYC[agy Client]
     AGYE -.-> AGYC
     GRAPH --> JEV[JEV Adapter / 据え置き]
