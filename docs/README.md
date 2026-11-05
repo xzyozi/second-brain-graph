@@ -22,8 +22,8 @@
   * [`yaml_configuration_system.md`](features/yaml_configuration_system.md): YAMLベース共通設定基盤仕様書 (`models.yaml`, `prompt.yaml`)
 * **`docs/how-to/`**: 開発・運用の操作手順ガイド
   * [`ollama_gguf_registration.md`](how-to/ollama_gguf_registration.md): 独立GGUFファイルのOllamaローカルモデル登録手順
-* **`docs/analysis/`**: 実装調査・フロー解析の記録
-  * [`flow-gguf-20260907.md`](analysis/flow-gguf-20260907.md): GGUFバックエンド処理フローの解析記録
+* **`docs/test/`**: 試験計画・確認項目・実機試験の証跡
+  * [`SBOS-TEST-001_agy移行確認試験書.md`](test/SBOS-TEST-001_agy移行確認試験書.md): agy移行のL0〜L5確認項目と再開チェックポイント
 * **`docs/adr/`**: アーキテクチャ決定記録 (Architectural Decision Records)
   * [`0001-adopt-agy-backend-and-route-architecture.md`](adr/0001-adopt-agy-backend-and-route-architecture.md): agy バックエンド追加と routes 抽象による移行方針
   * [`0002-agy-availability-quota-and-nightly-worker-guard.md`](adr/0002-agy-availability-quota-and-nightly-worker-guard.md): agy 障害分類・指数バックオフと夜間ワーカー安全中断方針
