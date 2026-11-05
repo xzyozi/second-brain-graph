@@ -100,11 +100,16 @@ def classify_agy_exit(message: str, returncode: int) -> AgyExitError:
 def resolve_agy_executable() -> str:
     """agy 実行ファイルのパスを解決する.
 
-    1. shutil.which("agy.exe") / shutil.which("agy") の順で PATH から探す。
-    2. 見つからなければ既知の配置先を順に確認する。
-    3. すべて見つからなければ AgyNotFoundError を送出する
+    1. SBOS_AGY_EXECUTABLE が設定されていれば、その実行ファイルを使う。
+    2. shutil.which("agy.exe") / shutil.which("agy") の順で PATH から探す。
+    3. 見つからなければ既知の配置先を順に確認する。
+    4. すべて見つからなければ AgyNotFoundError を送出する
        (フォールバックで "agy" 文字列を返さない。呼び出し元が未導入を確実に検知できるようにするため)。
     """
+    configured = os.environ.get("SBOS_AGY_EXECUTABLE", "").strip()
+    if configured:
+        return configured
+
     for candidate in ("agy.exe", "agy"):
         found = shutil.which(candidate)
         if found:
