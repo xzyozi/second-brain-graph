@@ -555,4 +555,4 @@ def test_run_batch_cycle_aborts_on_consecutive_auth_quota_failures(
     assert success == 0
     # 2回失敗した時点で中断されたため、T1 と T2 のみ実行され T3 は実行されない
     assert executed_tasks == ["T1", "T2"]
-    assert "agy の認証またはクォータ障害 (AGY_QUOTA) が 2 回連続したため" in caplog.text
+    assert "agy の認証・クォータ・ポリシー拒否 (AGY_QUOTA) が 2 回連続したため" in caplog.text
