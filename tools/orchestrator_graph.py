@@ -459,13 +459,18 @@ class GraphState(TypedDict, total=False):
 def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
     """例外から ErrorCategory（LLM_TIMEOUT, AGY_AUTH, AGY_QUOTA, SYSTEM_ERROR等）を分類する."""
     from tools.agy_client import AgyAuthError, AgyQuotaError
+    from tools.agy_policy import AgyPolicyDeniedError
 
+    if isinstance(e, AgyPolicyDeniedError):
+        return "AGY_POLICY_DENIED"
     if isinstance(e, AgyAuthError):
         return "AGY_AUTH"
     if isinstance(e, AgyQuotaError):
         return "AGY_QUOTA"
 
     lower_msg = str(e).lower()
+    if "agy_policy_denied" in lower_msg:
+        return "AGY_POLICY_DENIED"
     if any(kw in lower_msg for kw in ("timeout", "timed out", "timedout")):
         return "LLM_TIMEOUT"
 
@@ -529,6 +534,7 @@ def spec_draft_node(state: GraphState) -> GraphState:
             intent="spec_draft",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            project_key=state.get("project_key"),
         )
         if isinstance(res, dict):
             plan_str = res.get("raw") or res.get("content") or str(res)
@@ -643,6 +649,7 @@ def code_node(state: GraphState) -> GraphState:
                     cwd=cwd,
                     timeout=agy_timeout,
                     allowed_new_file_globs=allowed_globs,
+                    project_key=state.get("project_key"),
                 )
             raise CoderRunError(
                 f"Unsupported coder engine '{engine}' for backend '{profile.backend}'"
@@ -1072,6 +1079,7 @@ def test_feedback_node(state: GraphState) -> GraphState:
             intent="test_feedback",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            project_key=state.get("project_key"),
         )
 
         feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
@@ -1160,6 +1168,7 @@ def review_node(state: GraphState) -> GraphState:
             system_prompt=resolve_prompt("reviewer", "code_review").system_prompt,
             user_prompt=user_prompt,
             expect_json=True,
+            project_key=state.get("project_key"),
         )
 
         if (
@@ -1703,6 +1712,7 @@ def escalate_node(state: GraphState) -> GraphState:
                 intent="failure_analysis",
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                project_key=state.get("project_key"),
             )
 
             analysis_text = (

@@ -28,6 +28,13 @@ backend_execution:
   fallback: "disabled"
   gpu_lease_timeout: 120
 
+  # agy外部送信ポリシー。allowlistへ切り替えるまで既存運用を止めない互換モード。
+  # allowlist時は、検証済みのproject keyだけをagyへ送信できる。
+  agy_external_send:
+    mode: "allow_all"
+    allowed_project_keys: []
+    reject_secret_files: false
+
   # タスクインテントから実行プロファイルへのマッピング
   routes:
     spec_draft: "agy_default"

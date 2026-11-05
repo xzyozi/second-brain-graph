@@ -4,7 +4,7 @@
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号           | SBOS-DD-005                                                                                                                                                    |
 | 文書名             | Second Brain OS - Backend LLM 制御・GPU リース仕様                                                                                                             |
-| 版数               | Rev.2.0（agy backend の移行設計を追加。実装との食い違い3点を訂正）                                                                                             |
+| 版数               | Rev.2.1（agy外部送信ポリシーとproject key allowlistを追記）                                                                                                    |
 | 改訂日             | 2026年11月4日                                                                                                                                                  |
 | 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-004（コード編集エンジン統合）、Issue #39、Epic #116                                              |
 | 対象コンポーネント | `tools/backend_coordinator.py`、`tools/llama_backend.py`、`tools/gguf_manager.py`、`tools/config_loader.py`、`tools/llm_client.py`                             |
@@ -153,12 +153,12 @@ backend_execution:
 
 ## 7. 移行状況と未確定事項
 
-| 項目                                                                    | 状況                                               | 確定先 / 実績 |
-| :---------------------------------------------------------------------- | :------------------------------------------------- | :------------ |
-| `ProfileConfig` の `agy` 対応、`AgyBackendAdapter`、GPU リース対象外    | **実装完了** (`tools/backend_coordinator.py`)      | PR #135 (#120) |
-| `call_llm` の agy 経路                                                  | **実装完了** (`tools/llm_client.py`)               | PR #135 (#121) |
-| `routes` の agy への切り替え                                            | **実装完了** (`config/models.yaml`)                | PR #137 (#123) |
-| agy の認証・クォータ障害分類と夜間バッチ安全中断ガード                  | **実装完了** (`tools/agy_client.py` 等)            | PR #139 (#126) |
-| agy のモデル指定オプション、`temperature` / `max_tokens` 相当の指定手段 | agy 側の設定に委譲（CLI側パラメータ指定なし）     | ADR 0001 (#117) |
-| 外部送信の方針（agy 経路は `sanitize_text` の対象外の情報も送りうる）   | 課題化（サテライト許可リストと機密検知）           | #124           |
-| 旧 profile・llama-server 基盤・`openai` 依存の退役と後始末               | 未実施（JEV のため Ollama 環境は残る）             | #128           |
+| 項目                                                                    | 状況                                                                                                                                            | 確定先 / 実績   |
+| :---------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------- | :-------------- |
+| `ProfileConfig` の `agy` 対応、`AgyBackendAdapter`、GPU リース対象外    | **実装完了** (`tools/backend_coordinator.py`)                                                                                                   | PR #135 (#120)  |
+| `call_llm` の agy 経路                                                  | **実装完了** (`tools/llm_client.py`)                                                                                                            | PR #135 (#121)  |
+| `routes` の agy への切り替え                                            | **実装完了** (`config/models.yaml`)                                                                                                             | PR #137 (#123)  |
+| agy の認証・クォータ障害分類と夜間バッチ安全中断ガード                  | **実装完了** (`tools/agy_client.py` 等)                                                                                                         | PR #139 (#126)  |
+| agy のモデル指定オプション、`temperature` / `max_tokens` 相当の指定手段 | agy 側の設定に委譲（CLI側パラメータ指定なし）                                                                                                   | ADR 0001 (#117) |
+| 外部送信の方針（agy 経路は `sanitize_text` の対象外の情報も送りうる）   | `backend_execution.agy_external_send` で認可。既定は移行互換の `allow_all`、実業務運用前に `allowlist` へ切り替える。秘密ファイル拒否も設定可能 | #124            |
+| 旧 profile・llama-server 基盤・`openai` 依存の退役と後始末              | 未実施（JEV のため Ollama 環境は残る）                                                                                                          | #128            |

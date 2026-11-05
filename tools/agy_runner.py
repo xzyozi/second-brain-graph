@@ -13,6 +13,7 @@ from tools.agy_client import (
     AgyTimeoutError,
     run_agy_in_workdir,
 )
+from tools.agy_policy import AgyPolicyDeniedError
 from tools.edit_guard import (
     MotherRepositoryProtectionError,
     cleanup_unauthorized_aider_artifacts,
@@ -42,6 +43,7 @@ def run_agy_edit(
     *,
     timeout: int = 1200,
     allowed_new_file_globs: Optional[List[str]] = None,
+    project_key: Optional[str] = None,
 ) -> bool:
     """agy にコード編集を行わせる.
 
@@ -63,7 +65,17 @@ def run_agy_edit(
     warn_if_working_tree_dirty(cwd, target_files)
 
     try:
-        run_agy_in_workdir(instruction, cwd=cwd, timeout=timeout)
+        policy_denied = False
+        try:
+            run_agy_in_workdir(
+                instruction,
+                cwd=cwd,
+                timeout=timeout,
+                project_key=project_key,
+            )
+        except AgyPolicyDeniedError as e:
+            policy_denied = True
+            raise AgyRunError(str(e)) from e
         return True
     except AgyTimeoutError as e:
         raise AgyRunError(str(e)) from e
@@ -74,7 +86,9 @@ def run_agy_edit(
     except AgyError as e:
         raise AgyRunError(str(e)) from e
     finally:
-        if allowed_new_file_globs is not None:
+        if policy_denied:
+            handled = []
+        elif allowed_new_file_globs is not None:
             handled = cleanup_unauthorized_aider_artifacts(
                 cwd, target_files, allowed_new_file_globs=allowed_new_file_globs
             )

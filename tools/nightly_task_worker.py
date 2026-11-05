@@ -542,15 +542,15 @@ def run_batch_cycle(
             consecutive_auth_quota_failures = 0
         else:
             cat = get_task_error_category(root_dir, task)
-            if cat in ("AGY_AUTH", "AGY_QUOTA"):
+            if cat in ("AGY_AUTH", "AGY_QUOTA", "AGY_POLICY_DENIED"):
                 consecutive_auth_quota_failures += 1
                 logger.warning(
                     f"agy 障害検知 ({cat}): 連続失敗回数 {consecutive_auth_quota_failures}/{max_consecutive_auth_quota}"
                 )
                 if consecutive_auth_quota_failures >= max_consecutive_auth_quota:
                     logger.critical(
-                        f"agy の認証またはクォータ障害 ({cat}) が {consecutive_auth_quota_failures} 回連続したため、"
-                        "以降のタスク実行を安全に中断します。"
+                        f"agy の認証・クォータ・ポリシー拒否 ({cat}) が "
+                        f"{consecutive_auth_quota_failures} 回連続したため、以降のタスク実行を安全に中断します。"
                     )
                     break
             else:
