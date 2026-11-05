@@ -3,10 +3,14 @@ name: Validate Mermaid diagrams
 on:
   push:
     branches: [main, develop]
-    paths: ["docs/**/*.md"]
+    paths:
+      - "docs/**/*.md"
+      - "README.md"
   pull_request:
     branches: [main, develop]
-    paths: ["docs/**/*.md"]
+    paths:
+      - "docs/**/*.md"
+      - "README.md"
   workflow_dispatch:
 
 permissions:
