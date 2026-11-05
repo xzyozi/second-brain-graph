@@ -1,13 +1,13 @@
 # SBOS-TEST-001 agy 移行確認試験書
 
-| 項目 | 内容 |
-| :--- | :--- |
-| 文書番号 | SBOS-TEST-001 |
-| 文書名 | agy 移行確認試験書（実機なし準備版） |
-| 基準コミット | `50c8ef1`（`origin/develop`、B5 ローカルLLM資産退役後） |
-| 対象 | agy CLI、`agy_client`、テキスト応答、コード編集、routes、edit_guard、夜間 worker |
-| 関連 | Epic #116、#117、#119、#121、#122、#123、#124、#125、#126、#127、#128、#131 |
-| 状態 | **PREPARED**（実機試験待ち） |
+| 項目         | 内容                                                                             |
+| :----------- | :------------------------------------------------------------------------------- |
+| 文書番号     | SBOS-TEST-001                                                                    |
+| 文書名       | agy 移行確認試験書（実機なし準備版）                                             |
+| 基準コミット | `6a7d6d8`（`origin/develop`、B5および確認試験書PR #145 マージ後）                |
+| 対象         | agy CLI、`agy_client`、テキスト応答、コード編集、routes、edit_guard、夜間 worker |
+| 関連         | Epic #116、#117、#119、#121、#122、#123、#124、#125、#126、#127、#128、#131      |
+| 状態         | **PREPARED / L0確認済み**（L1実行・実機試験待ち）                                |
 
 > 本書は、agy がインストールされていない環境でも作業を途中で止めず、モック試験・静的確認を先に進め、agy 導入後に同じ項目へ実測結果を追記するための正本である。
 
@@ -54,14 +54,14 @@ JEV
 
 ## 2. 試験レベルと実施条件
 
-| レベル | 名称 | agy実機 | 目的 | 実施可否 |
-| :--- | :--- | :---: | :--- | :--- |
-| L0 | 静的・構文確認 | 不要 | import、設定、routes、削除漏れ、改行を確認 | 直ちに実施 |
-| L1 | モック単体試験 | 不要 | `agy_client`、`agy_runner`、`call_llm`、`code_node` の契約を確認 | 直ちに実施 |
-| L2 | モックプロセス試験 | 不要 | `Popen` 境界、stdout/stderr、終了コード、timeout、ファイル編集を確認 | fake CLI 準備後 |
-| L3 | agy契約試験 | 必須 | 実CLIの起動、認証、入力長、出力、成果物を確認 | agy導入後 |
-| L4 | サンドボックスE2E | 必須 | `spec_draft → code → lint → test → review → done` を確認 | L3合格後 |
-| L5 | 運用試験 | 必須 | 夜間 worker、auth/quota、連続失敗停止、ロールバックを確認 | L4合格後 |
+| レベル | 名称               | agy実機 | 目的                                                                 | 実施可否        |
+| :----- | :----------------- | :-----: | :------------------------------------------------------------------- | :-------------- |
+| L0     | 静的・構文確認     |  不要   | import、設定、routes、削除漏れ、改行を確認                           | 直ちに実施      |
+| L1     | モック単体試験     |  不要   | `agy_client`、`agy_runner`、`call_llm`、`code_node` の契約を確認     | 直ちに実施      |
+| L2     | モックプロセス試験 |  不要   | `Popen` 境界、stdout/stderr、終了コード、timeout、ファイル編集を確認 | fake CLI 準備後 |
+| L3     | agy契約試験        |  必須   | 実CLIの起動、認証、入力長、出力、成果物を確認                        | agy導入後       |
+| L4     | サンドボックスE2E  |  必須   | `spec_draft → code → lint → test → review → done` を確認             | L3合格後        |
+| L5     | 運用試験           |  必須   | 夜間 worker、auth/quota、連続失敗停止、ロールバックを確認            | L4合格後        |
 
 ### 実機なしで完了できる範囲
 
@@ -89,15 +89,15 @@ JEV
 
 ### 3.1 L0 静的・構文試験
 
-| ID | 確認項目 | 合格条件 | 実施状態 | 証跡 |
-| :--- | :--- | :--- | :--- | :--- |
-| L0-001 | `tools/agy_client.py` / `agy_runner.py` の存在 | 両ファイルが存在しimport可能 | TODO | |
-| L0-002 | `config/models.yaml` の routes | 対象intentが `agy_default` を指す | TODO | |
-| L0-003 | `agy_default` profile | `backend: agy`、接続不要、timeoutあり | TODO | |
-| L0-004 | Aider runtime の退役 | `tools/aider_runner.py` がruntimeに無く、legacyに保存 | TODO | |
-| L0-005 | JEV の据え置き | `jev_adapter.py` とJEV submoduleが残り、Ollama接続を維持 | TODO | |
-| L0-006 | Python構文 | `python -m py_compile` が成功 | TODO | |
-| L0-007 | CI静的検査 | ruff / mypy が成功 | TODO | |
+| ID     | 確認項目                                       | 合格条件                                                 | 実施状態                 | 証跡                                   |
+| :----- | :--------------------------------------------- | :------------------------------------------------------- | :----------------------- | :------------------------------------- |
+| L0-001 | `tools/agy_client.py` / `agy_runner.py` の存在 | 両ファイルが存在しimport可能                             | 確認済み                 | `6a7d6d8`                              |
+| L0-002 | `config/models.yaml` の routes                 | 対象intentが `agy_default` を指す                        | 確認済み                 | `config/models.yaml`                   |
+| L0-003 | `agy_default` profile                          | `backend: agy`、接続不要、timeoutあり                    | 確認済み                 | `config/models.yaml`                   |
+| L0-004 | Aider runtime の退役                           | `tools/aider_runner.py` がruntimeに無く、legacyに保存    | 確認済み                 | `legacy/local_llm/` / #128             |
+| L0-005 | JEV の据え置き                                 | `jev_adapter.py` とJEV submoduleが残り、Ollama接続を維持 | 確認済み                 | `tools/jev_adapter.py` / `.gitmodules` |
+| L0-006 | Python構文                                     | `python -m py_compile` が成功                            | 確認済み                 | ローカル実行                           |
+| L0-007 | CI静的検査                                     | ruff / mypy が成功                                       | ruff確認済み・mypy未確認 | CI/依存環境待ち                        |
 
 実行例:
 
@@ -112,20 +112,20 @@ uv run mypy tools
 
 既存の次のテストを対象とする。実 agy は起動しない。
 
-| ID | テスト対象 | 合格条件 | 対応テスト |
-| :--- | :--- | :--- | :--- |
-| L1-001 | 実行ファイル解決 | PATH / 既知パス / 未導入例外が正しい | `tests/test_agy_client.py` |
-| L1-002 | コマンド構築 | `agy --dangerously-skip-permissions -p <prompt>` になる | `tests/test_agy_client.py` |
-| L1-003 | timeout | `AgyTimeoutError` に `timed out` が含まれる | `tests/test_agy_client.py` |
-| L1-004 | 非0終了 | `AgyExitError.returncode` が保持される | `tests/test_agy_client.py` |
-| L1-005 | テキスト応答 | `call_llm` が `{"raw": ...}` を返す | `tests/test_llm_client.py` |
-| L1-006 | JSON応答 | `verdict` / `comments` を解析できる | `tests/test_llm_client.py` |
-| L1-007 | 秘密情報マスク | agyに渡すpromptにsecret値が残らない | `tests/test_llm_client.py` |
-| L1-008 | coder成功 | `code_completed` へ遷移する | `tests/test_orchestrator_agy_integration.py` |
-| L1-009 | coder timeout | 1回目retry、2回目`FAILED_SYSTEM` | `tests/test_orchestrator_agy_integration.py` |
-| L1-010 | coder非0終了 | `SYSTEM_ERROR` / `FAILED_SYSTEM` | `tests/test_orchestrator_agy_integration.py` |
-| L1-011 | target外後始末 | 成功・失敗の両方でcleanupが呼ばれる | `tests/test_agy_runner.py` |
-| L1-012 | edit_guard | 母艦拒否・秘密情報・glob許可・復元 | `tests/test_edit_guard.py` |
+| ID     | テスト対象       | 合格条件                                                | 対応テスト                                   |
+| :----- | :--------------- | :------------------------------------------------------ | :------------------------------------------- |
+| L1-001 | 実行ファイル解決 | PATH / 既知パス / 未導入例外が正しい                    | `tests/test_agy_client.py`                   |
+| L1-002 | コマンド構築     | `agy --dangerously-skip-permissions -p <prompt>` になる | `tests/test_agy_client.py`                   |
+| L1-003 | timeout          | `AgyTimeoutError` に `timed out` が含まれる             | `tests/test_agy_client.py`                   |
+| L1-004 | 非0終了          | `AgyExitError.returncode` が保持される                  | `tests/test_agy_client.py`                   |
+| L1-005 | テキスト応答     | `call_llm` が `{"raw": ...}` を返す                     | `tests/test_llm_client.py`                   |
+| L1-006 | JSON応答         | `verdict` / `comments` を解析できる                     | `tests/test_llm_client.py`                   |
+| L1-007 | 秘密情報マスク   | agyに渡すpromptにsecret値が残らない                     | `tests/test_llm_client.py`                   |
+| L1-008 | coder成功        | `code_completed` へ遷移する                             | `tests/test_orchestrator_agy_integration.py` |
+| L1-009 | coder timeout    | 1回目retry、2回目`FAILED_SYSTEM`                        | `tests/test_orchestrator_agy_integration.py` |
+| L1-010 | coder非0終了     | `SYSTEM_ERROR` / `FAILED_SYSTEM`                        | `tests/test_orchestrator_agy_integration.py` |
+| L1-011 | target外後始末   | 成功・失敗の両方でcleanupが呼ばれる                     | `tests/test_agy_runner.py`                   |
+| L1-012 | edit_guard       | 母艦拒否・秘密情報・glob許可・復元                      | `tests/test_edit_guard.py`                   |
 
 実行例:
 
@@ -142,14 +142,14 @@ uv run pytest -m "not integration" `
 
 `subprocess.Popen` のモックだけでは、実際のプロセス境界やファイル編集を確認できない。必要に応じて、テスト専用の fake agy CLI を用意する。
 
-| ID | fake CLI の動作 | 合格条件 | 状態 |
-| :--- | :--- | :--- | :--- |
-| L2-001 | stdoutに短いテキストを返す | `run_agy_text` が受け取る | PREPARED |
-| L2-002 | JSONを返す | `call_llm(expect_json=True)` が解析する | PREPARED |
-| L2-003 | stderrと非0終了 | `AgyExitError` が分類される | PREPARED |
-| L2-004 | 指定秒数sleep | timeoutとプロセス終了を確認する | PREPARED |
-| L2-005 | cwd内のtarget fileを書き換える | `run_agy_edit` と後始末を確認する | PREPARED |
-| L2-006 | target外ファイルも作る | edit_guardが削除・復元する | PREPARED |
+| ID     | fake CLI の動作                | 合格条件                                | 状態     |
+| :----- | :----------------------------- | :-------------------------------------- | :------- |
+| L2-001 | stdoutに短いテキストを返す     | `run_agy_text` が受け取る               | PREPARED |
+| L2-002 | JSONを返す                     | `call_llm(expect_json=True)` が解析する | PREPARED |
+| L2-003 | stderrと非0終了                | `AgyExitError` が分類される             | PREPARED |
+| L2-004 | 指定秒数sleep                  | timeoutとプロセス終了を確認する         | PREPARED |
+| L2-005 | cwd内のtarget fileを書き換える | `run_agy_edit` と後始末を確認する       | PREPARED |
+| L2-006 | target外ファイルも作る         | edit_guardが削除・復元する              | PREPARED |
 
 fake CLI は本番の `agy` と同一視しない。`tests/fixtures/` または一時ディレクトリ内だけで使い、通常のCIで実行するかは実装時に決める。
 
@@ -163,19 +163,19 @@ fake CLI は本番の `agy` と同一視しない。`tests/fixtures/` または�
 - サテライト外の秘密情報ファイルを置かない
 - 外部送信を許可した試験用データだけを使う
 
-| ID | 試験 | 操作 | 合格条件 | 結果 |
-| :--- | :--- | :--- | :--- | :--- |
-| L3-001 | CLI存在 | `agy --version` | versionが返る | TODO |
-| L3-002 | 最小応答 | `PONG`のみを要求 | 空でないstdout、exit 0 | TODO |
-| L3-003 | 長文入力 | 1KB / 10KB / diff相当を送る | timeout・WinError 206なし | TODO |
-| L3-004 | JSON契約 | reviewer promptを送る | JSON object、verdict有り | TODO |
-| L3-005 | テキスト契約 | planner promptを送る | raw応答が空でない | TODO |
-| L3-006 | 編集契約 | 1ファイルを変更 | target fileだけが変更 | TODO |
-| L3-007 | 新規ファイル | 許可glob内のファイルを作る | 許可ファイルが保持される | TODO |
-| L3-008 | 不正ファイル | target外ファイルを作る | edit_guardが削除・復元 | TODO |
-| L3-009 | timeout | 長時間処理を発生 | 子孫プロセスが残らない | TODO |
-| L3-010 | auth/quota | 認証またはクォータエラーを確認 | `AGY_AUTH` / `AGY_QUOTA` に分類 | TODO |
-| L3-011 | 成果物 | 実行前後の`git status`を比較 | 未知のcache/一時ファイルを記録 | TODO |
+| ID     | 試験         | 操作                           | 合格条件                        | 結果 |
+| :----- | :----------- | :----------------------------- | :------------------------------ | :--- |
+| L3-001 | CLI存在      | `agy --version`                | versionが返る                   | TODO |
+| L3-002 | 最小応答     | `PONG`のみを要求               | 空でないstdout、exit 0          | TODO |
+| L3-003 | 長文入力     | 1KB / 10KB / diff相当を送る    | timeout・WinError 206なし       | TODO |
+| L3-004 | JSON契約     | reviewer promptを送る          | JSON object、verdict有り        | TODO |
+| L3-005 | テキスト契約 | planner promptを送る           | raw応答が空でない               | TODO |
+| L3-006 | 編集契約     | 1ファイルを変更                | target fileだけが変更           | TODO |
+| L3-007 | 新規ファイル | 許可glob内のファイルを作る     | 許可ファイルが保持される        | TODO |
+| L3-008 | 不正ファイル | target外ファイルを作る         | edit_guardが削除・復元          | TODO |
+| L3-009 | timeout      | 長時間処理を発生               | 子孫プロセスが残らない          | TODO |
+| L3-010 | auth/quota   | 認証またはクォータエラーを確認 | `AGY_AUTH` / `AGY_QUOTA` に分類 | TODO |
+| L3-011 | 成果物       | 実行前後の`git status`を比較   | 未知のcache/一時ファイルを記録  | TODO |
 
 実行例:
 
@@ -186,25 +186,25 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 
 ### 3.5 L4 サンドボックスE2E
 
-| ID | 試験 | 合格条件 | 結果 |
-| :--- | :--- | :--- | :--- |
-| L4-001 | 小規模Issue完走 | `spec_draft → code → lint → test → review → done` | TODO |
-| L4-002 | planner timeout | retry後に正常復帰または安全停止 | TODO |
-| L4-003 | reviewer JSON不正 | changes_requestedへ安全側遷移 | TODO |
-| L4-004 | code編集外変更 | edit_guardが境界外変更を処理 | TODO |
-| L4-005 | JEV | Ollamaを起動した状態でJEV判定が動く | TODO |
-| L4-006 | JEV unavailable | fail-openでパイプラインが継続 | TODO |
+| ID     | 試験              | 合格条件                                          | 結果 |
+| :----- | :---------------- | :------------------------------------------------ | :--- |
+| L4-001 | 小規模Issue完走   | `spec_draft → code → lint → test → review → done` | TODO |
+| L4-002 | planner timeout   | retry後に正常復帰または安全停止                   | TODO |
+| L4-003 | reviewer JSON不正 | changes_requestedへ安全側遷移                     | TODO |
+| L4-004 | code編集外変更    | edit_guardが境界外変更を処理                      | TODO |
+| L4-005 | JEV               | Ollamaを起動した状態でJEV判定が動く               | TODO |
+| L4-006 | JEV unavailable   | fail-openでパイプラインが継続                     | TODO |
 
 ### 3.6 L5 運用・復旧試験
 
-| ID | 試験 | 合格条件 | 結果 |
-| :--- | :--- | :--- | :--- |
-| L5-001 | auth連続失敗 | 2回連続でnightly workerを停止 | TODO |
-| L5-002 | quota連続失敗 | 2回連続でnightly workerを停止 | TODO |
-| L5-003 | timeout | 指数バックオフ後に上限停止 | TODO |
-| L5-004 | worker子プロセス | timeout後に子孫が残らない | TODO |
-| L5-005 | 旧資産復旧 | archive tagから必要資産を復元できる | PREPARED |
-| L5-006 | routes復旧 | 現行構成での切り戻し手順が実行可能 | TODO |
+| ID     | 試験             | 合格条件                            | 結果     |
+| :----- | :--------------- | :---------------------------------- | :------- |
+| L5-001 | auth連続失敗     | 2回連続でnightly workerを停止       | TODO     |
+| L5-002 | quota連続失敗    | 2回連続でnightly workerを停止       | TODO     |
+| L5-003 | timeout          | 指数バックオフ後に上限停止          | TODO     |
+| L5-004 | worker子プロセス | timeout後に子孫が残らない           | TODO     |
+| L5-005 | 旧資産復旧       | archive tagから必要資産を復元できる | PREPARED |
+| L5-006 | routes復旧       | 現行構成での切り戻し手順が実行可能  | TODO     |
 
 > 現行 `develop` は Aider runtime を退役済みで、routes は agy を指す。Aider へ戻す場合は `legacy/local_llm/` または `archive/local-llm-20261104` から資産を復元するため、単純なroute変更だけでは戻らない。
 
@@ -237,7 +237,13 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 
 ## 5. 再開チェックポイント
 
-### 実機なしの現在地点
+### 実機なしでの現在地点（基準コミット `6a7d6d8`）
+
+- routes は全て `agy_default` に切り替え済み
+- `tools/agy_client.py`、`tools/agy_runner.py`、`tools/edit_guard.py` が現行 runtime に存在する
+- Aider runtime は退役済みで、資産は `legacy/local_llm/` と archive tag に保存されている
+- agy CLI はこの環境に存在しない
+- L0-001〜L0-006は静的確認済み、L0-007のmypyとL1以降のpytestは依存環境/実機待ち
 
 - [x] L0/L1 の実装・テストコードが存在する
 - [x] `tests/test_model_contract_agy.py` と `tests/test_coder_practical_gui_agy.py` が `integration` として分離されている
