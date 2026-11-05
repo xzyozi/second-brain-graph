@@ -1,7 +1,7 @@
 # ADR 0004: agy 外部送信ポリシーとサテライト許可リスト
 
 - **日付**: 2026年11月
-- **ステータス**: Accepted（互換モードで導入。allowlist切替待ち）
+- **ステータス**: Accepted（検証完了）
 - **関連Issue**: Epic #116、#124、#125、#131
 
 ## コンテキスト
@@ -40,14 +40,29 @@ B1では、既存運用を壊さずにポリシーを導入し、allowlistへ切
 - allowlist切替後の実業務運用には、秘密情報ファイルの扱いと外部送信先の運用承認が必要である。
 - `run_review.py` の直接agyレビューも、project keyを解決して同じ認可を通す。
 
-## 検証
+## 検証と運用証跡
 
-実機agyなしで、次を単体テストする。
+単体テストおよび契約テストにより、以下の検証項目がすべて合格（All Green）であることを確認した。
 
-- allow_allの互換動作
-- allowlistの許可・拒否
-- project keyの大文字比較
-- 秘密ファイル検出時の拒否
-- cwdとproject key不一致の拒否
-- text/edit/reviewの各呼び出し境界で、拒否時にPopenが呼ばれないこと
-- `AGY_POLICY_DENIED` のstate分類と夜間workerの停止
+| 試験項目 | 検証内容 | 結果 | 対応テスト |
+| :--- | :--- | :---: | :--- |
+| 互換モード | `mode: allow_all` で既存routesを阻害せず認可 | 合格 | `test_agy_policy.py` |
+| allowlist拒否 | project_key未指定または未登録時に拒否 | 合格 | `test_agy_policy.py` |
+| allowlist許可 | 登録済みproject_keyでtext/edit/reviewが認可 | 合格 | `test_agy_policy.py` |
+| 大文字正規化 | 大文字/小文字を問わずprefix正規化して照合 | 合格 | `test_agy_policy.py` |
+| 秘密ファイル検知 | `.env*`, `*.pem`, `*.key`, `token.json` 等で拒否 | 合格 | `test_agy_policy.py` |
+| cwd不一致遮断 | edit時にcwdとproject_key不一致・未登録で拒否 | 合格 | `test_agy_policy.py` |
+| プロセス非起動 | 拒否時に `subprocess.Popen` が呼ばれない | 合格 | `test_agy_client.py` |
+| cleanup非起動 | 編集拒否時にGit cleanupが呼ばれずツリー保護 | 合格 | `test_agy_runner.py` |
+| state分類 | 拒否例外が `AGY_POLICY_DENIED` に分類 | 合格 | `test_orchestrator_agy_integration.py` |
+| 夜間worker停止 | `AGY_POLICY_DENIED` 連続検知でバッチ安全停止 | 合格 | `test_nightly_task_worker.py` |
+
+### 実業務運用への移行手順
+
+実業務サテライトでagy外部送信を開始する際は、以下の手順に従う。
+
+1. `config/models.yaml` を編集し、`backend_execution.agy_external_send.mode` を `"allowlist"` に変更する。
+2. `allowed_project_keys` に対象サテライトの `project_key` を追加する。
+3. `reject_secret_files: true` を設定し、秘密ファイル混入時の送信を防止する。
+4. 設定は `lru_cache` されているため、新しいPythonプロセスで実行を開始する。
+

@@ -166,6 +166,30 @@ def test_code_node_handles_agy_quota_error_as_agy_quota(
 
 @patch("tools.agy_runner.run_agy_edit")
 @patch("tools.orchestrator_graph.get_coordinator")
+def test_code_node_handles_agy_policy_denied_as_failed_system(
+    mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
+) -> None:
+    """agy のポリシー拒否エラーは即時 FAILED_SYSTEM / AGY_POLICY_DENIED とすることを検証する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default", timeout=1200)
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_edit.side_effect = AgyRunError(
+        "AGY_POLICY_DENIED: project_key=BLOCKED, operation=edit, reason=not allowed"
+    )
+
+    state: GraphState = {
+        "issue_id": "TFG-0095",
+        "target_files": [],
+        "instruction": "x",
+        "cwd": None,
+    }
+    result = code_node(state)
+
+    assert result["status"] == "FAILED_SYSTEM"
+    assert result["error_category"] == "AGY_POLICY_DENIED"
+
+
+@patch("tools.agy_runner.run_agy_edit")
+@patch("tools.orchestrator_graph.get_coordinator")
 def test_code_node_dynamically_registers_new_files_non_python(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock, tmp_path: Path
 ) -> None:

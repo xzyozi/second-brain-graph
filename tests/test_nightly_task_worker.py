@@ -556,3 +556,85 @@ def test_run_batch_cycle_aborts_on_consecutive_auth_quota_failures(
     # 2回失敗した時点で中断されたため、T1 と T2 のみ実行され T3 は実行されない
     assert executed_tasks == ["T1", "T2"]
     assert "agy の認証・クォータ・ポリシー拒否 (AGY_QUOTA) が 2 回連続したため" in caplog.text
+
+
+def test_run_batch_cycle_stops_on_consecutive_policy_denied_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AGY_POLICY_DENIED が連続上限回数発生した場合、後続タスクを安全停止する。"""
+    reg_file = tmp_path / "metadata" / ".project-registry.json"
+    reg_file.parent.mkdir(parents=True, exist_ok=True)
+    reg_file.write_text('{"projects": {"P1": {"name": "p1", "dir": "p1"}}}', encoding="utf-8")
+
+    task1 = nightly_task_worker.CandidateTask(
+        task_id="T1",
+        project_key="P1",
+        project_name="p1",
+        satellite_dir=tmp_path / "p1",
+        title="Task 1",
+        priority="high",
+        score=100.0,
+        stage="ready",
+        issue_num=1,
+        line_raw="",
+    )
+    task2 = nightly_task_worker.CandidateTask(
+        task_id="T2",
+        project_key="P1",
+        project_name="p1",
+        satellite_dir=tmp_path / "p1",
+        title="Task 2",
+        priority="high",
+        score=90.0,
+        stage="ready",
+        issue_num=2,
+        line_raw="",
+    )
+    task3 = nightly_task_worker.CandidateTask(
+        task_id="T3",
+        project_key="P1",
+        project_name="p1",
+        satellite_dir=tmp_path / "p1",
+        title="Task 3",
+        priority="high",
+        score=80.0,
+        stage="ready",
+        issue_num=3,
+        line_raw="",
+    )
+
+    monkeypatch.setattr(
+        nightly_task_worker, "parse_tasks_md_candidates", lambda **kwargs: [task1, task2, task3]
+    )
+
+    executed_tasks: list[str] = []
+
+    def fake_execute(
+        root: Path, task: nightly_task_worker.CandidateTask, cfg: dict, dry_run: bool = False
+    ) -> bool:
+        executed_tasks.append(task.task_id)
+        return False
+
+    monkeypatch.setattr(nightly_task_worker, "execute_autonomous_task", fake_execute)
+    monkeypatch.setattr(
+        nightly_task_worker, "get_task_error_category", lambda root, task: "AGY_POLICY_DENIED"
+    )
+
+    config: dict = {
+        "enabled": True,
+        "max_tasks_per_run": 5,
+        "target_projects": ["all"],
+        "execution": {
+            "max_consecutive_auth_quota_failures": 2,
+        },
+    }
+    opts = nightly_task_worker.parse_args([])
+
+    with caplog.at_level(logging.WARNING, logger="nightly_worker"):
+        success = nightly_task_worker.run_batch_cycle(tmp_path, config, opts)
+
+    assert success == 0
+    assert executed_tasks == ["T1", "T2"]
+    assert (
+        "agy の認証・クォータ・ポリシー拒否 (AGY_POLICY_DENIED) が 2 回連続したため" in caplog.text
+    )

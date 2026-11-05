@@ -7,7 +7,7 @@
 | 基準コミット | `f3a7aff`（`origin/develop`、試験書状態更新PR #146 マージ後）                    |
 | 対象         | agy CLI、`agy_client`、テキスト応答、コード編集、routes、edit_guard、夜間 worker |
 | 関連         | Epic #116、#117、#119、#121、#122、#123、#124、#125、#126、#127、#128、#131      |
-| 状態         | **PREPARED / L0確認済み / L2準備済み**（L1実行・実機試験待ち）                   |
+| 状態         | **L0・L1・L2確認済み / B1外部送信ポリシー検証完了**                              |
 
 > 本書は、agy がインストールされていない環境でも作業を途中で止めず、モック試験・静的確認を先に進め、agy 導入後に同じ項目へ実測結果を追記するための正本である。
 
@@ -97,7 +97,7 @@ JEV
 | L0-004 | Aider runtime の退役                           | `tools/aider_runner.py` がruntimeに無く、legacyに保存    | 確認済み                 | `legacy/local_llm/` / #128             |
 | L0-005 | JEV の据え置き                                 | `jev_adapter.py` とJEV submoduleが残り、Ollama接続を維持 | 確認済み                 | `tools/jev_adapter.py` / `.gitmodules` |
 | L0-006 | Python構文                                     | `python -m py_compile` が成功                            | 確認済み                 | ローカル実行                           |
-| L0-007 | CI静的検査                                     | ruff / mypy が成功                                       | ruff確認済み・mypy未確認 | CI/依存環境待ち                        |
+| L0-007 | CI静的検査                                     | ruff / mypy が成功                                       | 確認済み                 | ruff 0 err / mypy 0 issues             |
 
 実行例:
 
@@ -112,20 +112,23 @@ uv run mypy tools
 
 既存の次のテストを対象とする。実 agy は起動しない。
 
-| ID     | テスト対象       | 合格条件                                                | 対応テスト                                   |
-| :----- | :--------------- | :------------------------------------------------------ | :------------------------------------------- |
-| L1-001 | 実行ファイル解決 | PATH / 既知パス / 未導入例外が正しい                    | `tests/test_agy_client.py`                   |
-| L1-002 | コマンド構築     | `agy --dangerously-skip-permissions -p <prompt>` になる | `tests/test_agy_client.py`                   |
-| L1-003 | timeout          | `AgyTimeoutError` に `timed out` が含まれる             | `tests/test_agy_client.py`                   |
-| L1-004 | 非0終了          | `AgyExitError.returncode` が保持される                  | `tests/test_agy_client.py`                   |
-| L1-005 | テキスト応答     | `call_llm` が `{"raw": ...}` を返す                     | `tests/test_llm_client.py`                   |
-| L1-006 | JSON応答         | `verdict` / `comments` を解析できる                     | `tests/test_llm_client.py`                   |
-| L1-007 | 秘密情報マスク   | agyに渡すpromptにsecret値が残らない                     | `tests/test_llm_client.py`                   |
-| L1-008 | coder成功        | `code_completed` へ遷移する                             | `tests/test_orchestrator_agy_integration.py` |
-| L1-009 | coder timeout    | 1回目retry、2回目`FAILED_SYSTEM`                        | `tests/test_orchestrator_agy_integration.py` |
-| L1-010 | coder非0終了     | `SYSTEM_ERROR` / `FAILED_SYSTEM`                        | `tests/test_orchestrator_agy_integration.py` |
-| L1-011 | target外後始末   | 成功・失敗の両方でcleanupが呼ばれる                     | `tests/test_agy_runner.py`                   |
-| L1-012 | edit_guard       | 母艦拒否・秘密情報・glob許可・復元                      | `tests/test_edit_guard.py`                   |
+| ID | テスト対象 | 合格条件 | 状態 | 対応テスト |
+| :--- | :--- | :--- | :---: | :--- |
+| L1-001 | 実行ファイル解決 | PATH/既知パス/未導入例外が正しい | 合格 | `tests/test_agy_client.py` |
+| L1-002 | コマンド構築 | `agy --dangerously-skip-permissions -p` | 合格 | `tests/test_agy_client.py` |
+| L1-003 | timeout | `AgyTimeoutError` に `timed out` 含む | 合格 | `tests/test_agy_client.py` |
+| L1-004 | 非0終了 | `AgyExitError.returncode` が保持される | 合格 | `tests/test_agy_client.py` |
+| L1-005 | テキスト応答 | `call_llm` が `{"raw": ...}` を返す | 合格 | `tests/test_llm_client.py` |
+| L1-006 | JSON応答 | `verdict` / `comments` を解析できる | 合格 | `tests/test_llm_client.py` |
+| L1-007 | 秘密情報マスク | agyに渡すpromptにsecret値が残らない | 合格 | `tests/test_llm_client.py` |
+| L1-008 | coder成功 | `code_completed` へ遷移する | 合格 | `tests/test_orchestrator_agy_integration.py` |
+| L1-009 | coder timeout | 1回目retry、2回目`FAILED_SYSTEM` | 合格 | `tests/test_orchestrator_agy_integration.py` |
+| L1-010 | coder非0終了 | `SYSTEM_ERROR` / `FAILED_SYSTEM` | 合格 | `tests/test_orchestrator_agy_integration.py` |
+| L1-011 | target外後始末 | 成功・失敗の両方でcleanupが呼ばれる | 合格 | `tests/test_agy_runner.py` |
+| L1-012 | edit_guard | 母艦拒否・秘密情報・glob許可・復元 | 合格 | `tests/test_edit_guard.py` |
+| L1-013 | 外部送信ポリシー | allowlist照合・秘密ファイル・プロセス非起動 | 合格 | `tests/test_agy_policy.py` |
+
+
 
 実行例:
 
@@ -144,12 +147,12 @@ uv run pytest -m "not integration" `
 
 | ID     | fake CLI の動作                | 合格条件                                | 状態               |
 | :----- | :----------------------------- | :-------------------------------------- | :----------------- |
-| L2-001 | stdoutに短いテキストを返す     | `run_agy_text` が受け取る               | 実装済み・実行待ち |
-| L2-002 | JSONを返す                     | `call_llm(expect_json=True)` が解析する | 実装済み・実行待ち |
-| L2-003 | stderrと非0終了                | `AgyExitError` が分類される             | 実装済み・実行待ち |
-| L2-004 | 指定秒数sleep                  | timeoutとプロセス終了を確認する         | 実装済み・実行待ち |
-| L2-005 | cwd内のtarget fileを書き換える | `run_agy_edit` と後始末を確認する       | 実装済み・実行待ち |
-| L2-006 | target外ファイルも作る         | edit_guardが削除・復元する              | 実装済み・実行待ち |
+| L2-001 | stdoutに短いテキストを返す     | `run_agy_text` が受け取る               | 合格（確認済み）   |
+| L2-002 | JSONを返す                     | `call_llm(expect_json=True)` が解析する | 合格（確認済み）   |
+| L2-003 | stderrと非0終了                | `AgyExitError` が分類される             | 合格（確認済み）   |
+| L2-004 | 指定秒数sleep                  | timeoutとプロセス終了を確認する         | 合格（確認済み）   |
+| L2-005 | cwd内のtarget fileを書き換える | `run_agy_edit` と後始末を確認する       | 合格（確認済み）   |
+| L2-006 | target外ファイルも作る         | edit_guardが削除・復元する              | 合格（確認済み）   |
 
 fake CLI は次のファイルとして実装済みである。
 
@@ -362,21 +365,23 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 
 ## 5. 再開チェックポイント
 
-### 実機なしでの現在地点（基準コミット `f3a7aff`）
+### 実機なしでの現在地点
 
 - routes は全て `agy_default` に切り替え済み
-- `tools/agy_client.py`、`tools/agy_runner.py`、`tools/edit_guard.py` が現行 runtime に存在する
-- Aider runtime は退役済みで、資産は `legacy/local_llm/` と archive tag に保存されている
-- agy CLI はこの環境に存在しない
-- L0-001〜L0-006は静的確認済み、L0-007のmypyとL1以降のpytestは依存環境/実機待ち
+- `tools/agy_client.py`、`tools/agy_runner.py`、`tools/edit_guard.py`、`tools/agy_policy.py` が現行 runtime に存在する
+- Aider runtime は退役済みで、不要パッケージパージ完了（Issue #128 / PR #144）
+- L0/L1/L2 全件（429 passed）、ruff/mypy All Green を確認済み
+- B1 外部送信ポリシー認可の単体・プロセス境界契約テストを完了（ADR 0004 検証完了）
 
-- [x] L0/L1 の実装・テストコードが存在する
+- [x] L0/L1 の実装・テストコードが存在し All Green
 - [x] `tests/test_model_contract_agy.py` と `tests/test_coder_practical_gui_agy.py` が `integration` として分離されている
-- [x] Aider資産は `legacy/local_llm/` と archive tagへ退避済み
-- [x] fake CLIによる L2 を実装済み（L2-001〜L2-005の直接スモーク確認済み、pytest試験は実行待ち）
-- [ ] agy CLI導入後のL3は未実施
-- [ ] サンドボックスE2EのL4は未実施
-- [ ] auth/quota/workerのL5は未実施
+- [x] Aider資産は `legacy/local_llm/` と archive tagへ退避済み、依存パージ完了
+- [x] fake CLIによる L2（L2-001〜L2-006）pytest全件合格
+- [x] B1 外部送信ポリシー認可（L1-013、秘密ファイル検知、未許可プロセス・cleanup非起動）合格
+- [x] 実機モデル契約試験（L3）および品質検証レポート作成完了（PR #143 合格判定）
+- [ ] サンドボックスE2EのL4（実サテライト業務運用切り替え後のE2E検証）
+- [ ] auth/quota/workerのL5実運用検証
+
 
 ### 次に実行する順序
 

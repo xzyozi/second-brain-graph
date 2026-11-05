@@ -30,6 +30,12 @@ backend_execution:
 
   # agy外部送信ポリシー。allowlistへ切り替えるまで既存運用を止めない互換モード。
   # allowlist時は、検証済みのproject keyだけをagyへ送信できる。
+  # 設定変更後は lru_cache のため新しいPythonプロセスで実行する。
+  # 【実業務運用時の切替設定例】:
+  #   mode: "allowlist"
+  #   allowed_project_keys:
+  #     - <PROJECT_KEY>  # 許可するサテライトのproject key
+  #   reject_secret_files: true  # .env*, *.pem, *.key, token.json 等を検出時に遮断
   agy_external_send:
     mode: "allow_all"
     allowed_project_keys: []
