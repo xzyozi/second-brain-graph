@@ -217,6 +217,124 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 
 ---
 
+## 3.7 コマンド一覧（再開用）
+
+以下を本書の再開コマンドの正本とする。`<...>` は環境に合わせて置き換える。CIで確認できる検査は、ローカルで重複実行せず、PRのGitHub Actionsを正本とする。
+
+### L0: 静的・構文確認
+
+```powershell
+python -m py_compile tools/agy_client.py tools/agy_runner.py tools/llm_client.py tools/orchestrator_graph.py
+```
+
+CIで実施する検査:
+
+```text
+ruff check
+ruff format --check
+mypy
+pytest -m "not integration"
+```
+
+### L1: モック単体試験
+
+依存環境がある場合に実行する。CIでも同じテスト群が実行される。
+
+```powershell
+uv run pytest -m "not integration" `
+  tests/test_agy_client.py `
+  tests/test_agy_runner.py `
+  tests/test_llm_client.py `
+  tests/test_orchestrator_agy_integration.py `
+  tests/test_edit_guard.py `
+  tests/test_agy_policy.py
+```
+
+### L2: fake agy CLIのプロセス境界試験
+
+```powershell
+uv run pytest tests/test_agy_fake_process.py
+```
+
+Windowsでwrapperを明示する場合:
+
+```powershell
+$env:SBOS_AGY_EXECUTABLE = (Resolve-Path tests/fixtures/fake_agy.cmd).Path
+uv run pytest tests/test_agy_fake_process.py
+```
+
+POSIXでは `tests/fixtures/fake_agy.sh` を使う。fake CLIは実agyの品質・認証・クォータを検証しない。
+
+### L3: agy実機契約試験
+
+前提: agyの導入・認証、外部送信の許可、使い捨てサテライト、秘密情報ファイルなし。
+
+```powershell
+agy --version
+uv run python -m pytest -m integration tests/test_model_contract_agy.py
+uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
+```
+
+### L4: サンドボックスE2E
+
+```powershell
+uv run python tools/orchestrator_graph.py execute `
+  --issue-id <ISSUE_ID> `
+  --project-key <PROJECT_KEY> `
+  --fresh
+```
+
+衛星のクリーンアップを含める場合:
+
+```powershell
+uv run python tools/run_task.py <ISSUE_ID> --fresh
+```
+
+`run_task.py` は作業ツリーを変更・クリーンアップするため、対象衛星とIssueを確認してから実行する。
+
+### L5: 夜間worker・直接レビュー
+
+ワンショットworker:
+
+```powershell
+uv run python tools/nightly_task_worker.py --config config/nightly_worker.toml
+```
+
+常駐worker:
+
+```powershell
+uv run python tools/nightly_task_worker.py `
+  --config config/nightly_worker.toml `
+  --loop `
+  --loop-mode daily
+```
+
+サテライトの直接レビュー:
+
+```powershell
+uv run python .gemini/skills/satellite-ideation-reviewer/scripts/run_review.py `
+  --target <SATELLITE_NAME> `
+  --theme security `
+  --dry-run
+```
+
+### 外部送信allowlistへの切替
+
+実業務運用前に、`config/models.yaml` を次の形へ変更し、新しいPythonプロセスで起動する。
+
+```yaml
+backend_execution:
+  agy_external_send:
+    mode: "allowlist"
+    allowed_project_keys:
+      - PROJECT_KEY
+    reject_secret_files: true
+```
+
+設定変更後の確認は、L3契約試験とL4サンドボックスE2Eを再実施する。allowlist未登録のproject keyではagyを起動しないことを確認する。
+
+---
+
 ## 4. 証跡の保存規則
 
 試験結果は本ファイルの `結果` / `実施状態` 欄を更新し、必要なログ・差分・stateは次の相対パスへ保存する。
