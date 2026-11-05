@@ -11,7 +11,9 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+
+from tools.agy_policy import authorize_agy_execution
 
 logger = logging.getLogger("agy_client")
 
@@ -157,7 +159,14 @@ def _terminate_process_tree(proc: "subprocess.Popen[str]") -> None:
         pass
 
 
-def _run_agy(prompt: str, *, cwd: Optional[str], timeout: int) -> str:
+def _run_agy(
+    prompt: str,
+    *,
+    cwd: Optional[str],
+    timeout: int,
+    project_key: Optional[str],
+    operation: Literal["text", "edit", "review"],
+) -> str:
     """agy を非対話で起動し、stdout(str)を返す.
 
     - resolve_agy_executable() で実行ファイルを解決する。見つからなければ
@@ -165,6 +174,7 @@ def _run_agy(prompt: str, *, cwd: Optional[str], timeout: int) -> str:
     - 終了コードが非0なら AgyExitError を送出する。
     - タイムアウト時は AgyTimeoutError を送出する。
     """
+    authorize_agy_execution(project_key=project_key, operation=operation, cwd=cwd)
     agy_exe = resolve_agy_executable()
     cmd = [agy_exe, "--dangerously-skip-permissions", "-p", prompt]
 
@@ -196,16 +206,40 @@ def _run_agy(prompt: str, *, cwd: Optional[str], timeout: int) -> str:
     return stdout or ""
 
 
-def run_agy_text(prompt: str, *, timeout: int = 180, cwd: Optional[str] = None) -> str:
+def run_agy_text(
+    prompt: str,
+    *,
+    timeout: int = 180,
+    cwd: Optional[str] = None,
+    project_key: Optional[str] = None,
+) -> str:
     """agy をテキスト応答用に起動する (読み取り専用な問い合わせ等向け)."""
-    return _run_agy(prompt, cwd=cwd, timeout=timeout)
+    return _run_agy(
+        prompt,
+        cwd=cwd,
+        timeout=timeout,
+        project_key=project_key,
+        operation="text",
+    )
 
 
-def run_agy_in_workdir(prompt: str, *, cwd: str, timeout: int = 1200) -> str:
+def run_agy_in_workdir(
+    prompt: str,
+    *,
+    cwd: str,
+    timeout: int = 1200,
+    project_key: Optional[str] = None,
+) -> str:
     """agy を指定ワークツリーで編集実行用に起動する.
 
     cwd は必須 (衛星ワークツリー)。空文字列や None の場合は ValueError を送出する。
     """
     if not cwd:
         raise ValueError("run_agy_in_workdir requires a non-empty cwd")
-    return _run_agy(prompt, cwd=cwd, timeout=timeout)
+    return _run_agy(
+        prompt,
+        cwd=cwd,
+        timeout=timeout,
+        project_key=project_key,
+        operation="edit",
+    )

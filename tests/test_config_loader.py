@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from tools.config_loader import (
+    AgyExternalSendConfig,
     BackendExecutionConfig,
     ProfileConfig,
     get_backend_execution_config,
@@ -262,3 +263,30 @@ def test_backend_config_allows_route_to_agy_profile() -> None:
         profiles={"agy_default": ProfileConfig(backend="agy", model="agy-default")},
     )
     assert config.routes["code_edit"] == "agy_default"
+
+
+# ---------------------------------------------------------------------------
+# AgyExternalSendConfig (#124)
+# ---------------------------------------------------------------------------
+def test_agy_external_send_defaults_to_compatibility_mode() -> None:
+    """既存routesを止めないため、外部送信ポリシーの既定値はallow_allであることを確認する。"""
+    config = AgyExternalSendConfig()
+    assert config.mode == "allow_all"
+    assert config.allowed_project_keys == []
+    assert config.reject_secret_files is False
+
+
+def test_agy_external_send_allowlist_is_validated() -> None:
+    """allowlistモードとproject key一覧を検証できることを確認する。"""
+    config = AgyExternalSendConfig(
+        mode="allowlist", allowed_project_keys=["TFG", "CW"], reject_secret_files=True
+    )
+    assert config.mode == "allowlist"
+    assert config.allowed_project_keys == ["TFG", "CW"]
+    assert config.reject_secret_files is True
+
+
+def test_agy_external_send_rejects_unknown_mode() -> None:
+    """未知の外部送信モードをfail-closedで拒否することを確認する。"""
+    with pytest.raises(ValidationError):
+        AgyExternalSendConfig(mode="unknown")  # type: ignore[arg-type]

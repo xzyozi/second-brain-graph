@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import tempfile
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from openai import OpenAI
 
@@ -68,6 +68,7 @@ def _do_agy_llm_call(
     expect_json: bool,
     timeout: int,
     profile: ProfileConfig,
+    project_key: Optional[str],
 ) -> Dict[str, Any]:
     """agy をテキスト応答器として呼び出す (SBOS-DD-005 §4.1).
 
@@ -85,7 +86,12 @@ def _do_agy_llm_call(
 
     agy_timeout = profile.timeout or timeout
     with tempfile.TemporaryDirectory(prefix="agy_llm_") as tmp_dir:
-        raw_output = run_agy_text(prompt, timeout=agy_timeout, cwd=tmp_dir)
+        raw_output = run_agy_text(
+            prompt,
+            timeout=agy_timeout,
+            cwd=tmp_dir,
+            project_key=project_key,
+        )
 
     return _parse_llm_output(raw_output, expect_json)
 
@@ -97,6 +103,7 @@ def call_llm(
     expect_json: bool = False,
     timeout: int = 600,
     intent: str = "",
+    project_key: Optional[str] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Call LLM via OpenAI API or agy, using parameters configured in config/models.yaml.
@@ -131,7 +138,7 @@ def call_llm(
 
         if profile.backend == "agy":
             return _do_agy_llm_call(
-                clean_system_prompt, clean_user_prompt, expect_json, timeout, profile
+                clean_system_prompt, clean_user_prompt, expect_json, timeout, profile, project_key
             )
 
         # Coordinator Adapter sets OPENAI_API_BASE / OLLAMA_API_BASE

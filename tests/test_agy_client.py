@@ -21,6 +21,7 @@ from tools.agy_client import (
     run_agy_in_workdir,
     run_agy_text,
 )
+from tools.agy_policy import AgyPolicyDeniedError
 
 # ---------------------------------------------------------------------------
 # resolve_agy_executable
@@ -234,3 +235,17 @@ def test_classify_agy_exit_generic_error() -> None:
     err = classify_agy_exit("Syntax error in template file", returncode=2)
     assert type(err) is AgyExitError
     assert err.returncode == 2
+
+
+@patch("tools.agy_client.subprocess.Popen")
+@patch(
+    "tools.agy_client.authorize_agy_execution",
+    side_effect=AgyPolicyDeniedError("AGY_POLICY_DENIED: blocked"),
+)
+def test_run_agy_text_denied_before_popen(mock_authorize: MagicMock, mock_popen: MagicMock) -> None:
+    """外部送信ポリシー拒否時はagyプロセスを起動しない。"""
+    with pytest.raises(AgyPolicyDeniedError, match="AGY_POLICY_DENIED"):
+        run_agy_text("blocked")
+
+    mock_authorize.assert_called_once()
+    mock_popen.assert_not_called()

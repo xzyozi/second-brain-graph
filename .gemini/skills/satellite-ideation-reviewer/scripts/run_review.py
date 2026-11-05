@@ -29,7 +29,9 @@ from tools.agy_client import (  # noqa: E402
     resolve_agy_executable,
     run_agy_in_workdir,
 )
+from tools.agy_policy import AgyPolicyDeniedError, authorize_agy_execution  # noqa: E402
 from tools.issue_spec_manager import sync_spec_for_task  # noqa: E402
+from tools.metadata_store import resolve_project_from_cwd  # noqa: E402
 
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("satellite_reviewer")
@@ -398,15 +400,29 @@ def run_agys_review(
 
     try:
         agy_exe = resolve_agy_executable()
+        project_key = resolve_project_from_cwd(target_dir, _mother_root)
+        authorize_agy_execution(
+            project_key=project_key,
+            operation="review",
+            cwd=target_dir,
+        )
         logger.info(
             f"agys（Antigravity CLI ヘッドレス: {agy_exe}）を起動して自律レビューを実行中..."
         )
-        raw_output = run_agy_in_workdir(prompt, cwd=str(target_dir), timeout=timeout)
+        raw_output = run_agy_in_workdir(
+            prompt,
+            cwd=str(target_dir),
+            timeout=timeout,
+            project_key=project_key,
+        )
         raw_output = raw_output.strip()
         if not raw_output:
             logger.warning("agys の出力が空でした。")
             return []
         return parse_agys_response(raw_output)
+    except AgyPolicyDeniedError as e:
+        logger.error(f"agy 外部送信ポリシーによりレビューを拒否しました: {e}")
+        return []
     except AgyTimeoutError:
         logger.error(f"agys のレビュー処理がタイムアウトしました ({timeout}s)")
         return []

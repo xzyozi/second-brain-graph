@@ -1546,10 +1546,16 @@ def test_test_feedback_node_generates_categorized_instructions(
     called_intent = None
 
     def mock_call_llm(
-        role: str, intent: str, system_prompt: str, user_prompt: str, expect_json: bool = False
+        role: str,
+        intent: str,
+        system_prompt: str,
+        user_prompt: str,
+        expect_json: bool = False,
+        project_key: str | None = None,
     ) -> dict:
         nonlocal called_intent
         called_intent = intent
+        assert project_key == "TFG"
         return {
             "content": "ASSERTION_MISMATCH: Update assertion expected count from 3 to 2 in test_parallel_mode."
         }

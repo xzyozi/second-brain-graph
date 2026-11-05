@@ -63,6 +63,7 @@ class ErrorCategory(str, Enum):
     PR_ERROR = "PR_ERROR"
     AGY_AUTH = "AGY_AUTH"
     AGY_QUOTA = "AGY_QUOTA"
+    AGY_POLICY_DENIED = "AGY_POLICY_DENIED"
 
 
 # 後方互換性および TypedDict アノテーション用の Literal エイリアス
@@ -93,6 +94,7 @@ ErrorCategoryLiteral = Literal[
     "PR_ERROR",
     "AGY_AUTH",
     "AGY_QUOTA",
+    "AGY_POLICY_DENIED",
 ]
 
 

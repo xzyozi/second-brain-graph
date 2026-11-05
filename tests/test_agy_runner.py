@@ -18,7 +18,7 @@ def test_run_agy_edit_success_returns_true(
 
     assert result is True
     mock_run_agy_in_workdir.assert_called_once_with(
-        "instruction", cwd="/tmp/satellite", timeout=900
+        "instruction", cwd="/tmp/satellite", timeout=900, project_key=None
     )
     mock_cleanup.assert_called_once_with("/tmp/satellite", ["src/a.py"])
 

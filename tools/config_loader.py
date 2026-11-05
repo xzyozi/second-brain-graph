@@ -69,11 +69,21 @@ class ProfileConfig(BaseModel):
         return self
 
 
+class AgyExternalSendConfig(BaseModel):
+    """agyの外部送信認可設定."""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["allow_all", "allowlist"] = "allow_all"
+    allowed_project_keys: list[str] = Field(default_factory=list)
+    reject_secret_files: bool = False
+
+
 class BackendExecutionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["exclusive"]
     fallback: str = Field(min_length=1)
     gpu_lease_timeout: Annotated[int, Field(ge=1)] = 120
+    agy_external_send: AgyExternalSendConfig = Field(default_factory=AgyExternalSendConfig)
     routes: Dict[str, str]
     profiles: Dict[str, ProfileConfig]
 
