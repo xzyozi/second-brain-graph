@@ -4,10 +4,10 @@
 | :----------- | :------------------------------------------------------------------------------- |
 | 文書番号     | SBOS-TEST-001                                                                    |
 | 文書名       | agy 移行確認試験書（実機なし準備版）                                             |
-| 基準コミット | `6a7d6d8`（`origin/develop`、B5および確認試験書PR #145 マージ後）                |
+| 基準コミット | `f3a7aff`（`origin/develop`、試験書状態更新PR #146 マージ後）                    |
 | 対象         | agy CLI、`agy_client`、テキスト応答、コード編集、routes、edit_guard、夜間 worker |
 | 関連         | Epic #116、#117、#119、#121、#122、#123、#124、#125、#126、#127、#128、#131      |
-| 状態         | **PREPARED / L0確認済み**（L1実行・実機試験待ち）                                |
+| 状態         | **PREPARED / L0確認済み / L2準備済み**（L1実行・実機試験待ち）                   |
 
 > 本書は、agy がインストールされていない環境でも作業を途中で止めず、モック試験・静的確認を先に進め、agy 導入後に同じ項目へ実測結果を追記するための正本である。
 
@@ -91,7 +91,7 @@ JEV
 
 | ID     | 確認項目                                       | 合格条件                                                 | 実施状態                 | 証跡                                   |
 | :----- | :--------------------------------------------- | :------------------------------------------------------- | :----------------------- | :------------------------------------- |
-| L0-001 | `tools/agy_client.py` / `agy_runner.py` の存在 | 両ファイルが存在しimport可能                             | 確認済み                 | `6a7d6d8`                              |
+| L0-001 | `tools/agy_client.py` / `agy_runner.py` の存在 | 両ファイルが存在しimport可能                             | 確認済み                 | `f3a7aff`                              |
 | L0-002 | `config/models.yaml` の routes                 | 対象intentが `agy_default` を指す                        | 確認済み                 | `config/models.yaml`                   |
 | L0-003 | `agy_default` profile                          | `backend: agy`、接続不要、timeoutあり                    | 確認済み                 | `config/models.yaml`                   |
 | L0-004 | Aider runtime の退役                           | `tools/aider_runner.py` がruntimeに無く、legacyに保存    | 確認済み                 | `legacy/local_llm/` / #128             |
@@ -142,16 +142,23 @@ uv run pytest -m "not integration" `
 
 `subprocess.Popen` のモックだけでは、実際のプロセス境界やファイル編集を確認できない。必要に応じて、テスト専用の fake agy CLI を用意する。
 
-| ID     | fake CLI の動作                | 合格条件                                | 状態     |
-| :----- | :----------------------------- | :-------------------------------------- | :------- |
-| L2-001 | stdoutに短いテキストを返す     | `run_agy_text` が受け取る               | PREPARED |
-| L2-002 | JSONを返す                     | `call_llm(expect_json=True)` が解析する | PREPARED |
-| L2-003 | stderrと非0終了                | `AgyExitError` が分類される             | PREPARED |
-| L2-004 | 指定秒数sleep                  | timeoutとプロセス終了を確認する         | PREPARED |
-| L2-005 | cwd内のtarget fileを書き換える | `run_agy_edit` と後始末を確認する       | PREPARED |
-| L2-006 | target外ファイルも作る         | edit_guardが削除・復元する              | PREPARED |
+| ID     | fake CLI の動作                | 合格条件                                | 状態               |
+| :----- | :----------------------------- | :-------------------------------------- | :----------------- |
+| L2-001 | stdoutに短いテキストを返す     | `run_agy_text` が受け取る               | 実装済み・実行待ち |
+| L2-002 | JSONを返す                     | `call_llm(expect_json=True)` が解析する | 実装済み・実行待ち |
+| L2-003 | stderrと非0終了                | `AgyExitError` が分類される             | 実装済み・実行待ち |
+| L2-004 | 指定秒数sleep                  | timeoutとプロセス終了を確認する         | 実装済み・実行待ち |
+| L2-005 | cwd内のtarget fileを書き換える | `run_agy_edit` と後始末を確認する       | 実装済み・実行待ち |
+| L2-006 | target外ファイルも作る         | edit_guardが削除・復元する              | 実装済み・実行待ち |
 
-fake CLI は本番の `agy` と同一視しない。`tests/fixtures/` または一時ディレクトリ内だけで使い、通常のCIで実行するかは実装時に決める。
+fake CLI は次のファイルとして実装済みである。
+
+- `tests/fixtures/fake_agy.py`: `text` / `json` / `exit` / `timeout` / `edit` / `unauthorized` モード
+- `tests/fixtures/fake_agy.cmd`: Windows wrapper
+- `tests/fixtures/fake_agy.sh`: POSIX wrapper
+- `tests/test_agy_fake_process.py`: 実 `subprocess.Popen` 境界を通すL2試験
+
+`SBOS_AGY_EXECUTABLE` 環境変数で試験用wrapperを指定できる。fake CLI は本番の `agy` と同一視しない。通常のCIで実行するかは、pytest依存が揃った環境で確認してから決める。
 
 ### 3.4 L3 agy契約試験（実機）
 
@@ -237,7 +244,7 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 
 ## 5. 再開チェックポイント
 
-### 実機なしでの現在地点（基準コミット `6a7d6d8`）
+### 実機なしでの現在地点（基準コミット `f3a7aff`）
 
 - routes は全て `agy_default` に切り替え済み
 - `tools/agy_client.py`、`tools/agy_runner.py`、`tools/edit_guard.py` が現行 runtime に存在する
@@ -248,7 +255,7 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 - [x] L0/L1 の実装・テストコードが存在する
 - [x] `tests/test_model_contract_agy.py` と `tests/test_coder_practical_gui_agy.py` が `integration` として分離されている
 - [x] Aider資産は `legacy/local_llm/` と archive tagへ退避済み
-- [ ] fake CLI による L2 は未実装
+- [x] fake CLIによる L2 を実装済み（L2-001〜L2-005の直接スモーク確認済み、pytest試験は実行待ち）
 - [ ] agy CLI導入後のL3は未実施
 - [ ] サンドボックスE2EのL4は未実施
 - [ ] auth/quota/workerのL5は未実施
@@ -256,7 +263,7 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 ### 次に実行する順序
 
 1. `uv run pytest -m "not integration"` を実行してCI相当の基礎を確認する。
-2. fake CLIが必要と判断した場合、L2-001〜L2-006を実装する。
+2. L2 fake CLI試験を実行し、pytestでL2-001〜L2-006を確認する。
 3. agy導入環境で `agy --version` と認証を確認する。
 4. L3-001〜L3-011を小さい試験から順に実施する。
 5. L3合格後にL4-001を実施する。
