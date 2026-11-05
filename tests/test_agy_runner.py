@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tools.agy_client import AgyExitError, AgyNotFoundError, AgyTimeoutError
+from tools.agy_policy import AgyPolicyDeniedError
 from tools.agy_runner import AgyRunError, run_agy_edit
 
 
@@ -93,3 +94,19 @@ def test_agy_run_error_is_coder_run_error_subclass() -> None:
     from tools.agy_runner import CoderRunError
 
     assert issubclass(AgyRunError, CoderRunError)
+
+
+@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts")
+@patch(
+    "tools.agy_runner.run_agy_in_workdir",
+    side_effect=AgyPolicyDeniedError("AGY_POLICY_DENIED: project_key=BLOCKED"),
+)
+def test_run_agy_edit_policy_denied_bypasses_cleanup(
+    mock_run_agy_in_workdir: MagicMock, mock_cleanup: MagicMock
+) -> None:
+    """ポリシー拒否時は cleanup を起動せず、AgyRunError を送出することを検証する。"""
+    with pytest.raises(AgyRunError, match="AGY_POLICY_DENIED"):
+        run_agy_edit("instruction", ["src/a.py"], "/tmp/satellite", project_key="BLOCKED")
+
+    mock_run_agy_in_workdir.assert_called_once()
+    mock_cleanup.assert_not_called()

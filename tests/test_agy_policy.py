@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.agy_policy import AgyPolicyDeniedError, authorize_agy_execution
+from tools.agy_policy import AgyOperation, AgyPolicyDeniedError, authorize_agy_execution
 from tools.config_loader import AgyExternalSendConfig
 
 
@@ -82,4 +82,49 @@ def test_allowlist_rejects_unregistered_edit_cwd(
     with pytest.raises(AgyPolicyDeniedError, match="cwd is not registered"):
         authorize_agy_execution(
             project_key="TFG", operation="edit", cwd=tmp_path, policy_config=policy
+        )
+
+
+def test_allowlist_permits_authorized_project_key_for_all_operations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """allowlistに登録されたproject keyは text / edit / review の全操作で認可される。"""
+    policy = AgyExternalSendConfig(
+        mode="allowlist", allowed_project_keys=["PROJECT_A"], reject_secret_files=True
+    )
+    monkeypatch.setattr("tools.agy_policy.resolve_project_from_cwd", lambda cwd: "PROJECT_A")
+
+    operations: list[AgyOperation] = ["text", "edit", "review"]
+    for op in operations:
+        ctx = authorize_agy_execution(
+            project_key="project_a",
+            operation=op,
+            cwd=tmp_path,
+            policy_config=policy,
+        )
+        assert ctx.project_key == "PROJECT_A"
+        assert ctx.operation == op
+
+
+@pytest.mark.parametrize(
+    "secret_filename",
+    [
+        ".env",
+        ".env.production",
+        ".env.local",
+        "cert.pem",
+        "private.key",
+        "token.json",
+    ],
+)
+def test_policy_rejects_various_secret_file_patterns(tmp_path: Path, secret_filename: str) -> None:
+    """reject_secret_files有効時、各種秘密情報ファイルが存在すれば拒否する。"""
+    (tmp_path / secret_filename).write_text("secret_value", encoding="utf-8")
+    policy = AgyExternalSendConfig(
+        mode="allowlist", allowed_project_keys=["TFG"], reject_secret_files=True
+    )
+
+    with pytest.raises(AgyPolicyDeniedError, match="secret-like files exist"):
+        authorize_agy_execution(
+            project_key="TFG", operation="text", cwd=tmp_path, policy_config=policy
         )

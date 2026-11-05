@@ -249,3 +249,19 @@ def test_run_agy_text_denied_before_popen(mock_authorize: MagicMock, mock_popen:
 
     mock_authorize.assert_called_once()
     mock_popen.assert_not_called()
+
+
+@patch("tools.agy_client.subprocess.Popen")
+@patch(
+    "tools.agy_client.authorize_agy_execution",
+    side_effect=AgyPolicyDeniedError("AGY_POLICY_DENIED: blocked"),
+)
+def test_run_agy_in_workdir_denied_before_popen(
+    mock_authorize: MagicMock, mock_popen: MagicMock
+) -> None:
+    """外部送信ポリシー拒否時は作業ツリー編集プロセスを起動しない。"""
+    with pytest.raises(AgyPolicyDeniedError, match="AGY_POLICY_DENIED"):
+        run_agy_in_workdir("instruction", cwd="/tmp/satellite", project_key="BLOCKED")
+
+    mock_authorize.assert_called_once()
+    mock_popen.assert_not_called()
