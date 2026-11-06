@@ -18,15 +18,14 @@
 本書は、実績ある OSS を統合して動作する「第二の脳（Second Brain OS）」の自律開発・ナレッジ管理スタックの基本設計を定義する。
 
 > **方針の改訂（Rev.5.3、Epic #116）**: Rev.5.2 までは「クラウド LLM API に依存せず、ローカル環境の Ollama、llama-server を使う」ことを基本前提としていた。この前提を次のとおり改める。
-> - **【現行】**: planner / coder / reviewer の LLM はローカル（Ollama、llama-server、Aider）で実行する。
-> - **【移行設計・未実装】**: JEV を除くローカルLLMの全使用箇所を、**agy（Antigravity CLI）へ置き換える**。agy はクラウド側のモデルを使うため、**ソースコード・diff・Issue 本文・ログが外部に送信される**ことが、従来の前提からの本質的な変更点である。外部送信の方針は Issue #124 で決定する（移行直後は全サテライトで許可された状態として動かす）。
-> - **据え置き**: JEV（Zero-Decode 判定）は logprobs を使うため agy へ置き換えられず、引き続きローカルの Ollama で動作する。したがって、**ローカル LLM 基盤（Ollama）は完全には廃止されない**。
-> - 動作を優先して移行し、安全性（外部送信・書き込み境界）、可用性、品質比較は後続課題として管理する（Issue #124〜#127）。ローカルLLM関連資産は、退避（Issue #118）してから退役する（Issue #128）。
-> - 置き換えの設計は SBOS-DD-003 §2.2、SBOS-DD-004、SBOS-DD-005 を正本とする。
+> - **【現行】**: JEV を除く planner / coder / reviewer / failure analyst の LLM 処理は、`config/models.yaml` の routes により **agy（Antigravity CLI）**へルーティングする。agy はクラウド側のモデルを使うため、ソースコード・diff・Issue 本文・ログが外部に送信されうる。外部送信は `backend_execution.agy_external_send` で認可する。
+> - **【現行】**: JEV（Zero-Decode 判定）は logprobs を使うため agy へ置き換えず、引き続きローカルの Ollama で動作する。したがって、Ollama は JEV 用の実行基盤として残る。
+> - Aider はruntimeから退役済みで、旧実装・設計資産は `legacy/local_llm/` と archive tag に保存する。現行runtimeでAiderへ自動fallbackまたはagyとの同時併用は行わない。
+> - agyの認証・外部送信許可・実モデル品質・実サテライトE2Eは、実機環境で別途確認する。置き換え後の設計は SBOS-DD-003 §2.2、SBOS-DD-004、SBOS-DD-005 を正本とする。
 
 本書は採用理由、コンポーネントの責務境界、全体アーキテクチャ、母艦・衛星の隔離方針、運用上の基本前提を扱う。関数の Interface、状態遷移、詳細な外部コマンド仕様、永続化形式、失敗時の振る舞いは [SBOS-DD-003](SBOS-DD-003_%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88%E6%9B%B8.md) および各詳細設計書（[DD-004](SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md), [DD-005](SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md), [DD-006](SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md), [DD-007](SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)）を正本とする。
 
-従来の自前ループや自作編集ロジックを、**LangGraph（状態管理・条件分岐グラフ）、OpenAI SDK を利用する OpenAI 互換 API 呼出（移行後は agy を追加）、Aider（コード編集。移行後は agy）、Ruff（一次静的解析）、Reviewdog（差分行アノテーション表示）**を中心とする構成へ置き換える。
+従来の自前ループや自作編集ロジックを、**LangGraph（状態管理・条件分岐グラフ）、agy（テキスト応答・コード編集）、Ruff（一次静的解析）、Reviewdog（差分行アノテーション表示）**を中心とする構成へ置き換えた。JEVはOllamaを直接利用する据え置きモジュールである。Aiderは旧資産としてのみ保持する。
 
 ### 1.2 構造的課題と OSS 統合による解決
 
@@ -43,14 +42,14 @@
 
 ## 2. コンポーネント置き換えマッピング
 
-| #    | 旧自前実装                           | 置き換え先                                        | 役割と統合方針                                                                                                                                                                           |
-| :--- | :----------------------------------- | :------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `orchestrator.py` の手書き状態ループ | **LangGraph**                                     | `GraphState` と条件エッジで実行・再試行・終了を制御する。                                                                                                                                |
-| 2    | `agent_client.py` の CLI 呼出        | **OpenAI SDK** ＋ **BackendExecutionCoordinator** | intent に応じて profile を解決し、Ollama または llama-server の OpenAI 互換 endpoint を使う。【移行設計】`agy` を3つ目の backend として追加し、`routes` の向き先を agy へ切り替える。    |
-| 3    | Coder Agent と `_merge_python_code`  | **Aider**（移行後は **agy**）                     | 【現行】`--no-auto-commits` を常に付与し、衛星ワーキングツリーだけを編集する。【移行設計】agy が衛星ワーキングツリーを直接編集する。エンジンは `routes` で選択し、Aider は退役まで残す。 |
-| 4    | LLM 任せの品質確認                   | **Ruff** ／ **pytest**                            | 自動修正を含む静的解析とテストを品質ゲートとして実行する。                                                                                                                               |
-| 5    | 自作レビュープロンプト               | **OpenAI SDK** ＋ **Reviewdog**                   | LLM レビューを構造化し、Reviewdog は補助的に表示する。                                                                                                                                   |
-| 6    | 未使用の `context_manager.py`        | `GraphState` とメタデータ                         | Graph 内の実行状態と、継続実行に必要な永続状態を分離する。                                                                                                                               |
+| #    | 旧自前実装                           | 置き換え先                                        | 役割と統合方針                                                                                                                                                                  |
+| :--- | :----------------------------------- | :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1    | `orchestrator.py` の手書き状態ループ | **LangGraph**                                     | `GraphState` と条件エッジで実行・再試行・終了を制御する。                                                                                                                       |
+| 2    | `agent_client.py` の CLI 呼出        | **BackendExecutionCoordinator** ＋ **agy client** | intent に応じて profile を解決し、agyのテキスト応答またはコード編集を実行する。JEVのみOllamaへ直接接続する。                                                                    |
+| 3    | Coder Agent と `_merge_python_code`  | **agy**                                           | agyが衛星ワーキングツリーを直接編集する。`edit_guard` が母艦・target_files外・秘密ファイルを保護し、stage、commit、push、PR作成は `done_node` が担当する。Aiderは旧資産である。 |
+| 4    | LLM 任せの品質確認                   | **Ruff** ／ **pytest**                            | 自動修正を含む静的解析とテストを品質ゲートとして実行する。                                                                                                                      |
+| 5    | 自作レビュープロンプト               | **OpenAI SDK** ＋ **Reviewdog**                   | LLM レビューを構造化し、Reviewdog は補助的に表示する。                                                                                                                          |
+| 6    | 未使用の `context_manager.py`        | `GraphState` とメタデータ                         | Graph 内の実行状態と、継続実行に必要な永続状態を分離する。                                                                                                                      |
 
 ---
 
@@ -65,7 +64,7 @@
   spec_draft_node（Planner による実装計画生成）
          │
          ▼
-  code_node（コード編集エンジン[現行 Aider／移行後 agy]による衛星コード編集）
+  code_node（agyによる衛星コード編集）
          │
          ▼
   lint_node（Ruff 高速静的解析・自動修正） ── 失敗時は code_node へ
@@ -83,7 +82,7 @@
 
 ### 3.1 LLM バックエンドの責務分離
 
-`tools/llm_client.py` は OpenAI 互換 API 経由で LLM を呼び出す（【移行設計】profile が agy のときは agy を呼ぶ）。`BackendExecutionCoordinator` は `config/models.yaml` で定義された intent ルートに従い、プロファイル解決と GPU リース管理を行う（【移行設計】agy は GPU を使わないためリース対象外）。具象的なルーティング状態やバックエンド制限事項は DD-003 §2.2 と DD-005 を正本として一元管理する。（Rev.5.3 で `models.json` から訂正。loader が読むのは `models.yaml` のみ）
+`tools/llm_client.py` は role・intent を解決し、agyのテキスト応答を既存の返却形式へ変換する。`BackendExecutionCoordinator` は `config/models.yaml` の intent route に従い、agy backendをGPUリースなしで実行する。JEVはこの経路を通らずOllamaへ直接接続する。具象的なルーティング状態やバックエンド制限事項は DD-003 §2.2 と DD-005 を正本として一元管理する。（loader が読むのは `models.yaml` のみ）
 
 ---
 
@@ -91,7 +90,7 @@
 
 1. **`.gitignore` による完全遮断:** 母艦の `.gitignore` により、衛星内の差分および Git 履歴は母艦 Git から完全に隔離する。中央台帳は `metadata/.project-registry.json` に配置する。
 2. **メタデータの母艦管理:** `project.json`、`tasks.md`、Issue、`state.json`、ロックは `metadata/projects/<PROJECT_KEY>/` に置き、衛星ソースツリーを汚染しない。
-3. **コード編集エンジンのコミット制御:** 【現行】Aider にはコミット自動化を抑止するフラグ（`--no-auto-commits`）を指定し、コード編集のみを許可する。【移行設計】agy にも commit / push をさせず、`target_files` 外の変更は編集後に戻す。stage、commit、push、PR 作成は `done_node` が担当する。
+3. **コード編集エンジンのコミット制御:** agyにはcommit / pushをさせず、コード編集だけを許可する。stage、commit、push、PR作成は `done_node` が担当する。
 4. **人間承認を残す PR 運用:** 成功時に作業ブランチから PR を作成する。運用者は成果物を確認し、マージ可否を判断する。PR 失敗時には差分・ブランチを保持し停止する。
 
 ---
@@ -104,8 +103,9 @@
 
 ### 5.1 運用インターフェースと将来構想
 
-- **標準エントリポイント:** CLI（`orchestrator_graph.py`）が自律グラフ実行および優先度表示の役割を担う。
-- **補助ラッパー:** `run_task.py` は衛星リポジトリの事前クリーンアップを伴う実行ラッパーとして機能する。
+- **標準エントリポイント:** `uv run python tools/orchestrator_graph.py orchestrate` で実行計画を表示し、`uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> --project-key <PROJECT_KEY> --fresh` でLangGraphを起動する。
+- **補助ラッパー:** `uv run python tools/run_task.py <ISSUE_ID> --fresh` は衛星リポジトリのクリーンアップ後にexecuteを起動する。夜間運用は `uv run python tools/nightly_task_worker.py --config config/nightly_worker.toml` を使う。
+- **agy起動:** `tools/agy_client.py` が `agy --dangerously-skip-permissions -p <prompt>` を非対話subprocessとして起動する。実行ファイル解決、timeout、終了コード分類はagy clientが担当する。
 - **将来構想:** 自動優先度計算バッチ、定期スクラミング、外部通知連携等は現行自律実行基盤の枠外とし、将来拡張機能として位置づける。
 
 ---

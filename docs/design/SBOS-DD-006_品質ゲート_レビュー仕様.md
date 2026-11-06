@@ -18,10 +18,10 @@
 
 ### 1.0 Epic #116（agy 移行）との関係
 
-* **LLM による判定（計画策定 `spec_draft`、テスト助言 `test_feedback`、レビュー `code_review`、敗因分析 `failure_analysis`）**: 実行基盤が Ollama から agy へ移行完了（PR #135・#137）。呼び出し側のシグネチャ・返り値・状態遷移は不変。詳細は SBOS-DD-005 §4.1。
+* **LLMによる判定（計画策定 `spec_draft`、テスト助言 `test_feedback`、レビュー `code_review`、敗因分析 `failure_analysis`）**: 実行基盤はagyである。呼び出し側のシグネチャ・返り値・状態遷移は不変。詳細はSBOS-DD-005 §4.1。
 * **JEV（Defense 0 と Defense 3.1）は据え置き**: JEV は本書の Backend 設定を経由せず、Ollama（既定 `qwen2.5:0.5b`）へ直接接続する（SBOS-DD-005 §1.1）。agy への移行後も JEV を使う限り、**Ollama の実行環境が必要**である。JEV が利用できない場合は、従来どおり判定をバイパスする（フェイルオープン）。
 * **品質ゲートの順序・上限（`max_round` など）は変えない。** Ruff と pytest は LLM に依存しない。
-* **用語**: 本書中の「Aider」は、コード編集エンジン全般（現行は Aider、移行後は agy）を指す箇所がある。状態フィールド名 `aider_message` は、グラフ契約の維持のため名称を変更しない（SBOS-DD-004 §5.1）。
+* **用語**: 状態フィールド名 `aider_message` は、グラフ契約の維持のため名称を変更しない。現行のコード編集エンジンはagyである。
 
 ### 1.1 計画適合性検問ゲート (`spec_draft_node` / Defense 0: JEV Plan Conformance)
 
@@ -72,7 +72,7 @@
   * severityが `structural`、`major`、`error` 等の重大な指摘、または対象外ファイルへの指摘がある場合は、その内容をコード編集エンジンへの次回のフィードバック指示（`aider_message`）に優先的に追加する。
   * 修正要求（`changes_requested`）は最大3回まで `retry_code` でコード編集エンジンに差し戻される。
 * **応答の契約**: `review_node` は `expect_json=True` で呼び出し、応答の `verdict` が `LGTM` または `changes_requested` でない場合は `FAILED_SYSTEM`（`SYSTEM_ERROR`）として停止する。
-* **agy 経路の留意点【移行設計】**: 移行後は agy がレビューを行う。agy が JSON の指示を守らない場合、JSON 抽出のフォールバックは `changes_requested` を返すため、**差し戻しが繰り返されうる**。agy の JSON 遵守率は Issue #127 で確認し、合格基準（100%）を満たすまで、実サテライトでの運用を始めない。JSON のみを出力させる指示は `call_llm` が末尾に追加する（SBOS-DD-005 §4.1）。
+* **agy経路の留意点**: agyがJSONの指示を守らない場合、JSON抽出のフォールバックは `changes_requested` を返すため、差し戻しが繰り返されうる。JSON遵守率は実機試験（L3）で確認する。
 
 ### 3.1.1 JEV レビュー合否二次検問ゲート (`review_node` / Defense 3.1: JEV Review Conformance)
 
