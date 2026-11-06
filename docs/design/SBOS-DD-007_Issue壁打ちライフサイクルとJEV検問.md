@@ -1,15 +1,18 @@
 ---
 title: "Issue 壁打ちライフサイクルと JEV スクリーニング仕様書"
 document_type: "detailed_design"
-version: "1.2.0"
+version: "1.3.0"
 created_at: "2026-09-25"
-updated_at: "2026-11-04"
+updated_at: "2026-11-06"
 author: "アーキテクチャチーム / xzyozi"
 purpose: "GitHub Issues を入力とする自律開発パイプラインの前段に位置する壁打ち・構想フェーズの状態管理ルール、JEVによるスクリーニング仕様、およびdocs/issues仕様書のライフサイクル自動同期を定義する"
 related_documents:
   - "docs/design/SBOS-BD-002_基本設計書.md"
   - "docs/design/SBOS-DD-003_詳細設計書.md"
   - "metadata/templates/issue_template.md"
+related_issues:
+  - "#70"
+  - "#116"
 ---
 
 # 詳細設計書（Issue 壁打ちライフサイクルと JEV スクリーニング仕様）
@@ -19,8 +22,8 @@ related_documents:
 | :------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号       | SBOS-DD-007                                                                                                                                                                                                                  |
 | ドキュメント名 | Issue 壁打ちライフサイクルと JEV スクリーニング仕様書                                                                                                                                                                        |
-| 版数           | Rev.1.2 (Epic #116 agy 移行との関係・JEV 据え置きの追記)                                                                                                                                                                     |
-| 改訂日         | 2026-11-04                                                                                                                                                                                                                   |
+| 版数           | Rev.1.3 (Issue #70 仕様書自動同期ライフサイクルの実装完了確認と検証エビデンス反映)                                                                                                           |
+| 改訂日         | 2026-11-06                                                                                                                                                                                                                   |
 | 作成日         | 2026-09-25                                                                                                                                                                                                                   |
 | 作成者         | アーキテクチャチーム / xzyozi                                                                                                                                                                                                |
 | 対象           | `tools/screen_issues.py`, `tools/close_stale_issues.py`, `tools/score_issues.py`, `tools/promote_issue.py`, `tools/issue_spec_manager.py`, `tools/periodic_review_runner.py`, `.github/workflows/cleanup-stale-ideation.yml` |
@@ -181,6 +184,8 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
 | :------ | :--------- | :------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Rev.1.0 | 2026-09-25 | アーキテクチャチーム | 新規作成（初版制定: stage ラベル状態マシン、JEV スクリーニング、放置 Issue 自動クローズ仕様）                                                                                                                                       |
 | Rev.1.1 | 2026-10-02 | xzyozi               | PM-060 追記: docs/issues/<TASK_ID>.md 自動同期・自己修復ライフサイクルの新設。3.9節/3.10節の確定タスク・Target Files・進捗管理の責務分離（SSOT）と仕様整合性の明確化、YAML Frontmatter および改訂履歴の追記（ドキュメント規約準拠） |
+| Rev.1.2 | 2026-11-04 | xzyozi               | Epic #116 (agy移行) との関係、JEVスクリーニング据え置き方針を追記 (3.5節)                                                                                                                                                          |
+| Rev.1.3 | 2026-11-06 | xzyozi               | Issue #70 実装完了確認: `issue_spec_manager.py`、`promote_issue.py`、`periodic_review_runner.py`、`orchestrator_graph.py` の動作検証・テスト全件合格(23件)および関連Issueを反映                                                     |
 
 
 
