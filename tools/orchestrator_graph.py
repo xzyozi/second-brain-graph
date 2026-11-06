@@ -1928,6 +1928,7 @@ def execute_issue(
             # 作業ツリーの事前チェック (Resumeモード時は自動コミット保存して継続、それ以外は拒否)
             if is_in_git_workspace(cwd):
                 try:
+                    head_branch = f"{work_branch_prefix}{issue_id}"
                     init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
                     dirty_lines = [
                         line
@@ -1936,8 +1937,34 @@ def execute_issue(
                     ]
                     if init_status.returncode != 0 or dirty_lines:
                         if is_resume_mode:
+                            # Issue #97: 作業ブランチ以外のブランチ（develop 等）で dirty な場合、
+                            # 意図しないブランチに WIP コミットが作られるのを防ぐため即時中断して人に返す。
+                            cb_res = run_cmd(
+                                ["git", "branch", "--show-current"], cwd=cwd, timeout=30
+                            )
+                            current_branch = cb_res.stdout.strip() if cb_res.returncode == 0 else ""
+                            if current_branch != head_branch:
+                                branch_label = (
+                                    current_branch if current_branch else "<detached HEAD>"
+                                )
+                                err_msg = (
+                                    f"Resume aborted: Working tree is dirty on branch '{branch_label}', "
+                                    f"which does not match the expected work branch '{head_branch}'. "
+                                    f"Please commit/stash changes or switch to '{head_branch}' before resuming."
+                                )
+                                logger.error(err_msg)
+                                _fail_system(
+                                    project_key,
+                                    issue_id,
+                                    err_msg,
+                                    cwd=cwd,
+                                    metadata_dir=metadata_dir,
+                                    history_file=history_file,
+                                )
+                                return
+
                             logger.info(
-                                f"Resume Mode: Auto-committing uncommitted changes before resuming in {cwd}..."
+                                f"Resume Mode: Auto-committing uncommitted changes before resuming on work branch '{head_branch}' in {cwd}..."
                             )
                             wip_error = commit_wip_changes(cwd, issue_id)
                             if wip_error is not None:
