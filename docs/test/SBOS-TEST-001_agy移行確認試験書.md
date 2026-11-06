@@ -199,7 +199,7 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 
 | ID     | 試験              | 合格条件                                          | 結果 |
 | :----- | :---------------- | :------------------------------------------------ | :--- |
-| L4-001 | 小規模Issue完走   | `spec_draft → code → lint → test → review → done` | 合格 (`TFG-0005`, 5m40s) |
+| L4-001 | 小規模Issue完走   | `spec_draft → code → lint → test → review → done` | 合格 (`TFG-0005`, 5m40s) [証跡](evidence/agy/20261106-015825/L4-001/README.md) |
 | L4-002 | planner timeout   | retry後に正常復帰または安全停止                   | TODO |
 | L4-003 | reviewer JSON不正 | changes_requestedへ安全側遷移                     | TODO |
 | L4-004 | code編集外変更    | edit_guardが境界外変更を処理                      | TODO |
@@ -362,6 +362,12 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 - 完全なコマンドラインに含まれる秘密値
 - 秘密情報を含むソースコード・プロンプト全文
 - ユーザーの認証情報や個人情報
+
+### 4.1 登録済み実機証跡一覧
+
+| ID | 試験名 | 実行日時 | 結果 | 証跡リンク |
+| :--- | :--- | :--- | :--- | :--- |
+| L4-001 | サンドボックスE2E (TFG-0005) | 2026-11-06 10:58 JST | 合格 (5m40s) | [README](evidence/agy/20261106-015825/L4-001/README.md) / [JSON](evidence/agy/20261106-015825/L4-001/evidence.json) |
 
 ---
 
