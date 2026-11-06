@@ -1,14 +1,14 @@
 # 運用詳細設計書（定常運用・ランブック・トラブルシューティング）
-**Second Brain OS 日次サイクル・LangGraph エントリポイント・障害対応ランブック**
+**Second Brain OS agy実行基盤・LangGraphエントリポイント・障害対応ランブック**
 
-| 項目 | 内容 |
-| :--- | :--- |
-| 文書番号 | SBOS-OP-001 |
-| 版数     | Rev.4.7（詳細設計書分離に伴うマップおよびステータス対応反映版）|
-| 改訂日   | 2026年8月9日 |
-| 作成日 | 2026年7月27日 |
-| 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
+| 項目     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文書番号 | SBOS-OP-001                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 版数     | Rev.4.8（Epic #116: agy 移行に伴う障害対応・ロールバック手順の追記）                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 改訂日   | 2026年11月4日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 作成日   | 2026年7月27日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 
 ---
 
@@ -61,10 +61,10 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    uv run python tools/orchestrator_graph.py execute --issue-id EC-012
    ```
    - ① `plan_node` (LiteLLM / Planner による要件指示書生成)
-   - ② `code_node` (Aider による衛星コード編集 `--no-auto-commits`)
-   - ③ `lint_node` (Ruff 高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰)
-   - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
-   - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
+   - ② `code_node`（agyによる衛星コード編集。edit_guard適用）
+   - ③ `lint_node`（Ruff高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰）
+   - ④ `test_node`（pytest実行、失敗時はエラーログを蓄積し `code_node` へ復帰）
+   - ⑤ `review_node`（agy Reviewer監査、JEV二次検問、Reviewdogアノテーション表示）
    - ⑥ `done_node` (LGTMは完了ではなく遷移条件。PR作成を行い、成功時は `state.json` を `COMPLETED` に、失敗時は `PR_FAILED` に更新。`execution_history.json` へ成果記録、ロック解放)
    
    > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
@@ -91,18 +91,19 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - 対象 Issue の説明文が長すぎる場合は、タスクを分割して指示文を簡潔にする。
 
 ### ケース2: テスト/静的解析の継続失敗 (`max_round` 到達)
-- **症状:** Aider による修復が `max_round`（デフォルト3回）連続で失敗し、`escalate_node` に遷移して `final_status: "FAILED_B7"` として記録される。
+- **症状:** agyによる修復が `max_round`（デフォルト3回）連続で失敗し、`escalate_node` に遷移して `final_status: "FAILED_B7"` として記録される。
 - **対処:**
   - `orchestrator_graph.py` の実行ログから直近の pytest / Ruff エラーログを確認。
   - テストコードや型定義の直接編集が必要な場合は、人間が `projects/<name>/` を編集する。
 
-### ケース3: Aider CLI / LiteLLM 推論のタイムアウト
-- **症状:** `AiderRunError: Aider実行がタイムアウトしました (timeout=600)` や LiteLLM タイムアウトが発生。
+### ケース3: agyコード編集・LLM推論のタイムアウト
+- **症状:** `AgyRunError`（メッセージに `timed out` を含む）またはagyテキスト応答のタイムアウトが発生する。
 - **対処:**
   - Issue実行全体を通して再試行は1回のみとする。
   - `llm_timeout_count == 0` の場合: `llm_timeout_count` を 1 にして同一ノードを自動再試行する。
   - `llm_timeout_count == 1` の場合: 直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
-  - 根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
+  - 【現行】根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
+  - agy経路では VRAM は関係しない。agy の応答遅延・ネットワーク・クォータを確認する。内側のタイムアウト（`profile.timeout`、既定 1200 秒）は外側の worker タイムアウト（`nightly_worker.toml` の `timeout_seconds`、1800 秒）より短く保つ。
 
 ### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
 - **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止し、ロックが解放された。
@@ -117,8 +118,20 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行記録は時系列で監査・追跡する。
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
-  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。
+  2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。連続 `FAILED_B7` で自動 Resume が拒否された場合（`consecutive_b7` が 2 以上）は、原因を修復したうえで `--resume`（継続）または `--fresh`（作り直し）を明示して再実行する。
   3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
+
+### ケース6: agy経路の障害と、旧資産からの復旧
+> 本ケースはagy routesが現行の環境に適用される。Aiderへ戻す場合は、単純なroute変更ではなく、退避資産の復元を伴う別作業になる。
+
+- **症状:** 次のいずれかで、複数の Issue が `FAILED_SYSTEM`（`SYSTEM_ERROR`）で連続して失敗する。
+  - agy の認証切れ、クォータ・レート制限、ネットワーク障害、`agy` 実行ファイルの未導入（PATH 解決失敗）。
+  - agyの認証切れ、クォータ・レート制限、ネットワーク障害、`agy` 実行ファイルの未導入（PATH解決失敗）。これらは `AGY_AUTH` / `AGY_QUOTA` 等に分類される。
+- **確認:**
+  1. 実行ログで、失敗が `AgyRunError`（編集）か、`call_llm` 経路の `AgyError`（計画・レビュー等）かを確認する。
+  2. 手動で `agy` を単独起動し、認証とネットワークが有効か確認する。認証情報の中身は読まない。
+  3. `FAILED_SYSTEM` は `consecutive_b7` を増やさず、自動 Resume の対象にもならない（DD-003 §5.2）。復旧後に `--resume` または `--fresh` を明示して再実行する。
+- **復旧:** Agy CLI・認証・ネットワーク・quotaを確認し、復旧後に `--resume` または `--fresh` を明示して再実行する。自動fallbackは行わない。Aiderへ戻す場合は `legacy/local_llm/` または archive tag から資産を復元する。
 
 ---
 
@@ -126,10 +139,12 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 
 ### 4.1 新モデルベンチマーク評価プロセス
 1. `uv run python tools/orchestrator_graph.py` によるダミー指示書テスト。
-2. Aider によるリファクタリングマージテスト。
-3. Reviewer による監査厳密性テスト。
+2. agy実行環境でのサンドボックス実行・JSON契約確認。
+3. Reviewerによる監査厳密性テスト。
 
-### 4.2 ロールバック（切り戻し）手順
+### 4.2 ロールバック（切り戻し）手順【現行・ローカルモデル更新時】
+> agy 経路から旧経路へ戻す手順は、§3 ケース6 を参照すること。以下は、ローカルモデルを更新して不安定だった場合の手順である。
+
 ```bash
 # 1. tools/llm_client.py のモデル指定を安定版へ戻す
 git checkout ~/second-brain/tools/llm_client.py

@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from tools.config_loader import (
+    AgyExternalSendConfig,
     BackendExecutionConfig,
     ProfileConfig,
     get_backend_execution_config,
@@ -164,7 +165,7 @@ def test_load_model_config_loads_yaml() -> None:
     from tools.config_loader import load_model_config
 
     config = load_model_config()
-    assert config.aider.no_auto_commits is True
+    assert config.aider is None
     assert "planner" in config.models
     assert "coder" in config.models
     assert "reviewer" in config.models
@@ -180,6 +181,9 @@ def test_load_prompt_config_loads_yaml() -> None:
     assert len(prompt_config.coder.scope_restriction_template.strip()) > 0
     assert len(prompt_config.advisor.test_feedback_system.strip()) > 0
     assert len(prompt_config.reviewer.code_review_system.strip()) > 0
+    assert len(prompt_config.reviewer.failure_analysis_system.strip()) > 0
+    assert len(prompt_config.coder.agy_edit_rules.strip()) > 0
+    assert prompt_config.version == "1.0"
     assert "[TEST INTEGRITY AUDIT" in prompt_config.reviewer.code_review_system
 
 
@@ -191,4 +195,98 @@ def test_get_config_returns_unified_app_config() -> None:
     assert isinstance(app_config, AppConfig)
     assert app_config.models is not None
     assert app_config.prompt is not None
-    assert app_config.models.aider.timeout == 1200
+    assert "spec_draft" in app_config.models.backend_execution.routes
+
+
+# ---------------------------------------------------------------------------
+# agy バックエンド (#120)
+# ---------------------------------------------------------------------------
+
+
+def test_profile_agy_is_valid_without_endpoint() -> None:
+    """agy profile は openai_endpoint 等なしで有効となることを確認する。"""
+    profile = ProfileConfig(backend="agy", model="agy-default", timeout=1200)
+    assert profile.backend == "agy"
+    assert profile.openai_endpoint is None
+    assert profile.timeout == 1200
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("openai_endpoint", "http://localhost:8080/v1"),
+        ("port", 8080),
+        ("model_path", "./models/test.gguf"),
+        ("ollama_management_endpoint", "http://localhost:11434"),
+    ],
+)
+def test_profile_agy_rejects_local_backend_fields(field: str, value: object) -> None:
+    """agy で ollama/llama_server 用フィールドを指定するとエラーとなることを確認する。"""
+    kwargs = {field: value}
+    with pytest.raises(ValidationError, match=field):
+        ProfileConfig(backend="agy", model="agy-default", **kwargs)  # type: ignore[arg-type]
+
+
+def test_profile_timeout_rejects_zero() -> None:
+    """timeout が 0 の場合に検証エラーとなることを確認する。"""
+    with pytest.raises(ValidationError):
+        ProfileConfig(backend="agy", model="agy-default", timeout=0)
+
+
+def test_profile_ollama_requires_openai_endpoint() -> None:
+    """ollama で openai_endpoint を省略すると検証エラーとなることを確認する。"""
+    with pytest.raises(ValidationError, match="openai_endpoint must be specified"):
+        ProfileConfig(
+            backend="ollama",
+            model="test-model",
+            ollama_management_endpoint="http://localhost:11434",
+        )
+
+
+def test_profile_llama_server_requires_openai_endpoint() -> None:
+    """llama_server で openai_endpoint を省略すると検証エラーとなることを確認する。"""
+    with pytest.raises(ValidationError, match="openai_endpoint must be specified"):
+        ProfileConfig(
+            backend="llama_server",
+            model="test-model",
+            port=8080,
+            model_path="./models/test.gguf",
+        )
+
+
+def test_backend_config_allows_route_to_agy_profile() -> None:
+    """routes が agy profile を指していても BackendExecutionConfig として有効であることを確認する。"""
+    config = BackendExecutionConfig(
+        mode="exclusive",
+        fallback="disabled",
+        routes={"code_edit": "agy_default"},
+        profiles={"agy_default": ProfileConfig(backend="agy", model="agy-default")},
+    )
+    assert config.routes["code_edit"] == "agy_default"
+
+
+# ---------------------------------------------------------------------------
+# AgyExternalSendConfig (#124)
+# ---------------------------------------------------------------------------
+def test_agy_external_send_defaults_to_compatibility_mode() -> None:
+    """既存routesを止めないため、外部送信ポリシーの既定値はallow_allであることを確認する。"""
+    config = AgyExternalSendConfig()
+    assert config.mode == "allow_all"
+    assert config.allowed_project_keys == []
+    assert config.reject_secret_files is False
+
+
+def test_agy_external_send_allowlist_is_validated() -> None:
+    """allowlistモードとproject key一覧を検証できることを確認する。"""
+    config = AgyExternalSendConfig(
+        mode="allowlist", allowed_project_keys=["TFG", "CW"], reject_secret_files=True
+    )
+    assert config.mode == "allowlist"
+    assert config.allowed_project_keys == ["TFG", "CW"]
+    assert config.reject_secret_files is True
+
+
+def test_agy_external_send_rejects_unknown_mode() -> None:
+    """未知の外部送信モードをfail-closedで拒否することを確認する。"""
+    with pytest.raises(ValidationError):
+        AgyExternalSendConfig(mode="unknown")  # type: ignore[arg-type]

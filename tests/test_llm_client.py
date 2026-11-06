@@ -196,3 +196,102 @@ def test_call_llm_sanitizes_prompts(
     assert "sk-" + "1234567890abcdef1234567890abcdef" not in sent_user
     assert "pass1234" not in sent_user
     assert "[REDACTED]@" in sent_user
+
+
+# ---------------------------------------------------------------------------
+# agy 経路 (profile.backend == "agy")
+# 実 agy バイナリは使用せず、tools.llm_client.run_agy_text をモックして検証する。
+# ---------------------------------------------------------------------------
+def _make_agy_coordinator(dummy_profile: ProfileConfig) -> MagicMock:
+    coordinator = MagicMock()
+    coordinator.execute.side_effect = lambda intent, req: req["action"](dummy_profile)
+    return coordinator
+
+
+@patch("tools.llm_client.OpenAI")
+@patch("tools.llm_client.run_agy_text")
+@patch("tools.llm_client.get_coordinator")
+def test_call_llm_uses_agy_when_profile_backend_is_agy(
+    mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock, mock_openai_class: MagicMock
+) -> None:
+    """profile.backend が agy の場合、OpenAI を呼ばず run_agy_text を呼ぶことを検証する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default", timeout=1200)
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_text.return_value = "plain text response"
+
+    result = call_llm("planner", "system prompt", "user text", intent="spec_draft")
+
+    assert result == {"raw": "plain text response"}
+    mock_openai_class.assert_not_called()
+    mock_run_agy_text.assert_called_once()
+    prompt = mock_run_agy_text.call_args.args[0]
+    assert "[SYSTEM]" in prompt and "[USER]" in prompt
+    assert "system prompt" in prompt and "user text" in prompt
+    assert mock_run_agy_text.call_args.kwargs["timeout"] == 1200
+
+
+@patch("tools.llm_client.run_agy_text")
+@patch("tools.llm_client.get_coordinator")
+def test_call_llm_agy_adds_json_only_instruction_when_expect_json(
+    mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
+) -> None:
+    """expect_json=True の場合のみ、JSON 単体出力を要求する指示を末尾に追加することを検証する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default")
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_text.return_value = '{"verdict": "LGTM", "comments": []}'
+
+    result = call_llm("reviewer", "system", "user", expect_json=True, intent="code_review")
+
+    assert result == {"verdict": "LGTM", "comments": []}
+    prompt = mock_run_agy_text.call_args.args[0]
+    assert "[OUTPUT FORMAT]" in prompt
+    assert "JSON object" in prompt
+
+
+@patch("tools.llm_client.run_agy_text")
+@patch("tools.llm_client.get_coordinator")
+def test_call_llm_agy_omits_json_instruction_when_expect_json_false(
+    mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
+) -> None:
+    """expect_json=False の場合は JSON 出力の指示を追加しないことを検証する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default")
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_text.return_value = "free text"
+
+    call_llm("planner", "system", "user", expect_json=False, intent="spec_draft")
+
+    prompt = mock_run_agy_text.call_args.args[0]
+    assert "[OUTPUT FORMAT]" not in prompt
+
+
+@patch("tools.llm_client.run_agy_text")
+@patch("tools.llm_client.get_coordinator")
+def test_call_llm_agy_sanitizes_prompts(
+    mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
+) -> None:
+    """Issue #20: agy 経路でも送信直前のプロンプト内機密情報が自動マスクされることを確認する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default")
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_text.return_value = "ok"
+
+    secret_sys = "System prompt with password='secret_master_password'"
+    call_llm("planner", secret_sys, "user text", intent="spec_draft")
+
+    prompt = mock_run_agy_text.call_args.args[0]
+    assert "secret_master_password" not in prompt
+    assert "password='[REDACTED]'" in prompt
+
+
+@patch("tools.llm_client.run_agy_text")
+@patch("tools.llm_client.get_coordinator")
+def test_call_llm_agy_falls_back_to_call_timeout_when_profile_timeout_unset(
+    mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
+) -> None:
+    """profile.timeout が未設定の場合、call_llm の timeout 引数を使うことを検証する。"""
+    dummy_profile = ProfileConfig(backend="agy", model="agy-default")  # timeout は既定で None
+    mock_get_coordinator.return_value = _make_agy_coordinator(dummy_profile)
+    mock_run_agy_text.return_value = "ok"
+
+    call_llm("planner", "sys", "user", intent="spec_draft", timeout=42)
+
+    assert mock_run_agy_text.call_args.kwargs["timeout"] == 42

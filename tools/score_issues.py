@@ -85,6 +85,7 @@ def parse_tasks_md(tasks_path: str, project_key: str) -> List[Dict[str, Any]]:
                     "added": meta.get("added"),
                     "estimate": meta.get("estimate"),
                     "blockedby": blockedby_list,
+                    "stage": meta.get("stage"),
                 }
             )
 
@@ -202,6 +203,14 @@ def process_scoring(root_dir: str = ".") -> List[Dict[str, Any]]:
         for issue in issues:
             # Skip completed issues
             if issue["completed"]:
+                continue
+
+            # Skip ideation / draft issues (tasks must be in ready stage)
+            stage = issue.get("stage")
+            if stage and stage.lower() in ("ideation", "stage:ideation", "draft"):
+                logger.info(
+                    f"[SKIPPED] Issue {issue['id']} is skipped because it is in '{stage}' stage."
+                )
                 continue
 
             # PM-039: Check for incomplete blockers

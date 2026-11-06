@@ -144,3 +144,42 @@ def test_process_scoring_prioritizes_satellite_tasks_md(tmp_path: pytest.TempPat
     # サテライト側の tasks.md が読まれているため TEST-0002 のみが候補になり、TEST-0001 は含まれない
     assert "TEST-0002" in candidate_ids
     assert "TEST-0001" not in candidate_ids
+
+
+def test_process_scoring_skips_ideation_tasks(tmp_path: pytest.TempPathFactory) -> None:
+    """stage:ideation メタデータが付いたタスクが除外されることを確認する。"""
+    root_dir = str(tmp_path)
+
+    meta_dir = os.path.join(root_dir, "metadata", "projects", "TEST")
+    os.makedirs(meta_dir, exist_ok=True)
+
+    tasks_content = (
+        "# Tasks\n"
+        "- [ ] [TEST-0001] Ready task <!-- priority:high stage:ready -->\n"
+        "- [ ] [TEST-0002] Ideation task <!-- priority:high stage:ideation -->\n"
+        "- [ ] [TEST-0003] Draft task <!-- priority:critical stage:draft -->\n"
+    )
+    with open(os.path.join(meta_dir, "tasks.md"), "w", encoding="utf-8") as f:
+        f.write(tasks_content)
+
+    reg_dir = os.path.join(root_dir, "metadata")
+    os.makedirs(reg_dir, exist_ok=True)
+    registry_data = {
+        "version": "1.0",
+        "projects": {
+            "TEST": {
+                "name": "Test Project",
+                "dir": "projects/test",
+                "meta": "metadata/projects/TEST",
+            }
+        },
+    }
+    with open(os.path.join(reg_dir, ".project-registry.json"), "w", encoding="utf-8") as f:
+        json.dump(registry_data, f)
+
+    candidates = process_scoring(root_dir=root_dir)
+    candidate_ids = [c["id"] for c in candidates]
+
+    assert "TEST-0001" in candidate_ids
+    assert "TEST-0002" not in candidate_ids
+    assert "TEST-0003" not in candidate_ids

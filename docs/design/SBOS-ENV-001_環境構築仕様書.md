@@ -1,49 +1,59 @@
 # 環境構築仕様書（システム前提要件・マルチモデル配置・セットアップガイド）
-**ローカルLLM × LangGraph × LiteLLM × Aider × Reviewdog フルスタック構築仕様**
+**agy（現行）／JEV用Ollama（据え置き）× LangGraph × Reviewdog 実行環境仕様**
 
-| 項目 | 内容 |
-| :--- | :--- |
-| 文書番号 | SBOS-ENV-001 |
-| 版数 | Rev.4.7（詳細設計書分離に伴うマップ追記版） |
-| 改訂日 | 2026年8月9日 |
-| 作成日 | 2026年7月27日 |
-| 対象読者 | インフラエンジニア / システム管理者 / 開発環境構築担当エンジニア |
-| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](file:///c:/Users/xzyoi/Desktop/python/second-brain-graph/docs/design/SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
+| 項目     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文書番号 | SBOS-ENV-001                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 版数     | Rev.4.9（agy現行runtime、Aider退役、実機未確認範囲を反映）                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 改訂日   | 2026年11月4日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 作成日   | 2026年7月27日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 対象読者 | インフラエンジニア / システム管理者 / 開発環境構築担当エンジニア                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
 
 ---
 
 ## 1. ハードウェア・システム前提要件
 
-本システムは完全オフライン環境およびローカルマシンの計算リソースで稼働するため、以下のハードウェア・ソフトウェア要件を厳格に満たす必要がある。
+> **現行構成**: planner / coder / reviewer はagyで動作する。agy経路ではGPUは不要だが、インターネット接続とagy認証が必要である。
+> - JEVは据え置きのため、Ollamaと軽量モデル（既定 `qwen2.5:0.5b`）は必要である。
+> - Aider、llama-server、旧local profileはruntimeから退役し、旧資産は `legacy/local_llm/` と archive tag に保存する。
 
-### 1.1 推奨ハードウェア要件（GPU VRAM 割り当て）
+本システムは、現行はローカルマシンの計算リソースで稼働する。以下のハードウェア・ソフトウェア要件を満たす必要がある。
+
+### 1.1 推奨ハードウェア要件（GPU VRAM 割り当て）【現行】
 ローカルLLMを並列あるいは高速ロードして稼働させるため、特に NVIDIA GPU または Apple Silicon (Mシリーズ) Unified Memory の VRAM 容量が極めて重要となる。
 
-| パターン | システム構成・GPUスペック | 稼働可能なモデル構成 | 想定パフォーマンス |
-| :--- | :--- | :--- | :--- |
-| **推奨環境** | **NVIDIA RTX 4090 (24GB VRAM)**<br>または Apple M3/M4 Max (64GB RAM) | • 大型・高精度モデルを各役割 (`reviewer`, `planner`, `coder`, `aider`) に配備 | 大規模モデルをVRAMに常駐させつつ、高速応答性と高品質な設計・監査を両立。 |
-| **標準環境** | **NVIDIA RTX 4080 / 3090 (16GB VRAM)**<br>または Apple M2/M3 Pro (32GB RAM) | • 中型標準モデルを各役割に配備 | 標準的なローカルモデル構成で全タスクの実用的かつ安定した自律処理が可能。 |
-| **最小要件** | **NVIDIA RTX 3060 / 4060 (8GB〜12GB VRAM)**<br>または Apple M1/M2 (16GB RAM) | • 全エージェント共通で軽量モデルを配備 | 軽量モデル単体による運用。高度なレビューや複雑な要件定義ではリトライ回数が増加する可能性あり。 |
+| パターン     | システム構成・GPUスペック                                                    | 稼働可能なモデル構成                                                          | 想定パフォーマンス                                                                             |
+| :----------- | :--------------------------------------------------------------------------- | :---------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------- |
+| **推奨環境** | **NVIDIA RTX 4090 (24GB VRAM)**<br>または Apple M3/M4 Max (64GB RAM)         | • 大型・高精度モデルを各役割 (`reviewer`, `planner`, `coder`, `aider`) に配備 | 大規模モデルをVRAMに常駐させつつ、高速応答性と高品質な設計・監査を両立。                       |
+| **標準環境** | **NVIDIA RTX 4080 / 3090 (16GB VRAM)**<br>または Apple M2/M3 Pro (32GB RAM)  | • 中型標準モデルを各役割に配備                                                | 標準的なローカルモデル構成で全タスクの実用的かつ安定した自律処理が可能。                       |
+| **最小要件** | **NVIDIA RTX 3060 / 4060 (8GB〜12GB VRAM)**<br>または Apple M1/M2 (16GB RAM) | • 全エージェント共通で軽量モデルを配備                                        | 軽量モデル単体による運用。高度なレビューや複雑な要件定義ではリトライ回数が増加する可能性あり。 |
 
 ### 1.2 必須ソフトウェアおよびミドルウェア
 - **OS:** Linux (Ubuntu 22.04 LTS+ / Debian 12+), macOS (Sonoma 14+), または Windows 11 (Windows Native / WSL2 両対応)
 - **Python:** Version 3.10 以上 (推奨: Python 3.11 または 3.12)
 - **パッケージマネージャー:** `uv` (Astral製 - 依存関係の確定的かつ高速な解決のために必須)
 - **Git:** Version 2.30 以上
-- **Ollama:** Version 0.3.0 以上 (OpenAI 互換 REST API `/v1` エンドポイントが `localhost:11434` で有効化されていること)
-- **Aider CLI:** `aider-chat` (Gitワーキングツリー差分編集用エンジン)
-- **Reviewdog:** CLI (rdjson 差分行アノテーション表示用エンジン)
+- **Ollama:** JEVを使う場合のみ必要。Version 0.3.0 以上（OpenAI互換REST API `/v1` が `localhost:11434` で有効）
+- **agy（Antigravity CLI）:** 現行LLM runtime。非対話（ヘッドレス）実行、認証済み、PATHまたは `agy_client` の既知パスから解決可能であること。認証情報の中身は記録しない。
+- **Aider CLI:** runtimeには不要。旧資産の復旧・比較検証を行う場合だけ `legacy/local_llm/` または archive tag から別途復元する。
+  - **確認項目（Issue #117 で確定し、本節へ反映する）**: 導入手順、認証方式、非対話での編集実行の可否、モデル指定オプションの有無、入力長の上限、作業ディレクトリに作られる成果物の名前。
+  - **現時点の確認状況**: 調査時点の開発環境では、`agy` が PATH にも上記の既知の配置先にも見つからなかった。夜間 worker を動かす機器（導入済みか）を、移行の前に確認すること。
 
 ---
 
-## 2. モデル配置管理仕様 (`config/models.json`)
+## 2. モデル配置管理仕様 (`config/models.yaml`)
+
+> **訂正（Rev.4.8）**: Rev.4.7 までは SSOT を `config/models.json` と記載していたが、`tools/config_loader.py` が読み込むのは **`config/models.yaml` のみ**である（SBOS-DD-005 §2）。`models.json` は旧版のコピーであり、扱いは Issue #128 で決める。以下の §2.2 の JSON 例は、構造の説明用の旧形式であり、実際の設定の書式は `models.yaml`（`backend_execution.profiles` / `routes`）を正とする。
 
 ### 2.1 一元管理モデル設定方針
-本システムでは、ドキュメントやモジュールコード内に具体的なモデル名を直接記述・ハードコードせず、すべて **`config/models.json`** にて一元管理（Single Source of Truth: SSOT）する。
+本システムでは、ドキュメントやモジュールコード内に具体的なモデル名を直接記述・ハードコードせず、すべて **`config/models.yaml`** にて一元管理（Single Source of Truth: SSOT）する。
 
-ユーザー環境でダウンロード済み・利用可能な Ollama モデル (`ollama list`) を確認し、`config/models.json` に動的に割り当てる。
+ユーザー環境でダウンロード済み・利用可能な Ollama モデル (`ollama list`) を確認し、`config/models.yaml` に動的に割り当てる。
 
-### 2.2 設定ファイル構成例 (`config/models.json`)
+agyへの移行後は、LLMの実行先を `backend_execution.routes` が指すprofileで解決する。agy profile（`backend: agy`）にはモデルパスやOpenAI endpointを持たない。Ollamaの設定はJEV用に限り有効である。
+
+### 2.2 設定ファイル構成例（旧形式の `config/models.json`）
 
 ```json
 {
@@ -74,8 +84,7 @@
 }
 ```
 
-各モジュール (`tools/llm_client.py`, `tools/aider_runner.py` 等) は `tools/config_loader.py` 経由でこの設定を動的に参照し、LLM 呼び出しを行う。
-Aider 実行時は環境変数 `OLLAMA_API_BASE=http://localhost:11434` を設定し、`--no-auto-commits` (複数形) フラグを付加して非破壊的なワーキングツリー差分適用を行う。
+各モジュール（`tools/llm_client.py`、`tools/agy_runner.py`等）は `tools/config_loader.py` 経由で設定を参照する。Aiderの旧CLI設定はlegacy/archiveの資産としてのみ保持する。
 
 ---
 
@@ -254,7 +263,9 @@ Register-ScheduledTask -TaskName "SecondBrainDailyScoring" -Action $Action -Trig
 
 ## 7. 全環境診断・健全性検証スクリプト (`verify_environment.py`)
 
-構築作業完了後、全層（Ollama API, Aider, Reviewdog, Ruff, Pytest, LangGraph）の動作状況を一括診断するスクリプトの実装仕様である。
+構築作業完了後、agy CLI、JEV用Ollama、Reviewdog、Ruff、Pytest、LangGraphの動作状況を一括診断するスクリプトの実装仕様である。
+
+> **現行注記**: Ollama APIはJEV用に確認し、agyの実行ファイル解決と認証状態を確認する。agy未導入時は他の診断結果を隠さず、agy項目をWARNとして報告する。実機品質は試験書L3〜L5で確認する。
 
 ```python
 #!/usr/bin/env python3

@@ -8,6 +8,7 @@ Rev.2.7 〜 新アーキテクチャ。
 """
 
 import argparse
+import fnmatch
 import json
 import logging
 import os
@@ -16,25 +17,32 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
 # プロジェクトルートをsys.pathに追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.aider_runner import AiderRunError, GitDiffError, get_git_diff, run_aider
+from tools.agy_runner import CoderRunError
+from tools.backend_coordinator import get_coordinator
+from tools.git_utils import GitDiffError, get_git_diff
 from tools.metadata_store import (
+    GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
+    MAX_CONSECUTIVE_B7,
     ErrorCategory,
     ErrorCategoryLiteral,
     ProjectLockManager,
     StatusLiteral,
     TaskStatus,
     get_runtime_cache_dir,
+    next_consecutive_b7,
     record_execution_history,
     resolve_project_context,
     safe_record_execution_history,
@@ -108,6 +116,166 @@ def is_in_git_workspace(cwd: Optional[str]) -> bool:
         return False
 
 
+def porcelain_path(line: str) -> str:
+    """`git status --porcelain` の 1 行からパスを取り出す (リネームは新パス、引用符は除去)。"""
+    path = line[3:] if len(line) > 3 else ""
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path.strip().strip('"')
+
+
+def is_generated_artifact_path(path: str) -> bool:
+    """パスのいずれかの要素が生成物パターンに一致するか判定する (部分文字列一致は使わない)。"""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    return any(
+        fnmatch.fnmatchcase(part, pattern)
+        for part in parts
+        for pattern in GENERATED_ARTIFACT_PATTERNS
+    )
+
+
+def build_wip_pathspec() -> List[str]:
+    """生成物を除外した `git add -A` 用の pathspec を返す。
+
+    `**/<pattern>` でどの階層の同名要素も、`**/<pattern>/**` でその配下も除外する。
+    """
+    excludes: List[str] = []
+    for pattern in GENERATED_ARTIFACT_PATTERNS:
+        excludes.append(f":(exclude,glob)**/{pattern}")
+        excludes.append(f":(exclude,glob)**/{pattern}/**")
+    return ["--", ".", *excludes]
+
+
+def commit_wip_changes(cwd: Optional[str], issue_id: str) -> Optional[str]:
+    """Resume 前の未コミット変更を、生成物を除外して WIP コミットする (Issue #92)。
+
+    失敗時はエラーメッセージ (str) を返し、成功時およびコミット対象が無い場合は None を返す。
+    - git add が失敗した場合: エラー
+    - ステージ済みの変更が無い場合 (除外後に何も残らない等): コミットを飛ばして成功扱い
+    - ステージ済みの変更があるのに commit が失敗した場合: エラー
+    """
+    add_res = run_cmd(["git", "add", "-A", *build_wip_pathspec()], cwd=cwd, timeout=60)
+    if add_res.returncode != 0:
+        return f"git add failed before resume: {add_res.stderr}"
+
+    # 終了コード 0: ステージ済みの差分なし / 1: あり / それ以外: 異常
+    staged_res = run_cmd(["git", "diff", "--cached", "--quiet"], cwd=cwd, timeout=60)
+    if staged_res.returncode == 0:
+        logger.info("Resume Mode: nothing to commit after excluding generated artifacts.")
+        return None
+    if staged_res.returncode != 1:
+        return f"git diff --cached failed before resume: {staged_res.stderr}"
+
+    commit_res = run_cmd(
+        ["git", "commit", "-m", f"wip: preserve uncommitted changes for {issue_id} before resume"],
+        cwd=cwd,
+        timeout=60,
+    )
+    if commit_res.returncode != 0:
+        return f"git commit failed before resume: {commit_res.stderr}"
+    return None
+
+
+def get_satellite_python_path(sat_path: Path) -> Path:
+    """サテライトの仮想環境内の Python 実行可能ファイルパスを取得する (OS依存対応)."""
+    if os.name == "nt":
+        return sat_path / ".venv" / "Scripts" / "python.exe"
+    return sat_path / ".venv" / "bin" / "python"
+
+
+def ensure_satellite_environment(cwd: Optional[str]) -> str:
+    """サテライトの仮想環境 (.venv) を検証・自動セットアップし、実行可能な Python パスを返す。
+
+    1. cwd が未指定、または pyproject.toml / requirements.txt が存在しない場合は母艦 Python (sys.executable) を返す。
+    2. サテライトに .venv が存在しない、または Python バイナリがない場合:
+       - pyproject.toml があれば `uv sync --project <cwd> --all-extras` で自動構築。
+       - requirements.txt があれば `uv venv` + `uv pip install -r` で構築。
+    3. オーケストレーターのテスト結果構造化に必要な pytest-json-report の存在を確認し、なければ自動導入。
+    4. 解決された Python パス (str) を返す。失敗時は安全に sys.executable にフォールバック。
+    """
+    if not cwd:
+        return sys.executable
+
+    sat_path = Path(cwd)
+    if not sat_path.exists():
+        return sys.executable
+
+    has_pyproject = (sat_path / "pyproject.toml").is_file()
+    has_requirements = (sat_path / "requirements.txt").is_file()
+    if not (has_pyproject or has_requirements):
+        return sys.executable
+
+    python_bin = get_satellite_python_path(sat_path)
+
+    if not python_bin.exists():
+        logger.info(f"Satellite virtual environment not found in '{cwd}'. Setting up with uv...")
+        try:
+            if has_pyproject:
+                sync_cmd = ["uv", "sync", "--project", str(sat_path), "--all-extras"]
+                res = run_cmd(sync_cmd, timeout=300)
+                if res.returncode != 0:
+                    logger.warning(
+                        f"uv sync --all-extras failed ({res.stderr}). Trying uv sync without extras..."
+                    )
+                    res = run_cmd(["uv", "sync", "--project", str(sat_path)], timeout=300)
+            elif has_requirements:
+                run_cmd(["uv", "venv", str(sat_path / ".venv")], timeout=120)
+                if python_bin.exists():
+                    run_cmd(
+                        [
+                            "uv",
+                            "pip",
+                            "install",
+                            "-r",
+                            str(sat_path / "requirements.txt"),
+                            "--python",
+                            str(python_bin),
+                        ],
+                        timeout=300,
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Failed to auto-setup satellite venv: {e}. Falling back to host python."
+            )
+            return sys.executable
+
+    if not python_bin.exists():
+        logger.warning(
+            f"Satellite python binary still not found at '{python_bin}'. Falling back to host python."
+        )
+        return sys.executable
+
+    # pytest-json-report の自動確認・導入
+    try:
+        chk_report = subprocess.run(
+            [str(python_bin), "-c", "import pytest_jsonreport"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if chk_report.returncode != 0:
+            logger.info("pytest-json-report not found in satellite venv. Installing via uv pip...")
+            run_cmd(
+                ["uv", "pip", "install", "pytest-json-report", "--python", str(python_bin)],
+                timeout=120,
+            )
+    except Exception as e:
+        logger.debug(f"Failed to check/install pytest-json-report: {e}")
+
+    # ruff の自動確認・導入
+    try:
+        chk_ruff = subprocess.run(
+            [str(python_bin), "-c", "import ruff"], capture_output=True, text=True, timeout=10
+        )
+        if chk_ruff.returncode != 0:
+            logger.info("ruff not found in satellite venv. Installing via uv pip...")
+            run_cmd(["uv", "pip", "install", "ruff", "--python", str(python_bin)], timeout=120)
+    except Exception as e:
+        logger.debug(f"Failed to check/install ruff: {e}")
+
+    return str(python_bin)
+
+
 def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
     """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
     target_files: List[str] = []
@@ -145,6 +313,11 @@ def is_within_directory(candidate: Path, root: Path) -> bool:
     return root_resolved in candidate_resolved.parents
 
 
+def _is_test_path(p: Path) -> bool:
+    """パスがテストファイルまたはテスト関連ディレクトリに属するか判定する."""
+    return p.name.startswith("test_") or "tests" in p.parts or "test" in p.parts
+
+
 def resolve_target_files_against_cwd(
     target_files: List[str], cwd: Optional[Path] = None
 ) -> List[str]:
@@ -180,24 +353,64 @@ def resolve_target_files_against_cwd(
             if tf not in resolved:
                 resolved.append(tf)
         else:
-            tf_stem = Path(tf).stem
+            tf_p = Path(tf)
+            tf_name = tf_p.name
+            tf_stem = tf_p.stem
+            is_tf_test = _is_test_path(tf_p)
             clean_tf_stem = tf_stem.replace("test_", "").strip("_")
-            matched = False
+            matched_file: Optional[str] = None
+
+            # 優先度 1: ファイル名（拡張子込み）完全一致 (例: tf='office_parser.py' -> repo_f='src/grep/office_parser.py')
             for repo_f in all_repo_files:
-                repo_stem = Path(repo_f).stem
-                clean_repo_stem = repo_stem.replace("test_", "").strip("_")
-                if clean_tf_stem and (
-                    clean_tf_stem in clean_repo_stem or clean_repo_stem in clean_tf_stem
-                ):
-                    if repo_f not in resolved:
-                        logger.info(
-                            f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{repo_f}'"
-                        )
-                        resolved.append(repo_f)
-                        matched = True
+                if Path(repo_f).name == tf_name:
+                    matched_file = repo_f
+                    break
+
+            # 優先度 2: ステム完全一致 (テスト属性一致)
+            if not matched_file:
+                for repo_f in all_repo_files:
+                    repo_p = Path(repo_f)
+                    is_repo_test = _is_test_path(repo_p)
+                    if repo_p.stem == tf_stem and is_tf_test == is_repo_test:
+                        matched_file = repo_f
                         break
-            if not matched and tf not in resolved:
-                resolved.append(tf)
+
+            # 優先度 3: clean_stem 完全一致 (テスト属性一致)
+            if not matched_file and clean_tf_stem:
+                for repo_f in all_repo_files:
+                    repo_p = Path(repo_f)
+                    is_repo_test = _is_test_path(repo_p)
+                    clean_repo_stem = repo_p.stem.replace("test_", "").strip("_")
+                    if clean_tf_stem == clean_repo_stem and is_tf_test == is_repo_test:
+                        matched_file = repo_f
+                        break
+
+            # 優先度 4: clean_stem 部分一致（※テスト属性が一致しており、かつ単語境界が一致する場合のみ）
+            if not matched_file and clean_tf_stem:
+                for repo_f in all_repo_files:
+                    repo_p = Path(repo_f)
+                    is_repo_test = _is_test_path(repo_p)
+                    if is_tf_test != is_repo_test:
+                        continue
+                    clean_repo_stem = repo_p.stem.replace("test_", "").strip("_")
+                    if (
+                        f"_{clean_tf_stem}" in clean_repo_stem
+                        or f"{clean_tf_stem}_" in clean_repo_stem
+                        or f"_{clean_repo_stem}" in clean_tf_stem
+                        or f"{clean_repo_stem}_" in clean_tf_stem
+                    ):
+                        matched_file = repo_f
+                        break
+
+            if matched_file:
+                if matched_file not in resolved:
+                    logger.info(
+                        f"Target file '{tf}' not found on disk. Auto-mapped to existing file '{matched_file}'"
+                    )
+                    resolved.append(matched_file)
+            else:
+                if tf not in resolved:
+                    resolved.append(tf)
 
     return resolved
 
@@ -236,6 +449,58 @@ class GraphState(TypedDict, total=False):
     plan_conformance_status: Optional[str]
     plan_conformance_score: Optional[float]
     plan_conformance_round: int
+    review_conformance_status: Optional[str]
+    review_conformance_score: Optional[float]
+    empty_diff_detected: Optional[bool]
+    already_satisfied: Optional[bool]
+    allowed_new_file_globs: Optional[List[str]]
+
+
+def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
+    """例外から ErrorCategory（LLM_TIMEOUT, AGY_AUTH, AGY_QUOTA, SYSTEM_ERROR等）を分類する."""
+    from tools.agy_client import AgyAuthError, AgyQuotaError
+    from tools.agy_policy import AgyPolicyDeniedError
+
+    if isinstance(e, AgyPolicyDeniedError):
+        return "AGY_POLICY_DENIED"
+    if isinstance(e, AgyAuthError):
+        return "AGY_AUTH"
+    if isinstance(e, AgyQuotaError):
+        return "AGY_QUOTA"
+
+    lower_msg = str(e).lower()
+    if "agy_policy_denied" in lower_msg:
+        return "AGY_POLICY_DENIED"
+    if any(kw in lower_msg for kw in ("timeout", "timed out", "timedout")):
+        return "LLM_TIMEOUT"
+
+    auth_keywords = (
+        "unauthorized",
+        "authentication",
+        "not logged in",
+        "auth error",
+        "invalid api key",
+        "token expired",
+        "permission denied",
+        "status 401",
+        "status 403",
+    )
+    if any(kw in lower_msg for kw in auth_keywords):
+        return "AGY_AUTH"
+
+    quota_keywords = (
+        "quota",
+        "rate limit",
+        "resource exhausted",
+        "resource_exhausted",
+        "too many requests",
+        "status 429",
+        "credit limit",
+    )
+    if any(kw in lower_msg for kw in quota_keywords):
+        return "AGY_QUOTA"
+
+    return "SYSTEM_ERROR"
 
 
 def spec_draft_node(state: GraphState) -> GraphState:
@@ -250,15 +515,9 @@ def spec_draft_node(state: GraphState) -> GraphState:
     state.setdefault("plan_conformance_round", 0)
 
     try:
-        system_prompt = (
-            "You are a technical planner. You must define a strict Definition of Done (DoD) and implementation plan based strictly on the provided issue requirements.\n"
-            "DO NOT invent unrequested functions, features, or alternate requirements. Strictly follow the provided issue specifications.\n"
-            "Your plan MUST explicitly state:\n"
-            "1. Allowed Files: Which specific files are permitted to be modified.\n"
-            "2. Forbidden Actions: Existing signatures, interfaces, or unrelated configuration files (like settings.json) that MUST NOT be altered.\n"
-            "3. Minimal Scope (YAGNI): Keep the plan strictly focused on the requested issue. DO NOT invent unrequested features, extra parameters, or complex unneeded validation logic.\n"
-            "4. Step-by-step implementation logic."
-        )
+        from tools.prompt_harness import resolve_prompt
+
+        system_prompt = resolve_prompt("planner", "spec_draft").system_prompt
         target_files_str = ", ".join(state.get("target_files", []))
         instruction_text = state.get("instruction", "").strip()
         user_prompt = (
@@ -275,6 +534,7 @@ def spec_draft_node(state: GraphState) -> GraphState:
             intent="spec_draft",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            project_key=state.get("project_key"),
         )
         if isinstance(res, dict):
             plan_str = res.get("raw") or res.get("content") or str(res)
@@ -320,20 +580,20 @@ def spec_draft_node(state: GraphState) -> GraphState:
                     "Issue要件を満たす最小限の実装計画を再策定してください。"
                 )
     except Exception as e:
-        if any(kw in str(e).lower() for kw in ("timeout", "timed out", "timedout")):
+        cat = classify_error_category(e)
+        state["error"] = str(e)
+        state["error_category"] = cat
+        if cat == "LLM_TIMEOUT":
             logger.warning(f"Timeout caught in spec_draft_node: {e}")
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
-            state["error_category"] = "LLM_TIMEOUT"
-            state["error"] = str(e)
             if state["llm_timeout_count"] >= 2:
                 state["status"] = "FAILED_SYSTEM"
             else:
                 state["status"] = "retry_spec_draft"
+                time.sleep(min(2 ** (state["llm_timeout_count"] - 1), 5))
         else:
-            logger.error(f"Error in spec_draft_node: {e}")
+            logger.error(f"Error in spec_draft_node ({cat}): {e}")
             state["status"] = "FAILED_SYSTEM"
-            state["error_category"] = "SYSTEM_ERROR"
-            state["error"] = str(e)
     return state
 
 
@@ -346,31 +606,6 @@ def code_node(state: GraphState) -> GraphState:
     logger.info("Executing code_node with AiderRunner")
     target_files = state.setdefault("target_files", [])
     cwd = state.get("cwd")
-
-    instruction = state.get("instruction", "Apply edits")
-    if state.get("impl_plan"):
-        instruction += f"\n\nImplementation Plan:\n{state['impl_plan']}"
-
-    if target_files:
-        target_files_str = ", ".join(target_files)
-        instruction += f"\n\n[SCOPE RESTRICTION]\nYou are ONLY permitted to modify the following files: {target_files_str}. DO NOT modify, touch, or create any other files."
-
-    instruction += (
-        "\n\n[EXECUTION STRATEGY - STEP-BY-STEP]\n"
-        "Follow a strict 2-phase approach:\n"
-        "1. Phase 1 (Core Logic): Focus first on implementing the core logic, classes, and exceptions under `src/`.\n"
-        "2. Phase 2 (Tests & Refinement): Then create/update tests under `tests/` and refine until all requirements pass.\n\n"
-        "[STRICT AIDER OUTPUT FORMAT RULES]\n"
-        "- Output ONLY the target file modifications.\n"
-        "- For each file, the FIRST line must be the exact relative file path without backticks, quotes, or markdown formatting (e.g. src/utils/file_utils.py).\n"
-        "- Follow immediately with a markdown code block containing the complete source code.\n"
-        "- DO NOT output any introductory text, conversational filler, greetings, thoughts, or explanations outside code blocks.\n"
-        "- DO NOT replace implementations or tests with ellipses (...), pass, or placeholder comments. Always write complete, runnable Python code.\n"
-        "- DO NOT create or modify any files not listed in Target Files."
-    )
-
-    if state.get("aider_message"):
-        instruction += f"\n\nFeedback:\n{state['aider_message']}"
 
     # #26: .gitignore の巻き戻しは Aider 由来の変更に限定する。Aider 実行前の内容を
     # スナップショットし、実行後に変化した場合のみ戻す。無条件の checkout は人手変更や
@@ -388,14 +623,41 @@ def code_node(state: GraphState) -> GraphState:
         # #25: Aider も GPU リース配下で実行し、planner/reviewer の LLM 呼出しと
         # GPU/VRAM を奪い合わないようにする。従来は run_aider を直接 subprocess 起動して
         # GpuLeaseAdapter を迂回していた。Coordinator 経由に統一する。
-        from tools.backend_coordinator import get_coordinator
 
-        def _do_aider(_profile: Any) -> bool:
-            return run_aider(instruction=instruction, target_files=target_files, cwd=cwd)
+        allowed_globs = state.get("allowed_new_file_globs") or []
+
+        def _do_code_edit(profile: Any) -> bool:
+            # 編集エンジンは route が指す profile の backend で決まる。指示文は
+            # prompt.yaml を正本とするハーネスが、エンジンごとの規則を付けて組み立てる。
+            from tools.prompt_harness import build_coder_instruction, engine_for_backend
+
+            engine = engine_for_backend(profile.backend)
+            instruction = build_coder_instruction(
+                engine=engine,
+                base_instruction=state.get("instruction", "Apply edits"),
+                impl_plan=state.get("impl_plan"),
+                target_files=target_files,
+                feedback=state.get("aider_message"),
+            )
+            if engine == "agy":
+                from tools.agy_runner import run_agy_edit
+
+                agy_timeout = profile.timeout or 1200
+                return run_agy_edit(
+                    instruction=instruction,
+                    target_files=target_files,
+                    cwd=cwd,
+                    timeout=agy_timeout,
+                    allowed_new_file_globs=allowed_globs,
+                    project_key=state.get("project_key"),
+                )
+            raise CoderRunError(
+                f"Unsupported coder engine '{engine}' for backend '{profile.backend}'"
+            )
 
         coordinator = get_coordinator()
-        coordinator.execute("aider_edit", {"action": _do_aider})
-        # #26: Aider が .gitignore を変更した場合のみ元に戻す（規約違反・レビュー拒否を防止）。
+        coordinator.execute("code_edit", {"action": _do_code_edit})
+        # 編集エンジンが .gitignore を変更した場合のみ元に戻す（規約違反・レビュー拒否を防止）。
         # 実行前後で内容が変わっていなければ何もしない。
         if cwd and gitignore_before is not None and is_in_git_workspace(cwd):
             gitignore_path = Path(cwd) / ".gitignore"
@@ -406,11 +668,11 @@ def code_node(state: GraphState) -> GraphState:
             except Exception:
                 gitignore_after = None
             if gitignore_after != gitignore_before:
-                logger.info("Aider modified .gitignore; reverting to pre-Aider state.")
+                logger.info("Coder engine modified .gitignore; reverting to pre-edit state.")
                 run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
 
         state["status"] = "code_completed"
-        # Aider が編集・新規作成したファイルを動的に target_files へ追加
+        # 編集エンジンが編集・新規作成したファイルを動的に target_files へ追加
         if cwd and is_in_git_workspace(cwd):
             st_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=30)
             if st_res.returncode == 0:
@@ -422,25 +684,32 @@ def code_node(state: GraphState) -> GraphState:
                             if " -> " in raw_path:
                                 raw_path = raw_path.split(" -> ")[1].strip()
                             rel_path = raw_path.replace("\\", "/")
-                            if rel_path.endswith(".py") and rel_path not in target_files:
+                            if (
+                                not rel_path.startswith(".aider")
+                                and not rel_path.startswith(".agy")
+                                and not rel_path.startswith(".pytest")
+                                and rel_path != ".gitignore"
+                                and rel_path not in target_files
+                            ):
                                 target_files.append(rel_path)
-    except AiderRunError as e:
-        logger.warning(f"AiderRunError caught in code_node: {e}")
+    except CoderRunError as e:
+        logger.warning(f"CoderRunError caught in code_node: {e}")
         state["error"] = str(e)
-        if "timed out" in str(e).lower():
+        cat = classify_error_category(e)
+        state["error_category"] = cat
+        if cat == "LLM_TIMEOUT":
             state["llm_timeout_count"] = state.get("llm_timeout_count", 0) + 1
-            state["error_category"] = "LLM_TIMEOUT"
             if state["llm_timeout_count"] >= 2:
                 state["status"] = "FAILED_SYSTEM"
             else:
                 state["status"] = "retry_code"
+                time.sleep(min(2 ** (state["llm_timeout_count"] - 1), 5))
         else:
             state["status"] = "FAILED_SYSTEM"
-            state["error_category"] = "SYSTEM_ERROR"
     except Exception as e:
         logger.error(f"Unexpected error in code_node: {e}")
         state["status"] = "FAILED_SYSTEM"
-        state["error_category"] = "SYSTEM_ERROR"
+        state["error_category"] = classify_error_category(e)
         state["error"] = str(e)
     return state
 
@@ -470,11 +739,12 @@ def lint_node(state: GraphState) -> GraphState:
             state["status"] = "lint_passed"
             return state
 
-        cmd = [sys.executable, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
+        python_bin = ensure_satellite_environment(cwd)
+        cmd = [python_bin, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
         # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
-        run_cmd([sys.executable, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
+        run_cmd([python_bin, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
         run_cmd(
-            [sys.executable, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
+            [python_bin, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
             + targets_to_check,
             cwd=cwd,
             timeout=300,
@@ -557,6 +827,33 @@ def lint_node(state: GraphState) -> GraphState:
     return state
 
 
+def clean_legacy_pytest_reports(root_dir: Optional[Path] = None) -> int:
+    """リポジトリ直下や作業ディレクトリに残存する過去の .pytest-report-*.json を一括削除する (Issue #76).
+
+    Returns:
+        削除された残骸ファイルの数
+    """
+    if root_dir is None:
+        root_dir = Path(__file__).resolve().parent.parent
+
+    cleaned_count = 0
+    try:
+        for f in root_dir.glob(".pytest-report-*.json"):
+            if f.is_file():
+                try:
+                    f.unlink()
+                    cleaned_count += 1
+                except Exception as ex:
+                    logger.debug(f"Failed to unlink legacy report {f}: {ex}")
+        if cleaned_count > 0:
+            logger.info(
+                f"Cleaned up {cleaned_count} legacy pytest report residue file(s) from {root_dir}"
+            )
+    except Exception as e:
+        logger.warning(f"Error during legacy pytest report cleanup: {e}")
+    return cleaned_count
+
+
 def run_pytest_node(state: GraphState) -> GraphState:
     """Pytest による単体テストを実行するノード (DD-003 §4)。
     pytest-json-report を使用してテスト結果を構造化ログとしてパースし Aider へフィードバックする。
@@ -568,12 +865,15 @@ def run_pytest_node(state: GraphState) -> GraphState:
     try:
         cwd = state.get("cwd")
         target_files = state.get("target_files", [])
-        # #26: 固定名 .report.json を cwd 直下へ出力し finally で無条件削除すると、
-        # 既存ファイルや並行実行のレポートを上書き・削除してしまう。実行ごとに一意名の
-        # 一時ファイルを用い、他プロセス・利用者のファイルを侵さないようにする。
-        report_dir = Path(cwd) if (cwd and Path(cwd).exists()) else Path(".")
+
+        # #76: 過去に残骸化した母艦ルート直下の .pytest-report-*.json を自己修復クリーンアップ
+        clean_legacy_pytest_reports()
+
+        # #26, #76: レポートファイルを作業ツリー（cwd / リポジトリルート）に出力せず、
+        # OS 標準のテンポラリディレクトリ (tempfile.gettempdir()) に配置する。
+        # これにより万が一プロセスが強制中断されても作業ツリーが一切汚染されない。
         report_fd, report_file_str = tempfile.mkstemp(
-            prefix=f".pytest-report-{os.getpid()}-", suffix=".json", dir=str(report_dir)
+            prefix=f"pytest-report-{os.getpid()}-", suffix=".json"
         )
         os.close(report_fd)
         report_file = Path(report_file_str)
@@ -587,8 +887,12 @@ def run_pytest_node(state: GraphState) -> GraphState:
                 if candidate not in test_files:
                     test_files.append(candidate)
 
-        # ディスク上に実際に存在するテストファイルのみに絞り込み
-        existing_test_files = [tf for tf in test_files if cwd and (Path(cwd) / tf).exists()]
+        # ディスク上に実際に存在するテストファイルのみに絞り込み（0バイトの空ファイルは未実装として除外）
+        existing_test_files = [
+            tf
+            for tf in test_files
+            if cwd and (Path(cwd) / tf).exists() and (Path(cwd) / tf).stat().st_size > 0
+        ]
 
         # ターゲットテストファイルが未存在の場合、GUI/Tkinter等の環境依存テストを除いた安全な既存テストを収集
         if not existing_test_files and cwd and (Path(cwd) / "tests").exists():
@@ -600,9 +904,10 @@ def run_pytest_node(state: GraphState) -> GraphState:
 
         cmd_test_files = existing_test_files if existing_test_files else test_files
 
+        python_bin = ensure_satellite_environment(cwd)
         # pytest-json-report オプションを付加して対象テストファイルを実行
         cmd = (
-            [sys.executable, "-m", "pytest"]
+            [python_bin, "-m", "pytest"]
             + (cmd_test_files if cmd_test_files else [])
             + ["--json-report", f"--json-report-file={report_file}"]
         )
@@ -757,20 +1062,9 @@ def test_feedback_node(state: GraphState) -> GraphState:
         test_res: Dict[str, Any] = state.get("test_result") or {}
         stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
 
-        system_prompt = (
-            "You are a Senior Software Architect advising an automated coding agent (Coder).\n"
-            "The Coder failed a Pytest execution. Your task is to analyze the failure traceback and captured logs, "
-            "categorize the root cause, and generate CLEAR, STEP-BY-STEP INSTRUCTIONS for the Coder to fix the issue.\n\n"
-            "Categorize the error into one of the following and tailor your instructions accordingly:\n"
-            "1. ASSERTION_MISMATCH: If test assertions failed (e.g. len(results) == 3 vs 2), analyze whether the test expectation or core implementation logic is wrong. Explicitly tell Coder which one to adjust.\n"
-            "2. DEPENDENCY_OR_IMPORT: If ModuleNotFoundError or ImportError occurred, instruct Coder to fix import paths or remove forbidden external dependencies.\n"
-            "3. TEST_SYNTAX_OR_FIXTURE: If pytest fixtures or syntax failed, instruct Coder to use standard pytest functions.\n"
-            "4. UNHANDLED_EXCEPTION: If I/O or decode exceptions occurred, instruct Coder to add proper try-except error handling.\n"
-            "5. REPEATED_STUCK: If this is a repeated failure, instruct Coder to drop invalid assumptions and rewrite with clean logic.\n\n"
-            "Rules:\n"
-            "- Do NOT write full file rewrites. Provide concise, direct action items.\n"
-            "- Provide clear actionable guidance in Japanese."
-        )
+        from tools.prompt_harness import resolve_prompt
+
+        system_prompt = resolve_prompt("planner", "test_feedback").system_prompt
 
         user_prompt = (
             f"Issue ID: {state['issue_id']}\n"
@@ -785,6 +1079,7 @@ def test_feedback_node(state: GraphState) -> GraphState:
             intent="test_feedback",
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            project_key=state.get("project_key"),
         )
 
         feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
@@ -828,26 +1123,52 @@ def review_node(state: GraphState) -> GraphState:
         return state
 
     impl_plan_text = state.get("impl_plan") or "(No implementation plan provided)"
+
+    diff_prompt_text = diff_text
+    if not diff_text.strip():
+        state["empty_diff_detected"] = True
+        logger.info(
+            f"[{state.get('issue_id')}] No git diff detected in review_node. Checking for already-satisfied implementation."
+        )
+        diff_prompt_text = (
+            "(No git diff detected - changes may already exist in the base codebase)\n\n"
+            "【NOTICE REGARDING EMPTY DIFF】\n"
+            "All static analysis checks (Ruff) and automated tests (Pytest) have PASSED.\n"
+            "If the required specifications and behaviors described in the implementation plan "
+            "are already fully satisfied and present in the target files, you MUST return 'LGTM' "
+            "with a comment confirming that the requirements are already met in the codebase.\n"
+            "Only return 'changes_requested' if the required implementation is genuinely missing."
+        )
+        if cwd:
+            snippets = []
+            for tf in (state.get("target_files") or [])[:3]:
+                tf_path = Path(cwd) / tf
+                if tf_path.exists() and tf_path.is_file():
+                    try:
+                        lines = tf_path.read_text(encoding="utf-8").splitlines()
+                        snippet = "\n".join(lines[:300])
+                        snippets.append(f"--- File: {tf} ---\n{snippet}")
+                    except Exception:
+                        pass
+            if snippets:
+                diff_prompt_text += "\n\nTarget file contents for review:\n" + "\n\n".join(snippets)
+
     user_prompt = (
         f"Review changes for {state['issue_id']}.\n\n"
         f"Implementation Plan:\n{impl_plan_text}\n\n"
-        f"Git diff:\n{diff_text if diff_text else '(No git diff detected)'}"
+        f"Git diff:\n{diff_prompt_text}"
     )
 
     try:
+        from tools.prompt_harness import resolve_prompt
+
         res = call_llm(
             role="reviewer",
             intent="code_review",
-            system_prompt=(
-                "You are a reviewer. You must respond with JSON containing a 'verdict' "
-                "('LGTM' or 'changes_requested') and 'comments' (list of objects with file, line, message, severity). "
-                "severity MUST be one of: 'INFO', 'WARNING', 'ERROR', 'MAJOR', 'STRUCTURAL'. "
-                "Focus on critical correctness, security, and functional completeness. "
-                "Benign stylistic differences (e.g. for vs while loop) that fully satisfy requirements MUST NOT trigger changes_requested. "
-                "If the implementation correctly satisfies the requirements and tests are passing, give 'LGTM'."
-            ),
+            system_prompt=resolve_prompt("reviewer", "code_review").system_prompt,
             user_prompt=user_prompt,
             expect_json=True,
+            project_key=state.get("project_key"),
         )
 
         if (
@@ -896,6 +1217,61 @@ def review_node(state: GraphState) -> GraphState:
             )
             verdict = "LGTM"
 
+        # JEV レビュー合否二次検問ゲート (Defense 1: JEV Review Conformance, Issue #50, PM-054)
+        # Reviewer LLM が LGTM を返した場合のみ、JEV (Zero-Decode) で合否判定の裏取り検証を行う。
+        jev_review_info: Optional[Dict[str, Any]] = None
+        if verdict == "LGTM":
+            # cwd 未指定かつ diff も空の環境（モック単体テスト等）は安全にバイパス
+            if not cwd and not diff_text:
+                logger.info(
+                    f"[{state.get('issue_id')}] No cwd or diff available for JEV review. Bypassing."
+                )
+            else:
+                try:
+                    from tools.jev_adapter import verify_review_conformance
+
+                    # pytest 終了コードの取得 (0: 成功, それ以外: 失敗)
+                    pytest_rc: Optional[int] = None
+                    test_res = state.get("test_result")
+                    if isinstance(test_res, dict):
+                        rc_val = test_res.get("returncode")
+                        if isinstance(rc_val, int):
+                            pytest_rc = rc_val
+
+                    is_valid, confidence, detail = verify_review_conformance(
+                        issue_id=state.get("issue_id", "UNKNOWN"),
+                        instruction=state.get("instruction", ""),
+                        diff_text=diff_text,
+                        impl_plan=state.get("impl_plan"),
+                        pytest_returncode=pytest_rc,
+                    )
+
+                    jev_review_info = {
+                        "is_valid": is_valid,
+                        "confidence": confidence,
+                        "detail": detail,
+                    }
+                    state["review_conformance_status"] = "passed" if is_valid else "rejected"
+                    state["review_conformance_score"] = confidence
+
+                    if not is_valid:
+                        logger.warning(
+                            f"[{state.get('issue_id')}] JEV secondary review rejected LGTM verdict: {detail}"
+                        )
+                        verdict = "changes_requested"
+                        structured_comments.append(
+                            {
+                                "file": target_file,
+                                "line": 1,
+                                "message": f"【JEV REVIEW REJECTED】{detail}",
+                                "severity": "STRUCTURAL",
+                            }
+                        )
+                except Exception as jev_e:
+                    logger.warning(
+                        f"[{state.get('issue_id')}] JEV review conformance verification failed ({jev_e}). Bypassing."
+                    )
+
         rev_round = state.get("review_round", 0) + 1
         state["review_round"] = rev_round
         state["review_verdict"] = verdict
@@ -917,40 +1293,56 @@ def review_node(state: GraphState) -> GraphState:
 
         # 全レビュー (LGTM を含む) を review_rounds に記録
         rounds = state.get("review_rounds", [])
-        rounds.append(
-            {
-                "review_round": rev_round,
-                "verdict": verdict,
-                "comments": structured_comments,
-                "rdjson": state["rdjson"],
-            }
-        )
+        round_entry: Dict[str, Any] = {
+            "review_round": rev_round,
+            "verdict": verdict,
+            "comments": structured_comments,
+            "rdjson": state["rdjson"],
+        }
+        if jev_review_info is not None:
+            round_entry["jev_review_conformance"] = jev_review_info
+        rounds.append(round_entry)
         state["review_rounds"] = rounds
 
         # Reviewdog 標準入力 (input=...) パイプ連携と実行結果保存 (オプショナル連携のため失敗時はログ警告のみで LLM レビューを継続)
         if is_in_git_workspace(cwd):
-            try:
-                rd_input = json.dumps(state["rdjson"])
-                res_rd = run_cmd(
-                    ["reviewdog", "-f=rdjson", "-diff=git diff HEAD"],
-                    cwd=cwd,
-                    input_str=rd_input,
-                    timeout=120,
-                )
+            if shutil.which("reviewdog") is None:
+                # 未導入は例外ではなくスキップとして扱う (Issue #106)。導入済みで失敗した場合と区別できるよう
+                # reviewdog_result に skipped を残す。
+                logger.info("Reviewdog is not installed; skipping reviewdog integration.")
                 state["reviewdog_result"] = {
-                    "returncode": res_rd.returncode,
-                    "stdout": res_rd.stdout,
-                    "stderr": res_rd.stderr,
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "skipped": "not_installed",
                 }
-                if res_rd.returncode == 0:
-                    logger.info("Reviewdog execution completed successfully.")
-                else:
-                    logger.warning(
-                        f"Reviewdog execution returned non-zero ({res_rd.returncode}): {res_rd.stderr}. Continuing LLM review workflow."
+            else:
+                try:
+                    rd_input = json.dumps(state["rdjson"])
+                    res_rd = run_cmd(
+                        ["reviewdog", "-f=rdjson", "-diff=git diff HEAD"],
+                        cwd=cwd,
+                        input_str=rd_input,
+                        timeout=120,
                     )
-            except Exception as rde:
-                logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
-                state["reviewdog_result"] = {"returncode": -1, "stdout": "", "stderr": str(rde)}
+                    state["reviewdog_result"] = {
+                        "returncode": res_rd.returncode,
+                        "stdout": res_rd.stdout,
+                        "stderr": res_rd.stderr,
+                    }
+                    if res_rd.returncode == 0:
+                        logger.info("Reviewdog execution completed successfully.")
+                    else:
+                        logger.warning(
+                            f"Reviewdog execution returned non-zero ({res_rd.returncode}): {res_rd.stderr}. Continuing LLM review workflow."
+                        )
+                except Exception as rde:
+                    logger.warning(f"Reviewdog pipe execution skipped or failed: {rde}")
+                    state["reviewdog_result"] = {
+                        "returncode": -1,
+                        "stdout": "",
+                        "stderr": str(rde),
+                    }
 
         if verdict == "LGTM":
             state["status"] = "review_lgtm"
@@ -1160,6 +1552,35 @@ def done_node(state: GraphState) -> GraphState:
                     state["error_category"] = "PR_ERROR"
                     state["error"] = f"git commit failed: {commit_res.stderr}"
                     return state
+            elif state.get("empty_diff_detected"):
+                # 2.5. 既済タスク判定 (Issue #80: review_node で diff が空と判定され、かつ未コミット変更もない場合)
+                logger.info(
+                    f"[{state['issue_id']}] Task had empty diff and no uncommitted changes. "
+                    f"All tests passed and implementation is verified as already satisfied on base branch '{base_branch}'. "
+                    "Marking as COMPLETED."
+                )
+                from tools.metadata_store import mark_task_completed_in_tasks_md
+
+                # 作業ブランチの安全クリーンアップ
+                run_cmd(["git", "checkout", "-f", base_branch], cwd=cwd, timeout=60)
+                chk_branch = run_cmd(
+                    ["git", "rev-parse", "--verify", head_branch], cwd=cwd, timeout=30
+                )
+                if chk_branch.returncode == 0:
+                    run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=30)
+
+                # tasks.md の完了反映 (- [ ] -> - [x])
+                proj_root = Path(cwd).parent.parent if cwd else None
+                mark_task_completed_in_tasks_md(
+                    cwd,
+                    state["issue_id"],
+                    project_key=state.get("project_key"),
+                    project_root=proj_root,
+                )
+
+                state["status"] = "COMPLETED"
+                state["already_satisfied"] = True
+                return state
 
             # 3. リモートへ Fetch & Safe Push (--force-with-lease を使用し、人間が追加したリモートコミットの上書き破壊を予防)
             run_cmd(["git", "fetch", "origin"], cwd=cwd, timeout=60)
@@ -1281,12 +1702,9 @@ def escalate_node(state: GraphState) -> GraphState:
             lint_res = (state.get("lint_result") or {}).get("stdout", "")
             latest_error = test_res if state.get("error_category") == "TEST_ERROR" else lint_res
 
-            system_prompt = (
-                "You are an Expert Technical Architect reviewing a failed auto-coding session. "
-                "The AI agent failed to pass the tests/linting after maximum retries. "
-                "Analyze the final error log and identify the ROOT CAUSE of the failure (e.g., missing domain knowledge, incorrect library usage, hallucinated magic strings, logic bugs). "
-                "Output a concise Markdown report specifying WHY it failed and WHAT needs to be changed in the issue requirements or core logic."
-            )
+            from tools.prompt_harness import resolve_prompt
+
+            system_prompt = resolve_prompt("reviewer", "failure_analysis").system_prompt
             user_prompt = f"Target Files: {state.get('target_files')}\n\nFinal Error Log:\n{latest_error[:2000]}"
 
             res = call_llm(
@@ -1294,6 +1712,7 @@ def escalate_node(state: GraphState) -> GraphState:
                 intent="failure_analysis",
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                project_key=state.get("project_key"),
             )
 
             analysis_text = (
@@ -1332,6 +1751,67 @@ def escalate_node(state: GraphState) -> GraphState:
     return state
 
 
+def compute_recursion_limit(max_round: int) -> int:
+    """グラフの最悪経路ステップ数から LangGraph の recursion_limit を算出する (Issue #87).
+
+    LangGraph 既定の 25 は、lint / test / review の各上限 (max_round) まで失敗が続く経路で
+    不足しうる。ラウンドカウンタは累積するため、code_node の再実行回数は次の合計が上限となる。
+      - 初回 1 回
+      - lint / test / review の各失敗による再実行 (それぞれ max_round - 1 回)
+      - LLM タイムアウトによる再試行 (最大 2 回)
+    1 サイクルは code → lint → test → test_feedback → review の最大 5 ノード。
+    これに spec_draft (適合性再試行 + タイムアウト再試行で最大 4 回) と終端ノード (2) を加える。
+    """
+    cycles = 1 + 3 * max(max_round - 1, 0) + 2
+    return cycles * 5 + 4 + 2 + 2
+
+
+def _route_unknown_status(node_name: str, state: GraphState) -> str:
+    """想定外の status で無限ループしないよう、警告を出して escalate_node へ送る (Issue #89).
+
+    escalate_node は error_category に基づいて FAILED_B7 / FAILED_SYSTEM へ安全分類する。
+    """
+    logger.warning(
+        f"Unexpected status '{state.get('status')}' after {node_name}. Routing to escalate_node."
+    )
+    return "escalate_node"
+
+
+def _fail_system(
+    project_key: str,
+    issue_id: str,
+    error: Optional[str],
+    *,
+    cwd: Optional[str],
+    metadata_dir: Optional[Path],
+    history_file: Optional[Path],
+) -> None:
+    """FAILED_SYSTEM / SYSTEM_ERROR を state.json に記録し、error 指定時は実行履歴にも追記する (Issue #88).
+
+    error が None の場合は state.json の更新のみ行う (auto-stash 失敗時の従来挙動を維持)。
+    """
+    update_task_state(
+        project_key,
+        issue_id,
+        status="FAILED_SYSTEM",
+        error_category="SYSTEM_ERROR",
+        metadata_dir=metadata_dir,
+    )
+    if error is None:
+        return
+    safe_record_execution_history(
+        {
+            "issue_id": issue_id,
+            "project_key": project_key,
+            "cwd": cwd,
+            "error_category": "SYSTEM_ERROR",
+            "error": error,
+        },
+        final_status="FAILED_SYSTEM",
+        history_file=history_file,
+    )
+
+
 def execute_issue(
     issue_id: str,
     project_key: str,
@@ -1364,6 +1844,7 @@ def execute_issue(
         target_files = ctx.get("target_files", [])
         base_branch = ctx.get("base_branch", "develop")
         work_branch_prefix = ctx.get("work_branch_prefix", "sbos/")
+        allowed_new_file_globs = ctx.get("allowed_new_file_globs", [])
         is_valid = ctx.get("valid", False)
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
@@ -1371,22 +1852,12 @@ def execute_issue(
             logger.error(
                 f"Failsafe triggered: Invalid satellite context for project {project_key}. Aborting."
             )
-            update_task_state(
+            _fail_system(
                 project_key,
                 issue_id,
-                status="FAILED_SYSTEM",
-                error_category="SYSTEM_ERROR",
+                "Failsafe triggered: Invalid project directory or missing target_files",
+                cwd=cwd,
                 metadata_dir=metadata_dir,
-            )
-            safe_record_execution_history(
-                {
-                    "issue_id": issue_id,
-                    "project_key": project_key,
-                    "cwd": cwd,
-                    "error_category": "SYSTEM_ERROR",
-                    "error": "Failsafe triggered: Invalid project directory or missing target_files",
-                },
-                final_status="FAILED_SYSTEM",
                 history_file=history_file,
             )
             return
@@ -1394,6 +1865,8 @@ def execute_issue(
         with ProjectLockManager(project_key, metadata_dir=metadata_dir):
             # タスクの状態 (state.json) または引数から「継続(Resume)モード」か「新規(Fresh)モード」かを判定
             current_task_status = ""
+            current_error_category: Optional[str] = None
+            current_consecutive_b7 = 0
             state_json_candidates = [get_runtime_cache_dir(project_key) / "state.json"]
             if metadata_dir:
                 state_json_candidates.append(metadata_dir / "projects" / project_key / "state.json")
@@ -1402,11 +1875,45 @@ def execute_issue(
                     try:
                         with open(state_json_path, "r", encoding="utf-8") as sf:
                             sdata = json.load(sf)
-                            current_task_status = sdata.get(issue_id, {}).get("status", "")
+                            entry = sdata.get(issue_id, {})
+                            current_task_status = entry.get("status", "")
                             if current_task_status:
+                                current_error_category = entry.get("error_category")
+                                saved_b7 = entry.get("consecutive_b7", 0)
+                                current_consecutive_b7 = (
+                                    saved_b7 if isinstance(saved_b7, int) else 0
+                                )
                                 break
                     except Exception:
                         pass
+
+            # 連続 FAILED_B7 ガード (Issue #91): 状態から自動 Resume と判定される場合のみ拒否する。
+            # 明示的な --resume / --fresh は人の判断として尊重する。
+            if (
+                resume is None
+                and not fresh
+                and current_task_status == TaskStatus.FAILED_B7.value
+                and current_consecutive_b7 >= MAX_CONSECUTIVE_B7
+            ):
+                guard_message = (
+                    f"Auto-resume blocked: {issue_id} ended with FAILED_B7 "
+                    f"{current_consecutive_b7} times in a row (limit {MAX_CONSECUTIVE_B7}). "
+                    "Review the failure, then re-run with --resume (continue) or --fresh (restart)."
+                )
+                logger.error(guard_message)
+                # state.json (status / カウンタ) は変更せず、拒否した事実だけを実行履歴に残す
+                safe_record_execution_history(
+                    {
+                        "issue_id": issue_id,
+                        "project_key": project_key,
+                        "cwd": cwd,
+                        "error_category": current_error_category,
+                        "error": guard_message,
+                    },
+                    final_status=TaskStatus.FAILED_B7.value,
+                    history_file=history_file,
+                )
+                return
 
             is_resume_mode = (
                 resume
@@ -1421,32 +1928,56 @@ def execute_issue(
             # 作業ツリーの事前チェック (Resumeモード時は自動コミット保存して継続、それ以外は拒否)
             if is_in_git_workspace(cwd):
                 try:
+                    head_branch = f"{work_branch_prefix}{issue_id}"
                     init_status = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
                     dirty_lines = [
                         line
                         for line in init_status.stdout.splitlines()
-                        if line.strip()
-                        and not any(
-                            ignored in line
-                            for ignored in [".aider", ".pytest_cache", "__pycache__"]
-                        )
+                        if line.strip() and not is_generated_artifact_path(porcelain_path(line))
                     ]
                     if init_status.returncode != 0 or dirty_lines:
                         if is_resume_mode:
+                            # Issue #97: 作業ブランチ以外のブランチ（develop 等）で dirty な場合、
+                            # 意図しないブランチに WIP コミットが作られるのを防ぐため即時中断して人に返す。
+                            cb_res = run_cmd(
+                                ["git", "branch", "--show-current"], cwd=cwd, timeout=30
+                            )
+                            current_branch = cb_res.stdout.strip() if cb_res.returncode == 0 else ""
+                            if current_branch != head_branch:
+                                branch_label = (
+                                    current_branch if current_branch else "<detached HEAD>"
+                                )
+                                err_msg = (
+                                    f"Resume aborted: Working tree is dirty on branch '{branch_label}', "
+                                    f"which does not match the expected work branch '{head_branch}'. "
+                                    f"Please commit/stash changes or switch to '{head_branch}' before resuming."
+                                )
+                                logger.error(err_msg)
+                                _fail_system(
+                                    project_key,
+                                    issue_id,
+                                    err_msg,
+                                    cwd=cwd,
+                                    metadata_dir=metadata_dir,
+                                    history_file=history_file,
+                                )
+                                return
+
                             logger.info(
-                                f"Resume Mode: Auto-committing uncommitted changes before resuming in {cwd}..."
+                                f"Resume Mode: Auto-committing uncommitted changes before resuming on work branch '{head_branch}' in {cwd}..."
                             )
-                            run_cmd(["git", "add", "-A"], cwd=cwd, timeout=60)
-                            run_cmd(
-                                [
-                                    "git",
-                                    "commit",
-                                    "-m",
-                                    f"wip: preserve uncommitted changes for {issue_id} before resume",
-                                ],
-                                cwd=cwd,
-                                timeout=60,
-                            )
+                            wip_error = commit_wip_changes(cwd, issue_id)
+                            if wip_error is not None:
+                                logger.error(f"Resume aborted: {wip_error}")
+                                _fail_system(
+                                    project_key,
+                                    issue_id,
+                                    wip_error,
+                                    cwd=cwd,
+                                    metadata_dir=metadata_dir,
+                                    history_file=history_file,
+                                )
+                                return
                         elif auto_stash:
                             stash_msg = f"orchestrator: auto-stash before {issue_id}"
                             logger.info(
@@ -1461,12 +1992,14 @@ def execute_issue(
                                 logger.error(
                                     f"Failed to auto-stash uncommitted changes: {st_res.stderr}"
                                 )
-                                update_task_state(
+                                # 従来挙動を維持: auto-stash 失敗は state.json のみ更新し履歴は残さない
+                                _fail_system(
                                     project_key,
                                     issue_id,
-                                    status="FAILED_SYSTEM",
-                                    error_category="SYSTEM_ERROR",
+                                    None,
+                                    cwd=cwd,
                                     metadata_dir=metadata_dir,
+                                    history_file=history_file,
                                 )
                                 return
                             logger.info("Auto-stash completed successfully.")
@@ -1474,22 +2007,12 @@ def execute_issue(
                             logger.error(
                                 f"Dirty working tree detected before execution in {cwd}. Aborting."
                             )
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"Dirty working tree detected in satellite repo: {init_status.stdout}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"Dirty working tree detected in satellite repo: {init_status.stdout}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
@@ -1526,10 +2049,26 @@ def execute_issue(
                                 ["git", "rebase", base_branch], cwd=cwd, timeout=120
                             )
                             if rebase_res.returncode != 0:
+                                # 衝突した状態でコード編集を進めると解決を暗黙に LLM へ委ねてしまうため、
+                                # 元の状態へ戻したうえで中断し、人に判断を返す (Issue #92)
                                 run_cmd(["git", "rebase", "--abort"], cwd=cwd, timeout=60)
-                                logger.warning(
-                                    f"git rebase {base_branch} failed during resume mode. Continuing on current head_branch commits."
+                                rebase_detail = (
+                                    f"{rebase_res.stdout or ''}{rebase_res.stderr or ''}".strip()
+                                )[:500]
+                                logger.error(
+                                    f"git rebase {base_branch} failed during resume mode. Aborting."
                                 )
+                                _fail_system(
+                                    project_key,
+                                    issue_id,
+                                    f"git rebase {base_branch} failed during resume "
+                                    f"(rebase aborted, resolve manually or re-run with --fresh): "
+                                    f"{rebase_detail}",
+                                    cwd=cwd,
+                                    metadata_dir=metadata_dir,
+                                    history_file=history_file,
+                                )
+                                return
                         else:
                             # リモートにも無かった場合は新規作成
                             run_cmd(
@@ -1544,22 +2083,12 @@ def execute_issue(
                         sw_base = run_cmd(["git", "switch", base_branch], cwd=cwd, timeout=60)
                         if sw_base.returncode != 0:
                             logger.error(f"git switch {base_branch} failed: {sw_base.stderr}")
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"git switch {base_branch} failed: {sw_base.stderr}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git switch {base_branch} failed: {sw_base.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
@@ -1571,22 +2100,12 @@ def execute_issue(
                         )
                         if pull_res.returncode != 0 and not allow_offline_git:
                             logger.error(f"git pull --ff-only failed: {pull_res.stderr}")
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"git pull --ff-only failed: {pull_res.stderr}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git pull --ff-only failed: {pull_res.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
@@ -1595,6 +2114,7 @@ def execute_issue(
                         chk_branch = run_cmd(
                             ["git", "rev-parse", "--verify", head_branch], cwd=cwd, timeout=60
                         )
+                        branch_backed_up = False
                         if chk_branch.returncode == 0:
                             prev_head_commit = chk_branch.stdout.strip()
                             unmerged_log = run_cmd(
@@ -1602,16 +2122,45 @@ def execute_issue(
                                 cwd=cwd,
                                 timeout=60,
                             )
-                            if unmerged_log.returncode == 0 and unmerged_log.stdout.strip():
-                                unmerged_commits = unmerged_log.stdout.strip().splitlines()
+                            # 監査に失敗した場合も、未マージコミットがある前提で安全側(退避)に倒す
+                            has_unmerged = unmerged_log.returncode != 0 or bool(
+                                unmerged_log.stdout.strip()
+                            )
+                            if has_unmerged:
+                                unmerged_commits = (
+                                    unmerged_log.stdout.strip().splitlines()
+                                    if unmerged_log.returncode == 0
+                                    else []
+                                )
+                                # 未マージコミットを失わないよう、強制削除せず退避ブランチへリネームする (Issue #90)
+                                backup_branch = f"backup/{head_branch}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                 logger.warning(
-                                    f"[FRESH MODE SAFETY WARNING] Recreating work branch '{head_branch}' which contains "
-                                    f"{len(unmerged_commits)} unmerged commit(s) relative to '{base_branch}'. "
-                                    f"Previous HEAD commit was: {prev_head_commit}\nUnmerged commits:\n"
+                                    f"[FRESH MODE SAFETY WARNING] Work branch '{head_branch}' may contain "
+                                    f"unmerged commit(s) relative to '{base_branch}' "
+                                    f"({len(unmerged_commits)} detected). "
+                                    f"Previous HEAD commit was: {prev_head_commit}. "
+                                    f"Backing up to '{backup_branch}'.\n"
                                     + "\n".join(unmerged_commits[:5])
                                 )
+                                mv_res = run_cmd(
+                                    ["git", "branch", "-m", head_branch, backup_branch],
+                                    cwd=cwd,
+                                    timeout=60,
+                                )
+                                if mv_res.returncode != 0:
+                                    _fail_system(
+                                        project_key,
+                                        issue_id,
+                                        f"Failed to back up unmerged work branch '{head_branch}': {mv_res.stderr}",
+                                        cwd=cwd,
+                                        metadata_dir=metadata_dir,
+                                        history_file=history_file,
+                                    )
+                                    return
+                                branch_backed_up = True
 
-                        run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
+                        if not branch_backed_up:
+                            run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=60)
                         sw_c = run_cmd(
                             ["git", "switch", "-c", head_branch, base_branch], cwd=cwd, timeout=60
                         )
@@ -1619,43 +2168,23 @@ def execute_issue(
                             logger.error(
                                 f"git switch -c {head_branch} {base_branch} failed: {sw_c.stderr}"
                             )
-                            update_task_state(
+                            _fail_system(
                                 project_key,
                                 issue_id,
-                                status="FAILED_SYSTEM",
-                                error_category="SYSTEM_ERROR",
+                                f"git switch -c failed: {sw_c.stderr}",
+                                cwd=cwd,
                                 metadata_dir=metadata_dir,
-                            )
-                            safe_record_execution_history(
-                                {
-                                    "issue_id": issue_id,
-                                    "project_key": project_key,
-                                    "cwd": cwd,
-                                    "error_category": "SYSTEM_ERROR",
-                                    "error": f"git switch -c failed: {sw_c.stderr}",
-                                },
-                                final_status="FAILED_SYSTEM",
                                 history_file=history_file,
                             )
                             return
                 except Exception as ge:
                     logger.error(f"Failed git branch setup in {cwd}: {ge}")
-                    update_task_state(
+                    _fail_system(
                         project_key,
                         issue_id,
-                        status="FAILED_SYSTEM",
-                        error_category="SYSTEM_ERROR",
+                        f"Git branch setup failed: {ge}",
+                        cwd=cwd,
                         metadata_dir=metadata_dir,
-                    )
-                    safe_record_execution_history(
-                        {
-                            "issue_id": issue_id,
-                            "project_key": project_key,
-                            "cwd": cwd,
-                            "error_category": "SYSTEM_ERROR",
-                            "error": f"Git branch setup failed: {ge}",
-                        },
-                        final_status="FAILED_SYSTEM",
                         history_file=history_file,
                     )
                     return
@@ -1704,7 +2233,9 @@ def execute_issue(
                     return "escalate_node"
                 if s.get("status") == "retry_code":
                     return "code_node"
-                return "lint_node"
+                if s.get("status") == "code_completed":
+                    return "lint_node"
+                return _route_unknown_status("code_node", s)
 
             workflow.add_conditional_edges(
                 "code_node",
@@ -1723,7 +2254,9 @@ def execute_issue(
                     return "test_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                return _route_unknown_status("lint_node", s)
 
             workflow.add_conditional_edges(
                 "lint_node",
@@ -1742,7 +2275,9 @@ def execute_issue(
                     return "review_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "test_feedback_node"
+                if s.get("status") == "retry_code":
+                    return "test_feedback_node"
+                return _route_unknown_status("test_node", s)
 
             workflow.add_conditional_edges(
                 "test_node",
@@ -1777,7 +2312,9 @@ def execute_issue(
                     return "done_node"
                 if s.get("status") == "FAILED_B7":
                     return "escalate_node"
-                return "code_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                return _route_unknown_status("review_node", s)
 
             workflow.add_conditional_edges(
                 "review_node",
@@ -1868,13 +2405,28 @@ def execute_issue(
                 reviewdog_result=None,
                 history_summary=None,
                 rdjson=None,
+                allowed_new_file_globs=allowed_new_file_globs,
             )
-            final_state = app.invoke(initial_state)
+            try:
+                final_state = app.invoke(
+                    initial_state,
+                    config={"recursion_limit": compute_recursion_limit(initial_state["max_round"])},
+                )
+            except GraphRecursionError as gre:
+                # 上限超過はシステム障害ではなく「リトライ上限到達」として FAILED_B7 に分類する
+                logger.error(f"Graph recursion limit exceeded for {issue_id}: {gre}")
+                exhausted_state = GraphState(**initial_state)
+                exhausted_state["status"] = "FAILED_B7"
+                exhausted_state["error_category"] = "REVIEW_REJECTED"
+                exhausted_state["error"] = f"Graph recursion limit exceeded: {gre}"
+                final_state = escalate_node(exhausted_state)
 
             final_status = final_state.get("status", "COMPLETED")
             error_cat = final_state.get("error_category")
 
             # 1. アトミックに state.json 更新
+            # --fresh は連続 FAILED_B7 回数を 0 から数え直す (Issue #91)
+            previous_b7 = 0 if fresh else current_consecutive_b7
             update_task_state(
                 project_key,
                 issue_id,
@@ -1883,6 +2435,7 @@ def execute_issue(
                 max_round=final_state.get("max_round", 3),
                 error_category=error_cat,
                 metadata_dir=metadata_dir,
+                consecutive_b7=next_consecutive_b7(previous_b7, str(final_status)),
             )
             # 2. 確定済ステートを保護する統一ヘルパーで execution_history.json 追記保存
             safe_record_execution_history(
@@ -1925,22 +2478,12 @@ def execute_issue(
         )
     except Exception as e:
         logger.error(f"Unexpected error outside lock for {issue_id}: {e}")
-        update_task_state(
+        _fail_system(
             project_key,
             issue_id,
-            status="FAILED_SYSTEM",
-            error_category="SYSTEM_ERROR",
+            str(e),
+            cwd=None,
             metadata_dir=metadata_dir,
-        )
-        safe_record_execution_history(
-            {
-                "issue_id": issue_id,
-                "project_key": project_key,
-                "cwd": None,
-                "error_category": "SYSTEM_ERROR",
-                "error": str(e),
-            },
-            final_status="FAILED_SYSTEM",
             history_file=history_file,
         )
         raise

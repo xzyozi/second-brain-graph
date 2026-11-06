@@ -20,7 +20,7 @@
 
 | 設定ファイル | 主な管理対象 | 提供されるメリット |
 | :--- | :--- | :--- |
-| **`config/models.yaml`** | ・モデルハイパーパラメータ (`temperature`, `max_tokens`)<br>・Aider 自動編集エンジン設定 (`timeout`, `edit_format`)<br>・GPU 排他リース (`mode: exclusive`)<br>・バックエンドプロファイル (`ollama` / `llama_server`) | ・各モデルの推奨コンテキスト長や VRAM 消費量の根拠をコメントとして永続化<br>・`fallback: disabled` による勝手な代替フォールバックを排除した厳格実行 |
+| **`config/models.yaml`** | ・モデルハイパーパラメータ (`temperature`, `max_tokens`)<br>・Aider 自動編集エンジン設定 (`timeout`, `edit_format`)<br>・GPU 排他リース (`mode: exclusive`)<br>・バックエンドプロファイル (`agy` / `ollama` / `llama_server`)<br>・実行インテント別ルーティング (`routes`) | ・各モデルの推奨コンテキスト長や VRAM 消費量の根拠をコメントとして永続化<br>・`backend: "agy"` による Antigravity CLI 連携プロファイルの一元管理<br>・`fallback: disabled` による勝手な代替フォールバックを排除した厳格実行 |
 | **`config/prompt.yaml`** | ・`planner`: 実装計画立案 (`spec_draft_system`)<br>・`coder`: 出力規則・Read-only制約・2段階実装戦略<br>・`advisor`: テスト失敗分析 (`test_feedback_system`)<br>・`reviewer`: コード監査・テスト自作自演重点レビュー | ・コードを変更することなく、プロンプトの調整・改善が可能<br>・エージェントの行動規約やフォーマット規約を一元管理 |
 
 ---

@@ -17,10 +17,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Delete branches merged into devlop
+      - name: Delete branches merged into develop
         shell: bash
         env:
-          BASE_BRANCH: devlop
+          BASE_BRANCH: develop
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail

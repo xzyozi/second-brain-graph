@@ -7,20 +7,29 @@
 ## ディレクトリ構造とテンプレート
 
 * **`docs/design/`**: システムの各種設計書（基本設計、詳細設計、データ構造仕様）および運用ガイドラインを格納する主領域
-  * `TEMPLATE_基本設計書.md`: アーキテクチャ・コンポーネント分離用テンプレート
-  * `TEMPLATE_詳細設計書.md`: モジュール制御・入出力契約・状態遷移用テンプレート
-  * `TEMPLATE_データ構造仕様書.md`: データ型・スキーマ・原子置換・排他制御用テンプレート
+  * `SBOS-BD-002_基本設計書.md`: システム全体アーキテクチャ
+  * `SBOS-DD-003_詳細設計書.md`〜`SBOS-DD-007_*.md`: 各モジュール、品質、Issueライフサイクル、永続化の詳細仕様
+  * `SBOS-ENV-001_環境構築仕様書.md` / `SBOS-OP-001_運用詳細設計書.md`: 環境構築・運用仕様
+  * `SBOS-MULTI-001_複数リポジトリ_差分設計書.md` / `SBOS-PM-005_課題矛盾一覧.md`: 母艦・衛星設計と課題管理
+  * `TEMPLATE_*.md`: 基本設計、詳細設計、データ構造仕様の作成テンプレート
   * `README.md`: 設計ドキュメントの命名規則・執筆・更新運用ルール
 * **`docs/features/`**: 機能別の利用契約と運用手順
   * [`aider_format_benchmark.md`](features/aider_format_benchmark.md): Aider edit_format 多角的実証ベンチマーク (`tools/benchmark_aider_formats.py`) 仕様書
   * [`coder_test_and_github_ci_pr_fixer.md`](features/coder_test_and_github_ci_pr_fixer.md): Coderモデル動作検証仕様・実績および GitHub CI PR Fixer 設計書
   * [`multi_language_verifiers.md`](features/multi_language_verifiers.md): 多言語対応コード品質・構文検証基盤 (`tools/lang/`, Tree-sitter) 仕様書
   * [`ollama_modelfile_profile_management.md`](features/ollama_modelfile_profile_management.md): GGUF向けQwen ModelfileのCLI入力契約・生成手順
+  * [`satellite_ideation_reviewer.md`](features/satellite_ideation_reviewer.md): `agys` によるサテライトコード自律レビュー＆Issue自動起票スキル仕様書
   * [`yaml_configuration_system.md`](features/yaml_configuration_system.md): YAMLベース共通設定基盤仕様書 (`models.yaml`, `prompt.yaml`)
 * **`docs/how-to/`**: 開発・運用の操作手順ガイド
   * [`ollama_gguf_registration.md`](how-to/ollama_gguf_registration.md): 独立GGUFファイルのOllamaローカルモデル登録手順
-* **`docs/analysis/`**: 実装調査・フロー解析の記録
-  * [`flow-gguf-20260907.md`](analysis/flow-gguf-20260907.md): GGUFバックエンド処理フローの解析記録
+* **`docs/test/`**: 試験計画・確認項目・実機試験の証跡
+  * [`SBOS-TEST-001_agy移行確認試験書.md`](test/SBOS-TEST-001_agy移行確認試験書.md): agy移行のL0〜L5確認項目と再開チェックポイント
+* **`docs/adr/`**: アーキテクチャ決定記録 (Architectural Decision Records)
+  * [`0001-adopt-agy-backend-and-route-architecture.md`](adr/0001-adopt-agy-backend-and-route-architecture.md): agy バックエンド追加と routes 抽象による移行方針
+  * [`0002-agy-availability-quota-and-nightly-worker-guard.md`](adr/0002-agy-availability-quota-and-nightly-worker-guard.md): agy 障害分類・指数バックオフと夜間ワーカー安全中断方針
+  * [`0003-edit-guard-and-allowed-new-file-globs.md`](adr/0003-edit-guard-and-allowed-new-file-globs.md): 書き込み境界ガード (edit_guard) と新規ファイル許可 (allowed_new_file_globs)
+  * [`0004-agy-external-send-policy-and-satellite-allowlist.md`](adr/0004-agy-external-send-policy-and-satellite-allowlist.md): agy外部送信ポリシーとサテライト許可リスト
+* **サテライト生成文書**: サテライト側の `docs/issues/<TASK_ID>.md` は、Issue起票・昇格・定周期同期時に自動生成・自己修復されます。仕様は [`SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md`](design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md) を参照してください。
 
 ---
 

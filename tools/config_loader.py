@@ -32,15 +32,28 @@ class RoleConfig(BaseModel):
 
 class ProfileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    backend: Literal["ollama", "llama_server"]
+    backend: Literal["ollama", "llama_server", "agy"]
     model: str = Field(min_length=1)
-    openai_endpoint: str = Field(min_length=1, pattern=r"^https?://")
+    openai_endpoint: Annotated[Optional[str], Field(min_length=1, pattern=r"^https?://")] = None
     ollama_management_endpoint: Annotated[Optional[str], Field(pattern=r"^https?://")] = None
     port: Annotated[Optional[int], Field(ge=1, le=65535)] = None
     model_path: Annotated[Optional[str], Field(min_length=1)] = None
+    timeout: Annotated[Optional[int], Field(ge=1)] = None
 
     @model_validator(mode="after")
     def check_backend_fields(self) -> "ProfileConfig":
+        if self.backend == "agy":
+            for field_name in (
+                "openai_endpoint",
+                "port",
+                "model_path",
+                "ollama_management_endpoint",
+            ):
+                if getattr(self, field_name) is not None:
+                    raise ValueError(f"{field_name} must not be specified when backend is agy")
+            return self
+        if self.openai_endpoint is None:
+            raise ValueError(f"openai_endpoint must be specified when backend is {self.backend}")
         if self.backend == "llama_server":
             if self.port is None:
                 raise ValueError("port must be specified when backend is llama_server")
@@ -56,11 +69,21 @@ class ProfileConfig(BaseModel):
         return self
 
 
+class AgyExternalSendConfig(BaseModel):
+    """agyの外部送信認可設定."""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["allow_all", "allowlist"] = "allow_all"
+    allowed_project_keys: list[str] = Field(default_factory=list)
+    reject_secret_files: bool = False
+
+
 class BackendExecutionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["exclusive"]
     fallback: str = Field(min_length=1)
     gpu_lease_timeout: Annotated[int, Field(ge=1)] = 120
+    agy_external_send: AgyExternalSendConfig = Field(default_factory=AgyExternalSendConfig)
     routes: Dict[str, str]
     profiles: Dict[str, ProfileConfig]
 
@@ -80,9 +103,9 @@ class BackendExecutionConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    aider: AiderConfig
     models: Dict[str, RoleConfig]
     backend_execution: BackendExecutionConfig
+    aider: Optional[AiderConfig] = None
 
 
 # 後方互換性のためのエイリアス
@@ -103,8 +126,9 @@ class CoderPromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope_restriction_template: str
     execution_strategy_step_by_step: str
-    strict_output_rules: str
-    read_only_test_enforcement: str
+    agy_edit_rules: str
+    strict_output_rules: Optional[str] = None
+    read_only_test_enforcement: Optional[str] = None
 
 
 class AdvisorPromptConfig(BaseModel):
@@ -115,10 +139,12 @@ class AdvisorPromptConfig(BaseModel):
 class ReviewerPromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code_review_system: str
+    failure_analysis_system: str
 
 
 class PromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    version: str = "1.0"
     planner: PlannerPromptConfig
     coder: CoderPromptConfig
     advisor: AdvisorPromptConfig
@@ -222,6 +248,6 @@ def get_backend_execution_config() -> BackendExecutionConfig:
 
 
 def get_aider_config() -> AiderConfig:
-    """Get Aider execution configuration."""
+    """Get Aider execution configuration (deprecated)."""
     config = load_model_config()
-    return config.aider
+    return config.aider or AiderConfig()

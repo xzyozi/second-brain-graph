@@ -14,7 +14,9 @@ from tools.metadata_store import (
     ProjectLockManager,
     TaskStatus,
     get_runtime_cache_dir,
+    mark_task_completed_in_tasks_md,
     record_execution_history,
+    reset_task_state,
     resolve_project_context,
     safe_record_execution_history,
     update_task_state,
@@ -92,6 +94,41 @@ def test_validate_project_consistency_registry_not_found(tmp_path: Path) -> None
     """台帳ファイルが存在しない場合に例外となることを確認する。"""
     with pytest.raises(ValueError, match="Project registry file .* does not exist"):
         validate_project_consistency("SBOS-0001", "SBOS", metadata_dir=tmp_path)
+
+
+def test_validate_project_consistency_self_heals_missing_project_json(tmp_path: Path) -> None:
+    """サテライトの docs/project.json が欠落している場合、自動自己修復されて検証がパスすることを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TFG": {
+                "name": "test_file_grep",
+                "dir": "projects/test_file_grep",
+                "meta": "projects/test_file_grep/docs",
+                "github_repo": "xzyozi/test_file_grep",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    sat_dir = tmp_path / "projects" / "test_file_grep"
+    sat_dir.mkdir(parents=True, exist_ok=True)
+
+    # project.json が未存在の状態で呼び出す
+    pjson_path = sat_dir / "docs" / "project.json"
+    assert not pjson_path.exists()
+
+    # 例外なく成功すること
+    validate_project_consistency("TFG-0005", "TFG", metadata_dir=meta_dir, project_root=tmp_path)
+
+    # project.json が自動生成されていること
+    assert pjson_path.exists()
+    pdata = json.loads(pjson_path.read_text(encoding="utf-8"))
+    assert pdata["key"] == "TFG"
+    assert pdata["name"] == "test_file_grep"
+    assert pdata["github_repo"] == "xzyozi/test_file_grep"
 
 
 # ==============================================================================
@@ -389,11 +426,18 @@ def test_resolve_project_context_prioritizes_satellite_docs(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    # サテライト側の docs/project.json (新設定: base_branch = develop, target_files = ['satellite_code.py'])
+    # サテライト側の docs/project.json (新設定: base_branch = develop, target_files = ['satellite_code.py'], allowed_new_file_globs)
     sat_docs = sat_dir / "docs"
     sat_docs.mkdir(parents=True)
     (sat_docs / "project.json").write_text(
-        json.dumps({"key": "SAT", "base_branch": "develop", "target_files": ["satellite_code.py"]}),
+        json.dumps(
+            {
+                "key": "SAT",
+                "base_branch": "develop",
+                "target_files": ["satellite_code.py"],
+                "allowed_new_file_globs": ["tests/**", "src/**/*.rs"],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -406,3 +450,141 @@ def test_resolve_project_context_prioritizes_satellite_docs(tmp_path: Path) -> N
     assert ctx["valid"] is True
     assert ctx["base_branch"] == "develop"
     assert ctx["target_files"] == ["satellite_code.py"]
+    assert ctx["allowed_new_file_globs"] == ["tests/**", "src/**/*.rs"]
+
+
+def test_reset_task_state(tmp_path: Path) -> None:
+    """Issue #80: reset_task_state が指定した issue_id を安全に削除し、他タスクを保持することを検証する。"""
+    state_file = tmp_path / "state.json"
+
+    # 1. 2つのタスクを追加
+    update_task_state("PROJ", "TASK-0001", TaskStatus.FAILED_SYSTEM, state_file=state_file)
+    update_task_state("PROJ", "TASK-0002", TaskStatus.COMPLETED, state_file=state_file)
+
+    with open(state_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert "TASK-0001" in data
+    assert "TASK-0002" in data
+
+    # 2. TASK-0001 をリセット
+    res = reset_task_state("PROJ", "TASK-0001", state_file=state_file)
+    assert res is True
+
+    with open(state_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert "TASK-0001" not in data
+    assert "TASK-0002" in data
+
+    # 3. 再度 TASK-0001 をリセットしようとすると False
+    res_again = reset_task_state("PROJ", "TASK-0001", state_file=state_file)
+    assert res_again is False
+
+    # 4. 存在しない state_file に対する呼び出しでも例外にならず False
+    non_existent = tmp_path / "non_existent.json"
+    assert reset_task_state("PROJ", "TASK-9999", state_file=non_existent) is False
+
+
+def test_mark_task_completed_in_tasks_md(tmp_path: Path) -> None:
+    """Issue #80: mark_task_completed_in_tasks_md が該当タスクを安全に完了チェックに更新することを検証する。"""
+    sat_docs = tmp_path / "docs"
+    sat_docs.mkdir(parents=True)
+    tasks_file = sat_docs / "tasks.md"
+
+    initial_content = (
+        "# Tasks\n\n"
+        "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->\n"
+        "- [ ] [CW-0038] 除外アプリ判定 <!-- priority:medium issue:#109 stage:ready -->\n"
+        "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->\n"
+    )
+    tasks_file.write_text(initial_content, encoding="utf-8")
+
+    # CW-0038 を完了に更新
+    updated = mark_task_completed_in_tasks_md(str(tmp_path), "CW-0038")
+    assert updated is True
+
+    new_content = tasks_file.read_text(encoding="utf-8")
+    lines = new_content.splitlines()
+
+    # CW-0001 は変更なし
+    assert (
+        lines[2] == "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->"
+    )
+    # CW-0038 は - [x] になり completed: が付与
+    assert lines[3].startswith("- [x] [CW-0038] 除外アプリ判定")
+    assert "completed:" in lines[3]
+    # CW-0039 は未完了のまま
+    assert (
+        lines[4] == "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->"
+    )
+
+
+def test_parse_github_issue_url() -> None:
+    """GitHub Issue URL のパース処理を検証する。"""
+    from tools.metadata_store import parse_github_issue_url
+
+    res = parse_github_issue_url("https://github.com/xzyozi/test_file_grep/issues/5")
+    assert res == ("xzyozi/test_file_grep", 5)
+
+    res_param = parse_github_issue_url("https://github.com/org/repo/issues/123#issuecomment-456")
+    assert res_param == ("org/repo", 123)
+
+    assert parse_github_issue_url("invalid-url") is None
+    assert parse_github_issue_url("https://github.com/org/repo/pull/123") is None
+
+
+def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
+    """URL および task_id から project_key, task_id, issue_number が正しく解決されることを検証する。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+
+    reg_file = metadata_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TFG": {
+                "name": "test_file_grep",
+                "github_repo": "xzyozi/test_file_grep",
+                "dir": "projects/test_file_grep",
+                "meta": "metadata/projects/TFG",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    sat_dir = project_root / "projects" / "test_file_grep"
+    sat_docs = sat_dir / "docs"
+    sat_docs.mkdir(parents=True, exist_ok=True)
+
+    # tasks.md に TFG-0005 (issue:#5) を配置
+    tasks_content = "# Tasks\n- [ ] [TFG-0005] パス検証関数を追加 (issue:#5)\n"
+    (sat_docs / "tasks.md").write_text(tasks_content, encoding="utf-8")
+
+    from tools.metadata_store import resolve_target_spec
+
+    # 1. URL からの解決
+    res_url = resolve_target_spec(
+        "https://github.com/xzyozi/test_file_grep/issues/5",
+        project_root=project_root,
+    )
+    assert res_url["type"] == "url"
+    assert res_url["project_key"] == "TFG"
+    assert res_url["task_id"] == "TFG-0005"
+    assert res_url["issue_number"] == 5
+
+    # 2. task_id からの解決
+    res_task = resolve_target_spec("TFG-0005", project_root=project_root)
+    assert res_task["type"] == "task_id"
+    assert res_task["project_key"] == "TFG"
+    assert res_task["task_id"] == "TFG-0005"
+    assert res_task["issue_number"] == 5
+
+    # 3. CWD サテライト配下での数値指定 (5) からの解決
+    res_num = resolve_target_spec(
+        "5",
+        cwd=sat_dir,
+        project_root=project_root,
+    )
+    assert res_num["type"] == "issue_number"
+    assert res_num["project_key"] == "TFG"
+    assert res_num["task_id"] == "TFG-0005"
+    assert res_num["issue_number"] == 5
