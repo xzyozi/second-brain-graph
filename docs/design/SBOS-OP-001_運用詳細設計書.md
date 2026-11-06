@@ -1,5 +1,5 @@
 # 運用詳細設計書（定常運用・ランブック・トラブルシューティング）
-**Second Brain OS 日次サイクル・LangGraph エントリポイント・障害対応ランブック**
+**Second Brain OS agy実行基盤・LangGraphエントリポイント・障害対応ランブック**
 
 | 項目     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,10 +61,10 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    uv run python tools/orchestrator_graph.py execute --issue-id EC-012
    ```
    - ① `plan_node` (LiteLLM / Planner による要件指示書生成)
-   - ② `code_node` (コード編集エンジンによる衛星コード編集。【現行】Aider `--no-auto-commits`、【移行設計】agy)
-   - ③ `lint_node` (Ruff 高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰)
-   - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
-   - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
+   - ② `code_node`（agyによる衛星コード編集。edit_guard適用）
+   - ③ `lint_node`（Ruff高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰）
+   - ④ `test_node`（pytest実行、失敗時はエラーログを蓄積し `code_node` へ復帰）
+   - ⑤ `review_node`（agy Reviewer監査、JEV二次検問、Reviewdogアノテーション表示）
    - ⑥ `done_node` (LGTMは完了ではなく遷移条件。PR作成を行い、成功時は `state.json` を `COMPLETED` に、失敗時は `PR_FAILED` に更新。`execution_history.json` へ成果記録、ロック解放)
    
    > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
@@ -91,19 +91,19 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - 対象 Issue の説明文が長すぎる場合は、タスクを分割して指示文を簡潔にする。
 
 ### ケース2: テスト/静的解析の継続失敗 (`max_round` 到達)
-- **症状:** コード編集エンジン（Aider / agy）による修復が `max_round`（デフォルト3回）連続で失敗し、`escalate_node` に遷移して `final_status: "FAILED_B7"` として記録される。
+- **症状:** agyによる修復が `max_round`（デフォルト3回）連続で失敗し、`escalate_node` に遷移して `final_status: "FAILED_B7"` として記録される。
 - **対処:**
   - `orchestrator_graph.py` の実行ログから直近の pytest / Ruff エラーログを確認。
   - テストコードや型定義の直接編集が必要な場合は、人間が `projects/<name>/` を編集する。
 
-### ケース3: コード編集エンジン（Aider / agy）/ LLM 推論のタイムアウト
-- **症状:** 【現行】`AiderRunError: Aider実行がタイムアウトしました (timeout=600)` や LiteLLM タイムアウトが発生。【移行設計】agy 経路では `AgyRunError`（メッセージに `timed out` を含む）が発生する。判定は例外メッセージの `timed out` で行うため、現行・移行後とも同じ再試行規則が適用される。
+### ケース3: agyコード編集・LLM推論のタイムアウト
+- **症状:** `AgyRunError`（メッセージに `timed out` を含む）またはagyテキスト応答のタイムアウトが発生する。
 - **対処:**
   - Issue実行全体を通して再試行は1回のみとする。
   - `llm_timeout_count == 0` の場合: `llm_timeout_count` を 1 にして同一ノードを自動再試行する。
   - `llm_timeout_count == 1` の場合: 直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
   - 【現行】根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
-  - 【移行設計】agy 経路には VRAM は関係しない。agy の応答遅延・ネットワーク・クォータを確認する。内側のタイムアウト（`profile.timeout`、既定 1200 秒）は外側の worker タイムアウト（`nightly_worker.toml` の `timeout_seconds`、1800 秒）より短く保つ。
+  - agy経路では VRAM は関係しない。agy の応答遅延・ネットワーク・クォータを確認する。内側のタイムアウト（`profile.timeout`、既定 1200 秒）は外側の worker タイムアウト（`nightly_worker.toml` の `timeout_seconds`、1800 秒）より短く保つ。
 
 ### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
 - **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止し、ロックが解放された。
@@ -121,22 +121,17 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。連続 `FAILED_B7` で自動 Resume が拒否された場合（`consecutive_b7` が 2 以上）は、原因を修復したうえで `--resume`（継続）または `--fresh`（作り直し）を明示して再実行する。
   3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
-### ケース6: agy 経路の障害と、旧経路へのロールバック【移行設計・Epic #116】
-> 本ケースは agy への `routes` 切り替え（Issue #123）の完了後に適用される。移行前の環境には当てはまらない。
+### ケース6: agy経路の障害と、旧資産からの復旧
+> 本ケースはagy routesが現行の環境に適用される。Aiderへ戻す場合は、単純なroute変更ではなく、退避資産の復元を伴う別作業になる。
 
 - **症状:** 次のいずれかで、複数の Issue が `FAILED_SYSTEM`（`SYSTEM_ERROR`）で連続して失敗する。
   - agy の認証切れ、クォータ・レート制限、ネットワーク障害、`agy` 実行ファイルの未導入（PATH 解決失敗）。
-  - 移行直後は、**これらの原因は区別されず**、すべて `FAILED_SYSTEM` として記録される。原因は実行ログ（agy の終了コードと stderr の要約）で判断する。種別の分類と、連続失敗時の自動中断は Issue #126 で対応する。
+  - agyの認証切れ、クォータ・レート制限、ネットワーク障害、`agy` 実行ファイルの未導入（PATH解決失敗）。これらは `AGY_AUTH` / `AGY_QUOTA` 等に分類される。
 - **確認:**
   1. 実行ログで、失敗が `AgyRunError`（編集）か、`call_llm` 経路の `AgyError`（計画・レビュー等）かを確認する。
   2. 手動で `agy` を単独起動し、認証とネットワークが有効か確認する。認証情報の中身は読まない。
   3. `FAILED_SYSTEM` は `consecutive_b7` を増やさず、自動 Resume の対象にもならない（DD-003 §5.2）。復旧後に `--resume` または `--fresh` を明示して再実行する。
-- **旧経路へのロールバック（`routes` の切り戻し）:**
-  1. `config/models.yaml` の `backend_execution.routes` の向き先を、旧 profile へ戻す（`spec_draft`・`task_decomposition`・`task_prioritization`・`code_review`・`failure_analysis`・`test_feedback` → `reasoning_ollama`、`code_edit`・`aider_edit` → `coding_ollama`）。**移行期間は旧 profile を削除しないため、この変更だけで戻せる。**
-  2. 設定は `lru_cache` でプロセス内にキャッシュされるため、**新しい Python プロセスで再実行する**（常駐プロセスがある場合は再起動する）。
-  3. Ollama が起動しており、`coding_ollama` と `reasoning_ollama` のモデルが利用可能なことを確認し、GPU 使用状況を確認する（現行の運用）。
-  4. 旧 profile が削除された後（Issue #128 完了後）は、この手順は使えない。その場合の復元は、退避した資産（`legacy/local_llm/` と `archive/local-llm-*` タグ、Issue #118）による。
-- **自動フォールバックはない**: agy の失敗時に、システムが自動で旧経路へ切り替えることはない（DD-003 §10.1）。切り替えは運用者の判断で行う。
+- **復旧:** Agy CLI・認証・ネットワーク・quotaを確認し、復旧後に `--resume` または `--fresh` を明示して再実行する。自動fallbackは行わない。Aiderへ戻す場合は `legacy/local_llm/` または archive tag から資産を復元する。
 
 ---
 
@@ -144,8 +139,8 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 
 ### 4.1 新モデルベンチマーク評価プロセス
 1. `uv run python tools/orchestrator_graph.py` によるダミー指示書テスト。
-2. Aider によるリファクタリングマージテスト。
-3. Reviewer による監査厳密性テスト。
+2. agy実行環境でのサンドボックス実行・JSON契約確認。
+3. Reviewerによる監査厳密性テスト。
 
 ### 4.2 ロールバック（切り戻し）手順【現行・ローカルモデル更新時】
 > agy 経路から旧経路へ戻す手順は、§3 ケース6 を参照すること。以下は、ローカルモデルを更新して不安定だった場合の手順である。

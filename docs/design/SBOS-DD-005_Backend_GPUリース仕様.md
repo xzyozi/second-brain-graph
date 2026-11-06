@@ -1,18 +1,16 @@
 # 詳細設計書（Backend LLM 制御・GPU リース仕様）
 
-| 項目               | 内容                                                                                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 文書番号           | SBOS-DD-005                                                                                                                                                    |
-| 文書名             | Second Brain OS - Backend LLM 制御・GPU リース仕様                                                                                                             |
-| 版数               | Rev.2.1（agy外部送信ポリシーとproject key allowlistを追記）                                                                                                    |
-| 改訂日             | 2026年11月4日                                                                                                                                                  |
-| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-004（コード編集エンジン統合）、Issue #39、Epic #116                                              |
-| 対象コンポーネント | `tools/backend_coordinator.py`、`tools/llama_backend.py`、`tools/gguf_manager.py`、`tools/config_loader.py`、`tools/llm_client.py`                             |
-| 役割               | LLM プロファイルの検証、Ollama と llama-server の排他制御、GPU リソースのリース管理、OpenAI 互換 API へのリクエスト構成、および agy backend の追加（移行設計） |
+| 項目               | 内容                                                                                                                               |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 文書番号           | SBOS-DD-005                                                                                                                        |
+| 文書名             | Second Brain OS - Backend LLM 制御・GPU リース仕様                                                                                 |
+| 版数               | Rev.2.1（agy外部送信ポリシーとproject key allowlistを追記）                                                                        |
+| 改訂日             | 2026年11月4日                                                                                                                      |
+| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-004（コード編集エンジン統合）、Issue #39、Epic #116                  |
+| 対象コンポーネント | `tools/backend_coordinator.py`、`tools/llama_backend.py`、`tools/gguf_manager.py`、`tools/config_loader.py`、`tools/llm_client.py` |
+| 役割               | LLMプロファイル検証、agy backendの実行、JEV用Ollamaの据え置き、GPUリース管理、外部送信ポリシーの適用                               |
 
-> **記載区分**: 本書は次の2区分を明示する。
-> - **【現行】**: `develop` の実装で動作している内容。
-> - **【移行設計】**: Epic #116 で実装予定の内容（未実装）。実装の正本は `tools/` のコードである。
+> **現行構成**: JEVを除くLLM処理はagy backendへルーティングする。JEV（`tools/jev_adapter.py`、`submodules/jev-localsystem`、`tools/screen_issues.py`）だけは本書のroutes/profilesを経由せず、Ollama（既定モデル `qwen2.5:0.5b`）へ直接接続する。Aiderとllama-serverはruntimeから退役し、旧資産はlegacy/archiveに保存する。
 
 ---
 
@@ -20,7 +18,7 @@
 
 本仕様は、オーケストレーターが多様な LLM バックエンド（Ollama、llama-server 等）を利用する際の、設定の検証（Pydantic）、Intent によるルーティング解決、およびローカル GPU リソースの排他リース制御について定義する。
 
-Epic #116 では、JEV を除くローカルLLMの全使用箇所を agy（Antigravity CLI）へ置き換える。置き換えは、**既存の `intent → routes → profile → backend adapter` の流れに `agy` を3つ目の backend として追加し、`routes` の向き先を agy の profile へ切り替える**形で行う。呼び出し側（`call_llm` の呼び出し元4箇所、`code_node`）のシグネチャと返り値は変えない。
+Epic #116のagy移行は実装済みである。`intent → routes → profile → agy backend adapter` の流れを使い、呼び出し側（`call_llm`の4箇所、`code_node`）のシグネチャと返り値を維持する。
 
 ### 1.1 本書の対象外（据え置き）
 
@@ -43,13 +41,13 @@ Epic #116 では、JEV を除くローカルLLMの全使用箇所を agy（Antig
 
 ### 2.1 profile の必須項目
 
-| backend        | 必須項目                                                 | 状態         |
-| :------------- | :------------------------------------------------------- | :----------- |
-| `ollama`       | `model`、`openai_endpoint`、`ollama_management_endpoint` | 【現行】     |
-| `llama_server` | `model`、`openai_endpoint`、`port`、`model_path`         | 【現行】     |
-| `agy`          | `model`（識別ラベル）。`timeout`（任意、秒）             | 【移行設計】 |
+| backend        | 必須項目                                                 | 状態     |
+| :------------- | :------------------------------------------------------- | :------- |
+| `ollama`       | `model`、`openai_endpoint`、`ollama_management_endpoint` | 【現行】 |
+| `llama_server` | `model`、`openai_endpoint`、`port`、`model_path`         | 【現行】 |
+| `agy`          | `model`（識別ラベル）。`timeout`（任意、秒）             | 現行     |
 
-【移行設計】`agy` profile の契約（Issue #120）:
+### 2.1 agy profileの現行契約
 
 * `backend` の取りうる値に `"agy"` を追加する。
 * `openai_endpoint` は必須から**任意**へ変更する。`ollama` / `llama_server` では従来どおり必須（`^https?://`）とし、`agy` では**指定されたらエラー**にする。`port`・`model_path`・`ollama_management_endpoint` も `agy` では指定不可とする。
@@ -72,14 +70,14 @@ backend_execution:
 
 各タスクの目的に応じた `intent` が、どの設定プロファイルに割り当てられるかを定義する。
 
-| intent                                                    | 【現行】profile    | 【移行設計】profile | role               |
-| :-------------------------------------------------------- | :----------------- | :------------------ | :----------------- |
-| `spec_draft`、`task_decomposition`、`task_prioritization` | `reasoning_ollama` | `agy_default`       | planner            |
-| `code_edit`、`aider_edit`                                 | `coding_ollama`    | `agy_default`       | coder              |
-| `code_review`、`failure_analysis`、`test_feedback`        | `reasoning_ollama` | `agy_default`       | reviewer / planner |
+| intent                                                    | 現行 profile                                                                     | role               |
+| :-------------------------------------------------------- | :------------------------------------------------------------------------------- | :----------------- |
+| `spec_draft`、`task_decomposition`、`task_prioritization` | `agy_default`                                                                    | planner            |
+| `aider_edit` 互換intent                                   | `code_edit` と同じく `agy_default` へ解決する。Aider runtimeの選択を意味しない。 |
+| `code_review`、`failure_analysis`、`test_feedback`        | `agy_default`                                                                    | reviewer / planner |
 
-* **自動 fallback はない**: `fallback` 設定は検証されるだけで、Coordinator は route に指定された profile だけを実行する。この方針は移行後も変えない（移行設計: agy が失敗しても自動でローカルへ戻さない。理由は、サイレントな切り替えが品質比較と外部送信の許可リスト（Issue #124）を迂回するため）。
-* **ロールバック**: 【移行設計】移行の段階では旧 profile（`reasoning_ollama`、`coding_ollama`、`reasoning_economy`）を削除しない。`routes` の向き先を旧 profile へ戻すだけで、従来の動作に戻る。
+* **自動fallbackはない**: routeに指定されたagy profileだけを実行する。Aiderへ戻す場合はlegacy/archiveから資産を復元する。
+* **ロールバック方針**: 現行routeを旧profileへ変更するだけではAider runtimeへ戻らない。Aiderへ戻す場合は `legacy/local_llm/` または archive tag から必要資産を復元し、別環境で比較検証する。
 * `task_decomposition` と `task_prioritization` は `routes` に定義されているが、現行の `tools/` 配下にこの intent の呼び出し元は見つかっていない。
 
 ## 4. LLM Adapter (`llm_client.py`)
@@ -95,7 +93,7 @@ backend_execution:
 
 > **訂正（Rev.2.0）**: Rev.1.1 は `timeout=300` と記載していたが、実装の既定値は 600 秒である。
 
-### 4.1 agy 経路【移行設計】（Issue #121）
+### 4.1 agy経路（現行）
 
 `profile.backend == "agy"` のとき、`call_llm` の内部処理（`_do_llm_call`）は OpenAI 経路ではなく agy を**テキスト応答器**として呼ぶ。シグネチャと返り値の形（`{"raw": ...}` または解析済み JSON object）は変えない。
 
@@ -125,17 +123,17 @@ backend_execution:
 
 `BackendExecutionCoordinator.execute(intent, {"action": callable})` は route を profile に解決し、`GpuLeaseAdapter` のコンテキスト内で該当 Adapter を実行する。未定義 intent、未定義 profile、`action` の欠落は例外とする。
 
-### 5.1 GPU リース機構【現行】
+### 5.1 GPUリース機構（現行）
 * GPU リースは `metadata/.gpu_lease.lock` を利用し、待機時間は `gpu_lease_timeout` を使用する。取得できない場合は `TimeoutError` を送出する。
 * **排他性**: `mode` は `exclusive` のみを許容し、複数 backend の同時 GPU 利用は行わない。
 * 現行の実装では、**全 backend の実行が `with self.gpu_lease:` で包まれる**。
 
-【移行設計】`agy` は GPU を使わないため、**`backend == "agy"` のときは GPU リースを取得せずに実行する**（Issue #120）。これにより、agy の実行が Ollama 側の実行（JEV を含む）を待たせず、また待たされない。
+agyはGPUを使わないため、`backend == "agy"` のときはGPUリースを取得せずに実行する。これにより、agyの実行がOllama側の実行（JEVを含む）を待たせず、また待たされない。
 
 ### 5.2 各 Backend Adapter の挙動
 * **Ollama Adapter【現行】**: action 実行中のみ OpenAI 互換 endpoint と Ollama 管理 endpoint を環境変数へ設定し、終了後に復元する。実行前に、ロード済みの別モデルを Ollama から解放する。
 * **llama-server Adapter【現行】**: Ollama profile がある場合はロード済みモデルの解放を試み、`managed_llama_server()` 内で action を実行する。**Ollama 管理 API に到達できない場合は VRAM の状態が不明のため、環境変数 `SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM` が `1` / `true` / `yes` でない限り、llama-server の起動を拒否して `RuntimeError` とする**（Issue #25）。許可されている場合のみ、警告を出して起動を続行する。
-* **agy Adapter【移行設計】**: 環境変数のパッチを行わず、`request["action"]` を `action(profile)` として呼ぶだけの薄い Adapter とする。agy の起動処理は `agy_client` が持ち、Adapter は持たない。`action` が無い場合は他の Adapter と同様に `ValueError` とする。
+* **agy Adapter（現行）**: 環境変数のパッチを行わず、`request["action"]`を`action(profile)`として呼ぶだけの薄いAdapterとする。agyの起動処理は`agy_client`が持ち、Adapterは持たない。
 
 > **訂正（Rev.2.0）**: Rev.1.1 は llama-server Adapter について「Ollama API 到達不能時は VRAM 解放済みと判定して処理を継続する」と記載していたが、実装は逆で、既定で起動を拒否する（Issue #25）。
 
