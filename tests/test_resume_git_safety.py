@@ -128,11 +128,17 @@ def _run_resume(
     state_file = _write_state(metadata_dir, "FAILED_B7", 0)
     executed: list[str] = []
 
+    # デフォルトでは作業ブランチ sbos/{ISSUE_ID} 上にいるものとする (Issue #97)
+    merged_responses = {
+        "branch --show-current": MagicMock(returncode=0, stdout=f"sbos/{ISSUE_ID}\n", stderr=""),
+        **responses,
+    }
+
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
         patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", _fake_run_cmd(responses, executed)),
+        patch("tools.orchestrator_graph.run_cmd", _fake_run_cmd(merged_responses, executed)),
         patch("tools.orchestrator_graph.StateGraph") as mock_state_graph,
     ):
         mock_app = MagicMock()
@@ -203,3 +209,41 @@ def test_resume_aborts_when_rebase_fails(tmp_path: Path) -> None:
         (tmp_path / "tools" / ".cache" / "execution_history.json").read_text(encoding="utf-8")
     )
     assert "CONFLICT" in history["records"][-1]["error_message"]
+
+
+def test_resume_aborts_when_dirty_on_different_branch(tmp_path: Path) -> None:
+    """作業ブランチ以外(例: develop)で未コミット変更がある場合、WIPコミットを作らず安全停止する (Issue #97)."""
+    responses = {
+        "branch --show-current": MagicMock(returncode=0, stdout="develop\n", stderr=""),
+        **_status(" M src/a.py\n"),
+        "diff --cached --quiet": MagicMock(returncode=1, stdout="", stderr=""),
+    }
+    executed, mock_app, state_file = _run_resume(tmp_path, responses)
+
+    mock_app.invoke.assert_not_called()
+    assert not any(c.startswith("git commit") for c in executed)
+    assert not any("git switch" in c for c in executed)
+
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    assert saved[ISSUE_ID]["status"] == "FAILED_SYSTEM"
+
+    history = json.loads(
+        (tmp_path / "tools" / ".cache" / "execution_history.json").read_text(encoding="utf-8")
+    )
+    err_msg = history["records"][-1]["error_message"]
+    assert "Resume aborted: Working tree is dirty on branch 'develop'" in err_msg
+    assert f"which does not match the expected work branch 'sbos/{ISSUE_ID}'" in err_msg
+
+
+def test_resume_proceeds_when_clean_on_different_branch(tmp_path: Path) -> None:
+    """作業ブランチ以外(例: develop)でも、作業ツリーがcleanであれば正常にswitchしてResumeを継続する (Issue #97)."""
+    responses = {
+        "branch --show-current": MagicMock(returncode=0, stdout="develop\n", stderr=""),
+        **_status(""),
+    }
+    executed, mock_app, _ = _run_resume(tmp_path, responses)
+
+    # WIPコミットは作られず、作業ブランチへの switch が呼ばれて正常完走する
+    assert not any(c.startswith("git commit") for c in executed)
+    assert any(f"git switch sbos/{ISSUE_ID}" in c for c in executed)
+    mock_app.invoke.assert_called_once()

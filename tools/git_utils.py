@@ -99,3 +99,25 @@ def get_git_diff(cwd: Optional[str] = None, base_branch: Optional[str] = None) -
         if isinstance(e, GitDiffError):
             raise
         raise GitDiffError(f"Failed to execute git diff: {e}") from e
+
+
+def get_current_branch(cwd: Optional[str] = None) -> Optional[str]:
+    """現在チェックアウトされているブランチ名を取得する。
+
+    detached HEAD、未コミットの初期リポジトリ、または取得失敗時は None を返す。
+    """
+    try:
+        res = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if res.returncode == 0:
+            branch = res.stdout.strip()
+            return branch if branch else None
+        return None
+    except Exception:
+        return None

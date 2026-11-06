@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.git_utils import GitDiffError, get_git_diff
+from tools.git_utils import GitDiffError, get_current_branch, get_git_diff
 
 
 def test_get_git_diff_success() -> None:
@@ -78,3 +78,26 @@ def test_get_git_diff_base_branch_fallback() -> None:
         mock_run.side_effect = side_effect
         diff = get_git_diff(cwd=".", base_branch="main")
         assert "diff --git a/feature.py" in diff
+
+
+def test_get_current_branch_success() -> None:
+    """git branch --show-current が成功した際、ブランチ名が返されることを検証する。"""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "sbos/TFG-0005\n"
+        assert get_current_branch(cwd=".") == "sbos/TFG-0005"
+
+
+def test_get_current_branch_detached_head_returns_none() -> None:
+    """detached HEAD (空文字列) の場合、None が返されることを検証する。"""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "\n"
+        assert get_current_branch(cwd=".") is None
+
+
+def test_get_current_branch_error_returns_none() -> None:
+    """非0終了や例外発生時、None が返されることを検証する。"""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 128
+        assert get_current_branch(cwd=".") is None
