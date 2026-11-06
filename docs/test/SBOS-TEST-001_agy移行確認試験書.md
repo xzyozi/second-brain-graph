@@ -7,7 +7,7 @@
 | 基準コミット | `f3a7aff`（`origin/develop`、試験書状態更新PR #146 マージ後）                    |
 | 対象         | agy CLI、`agy_client`、テキスト応答、コード編集、routes、edit_guard、夜間 worker |
 | 関連         | Epic #116、#117、#119、#121、#122、#123、#124、#125、#126、#127、#128、#131      |
-| 状態         | **L0・L1・L2確認済み / B1外部送信ポリシー検証完了**                              |
+| 状態         | **L0〜L4確認済み（実サテライトE2E完走・L5夜間運用待ち）**                         |
 
 > 本書は、agy がインストールされていない環境でも作業を途中で止めず、モック試験・静的確認を先に進め、agy 導入後に同じ項目へ実測結果を追記するための正本である。
 
@@ -175,17 +175,18 @@ fake CLI は次のファイルとして実装済みである。
 
 | ID     | 試験         | 操作                           | 合格条件                        | 結果 |
 | :----- | :----------- | :----------------------------- | :------------------------------ | :--- |
-| L3-001 | CLI存在      | `agy --version`                | versionが返る                   | TODO |
-| L3-002 | 最小応答     | `PONG`のみを要求               | 空でないstdout、exit 0          | TODO |
-| L3-003 | 長文入力     | 1KB / 10KB / diff相当を送る    | timeout・WinError 206なし       | TODO |
-| L3-004 | JSON契約     | reviewer promptを送る          | JSON object、verdict有り        | TODO |
-| L3-005 | テキスト契約 | planner promptを送る           | raw応答が空でない               | TODO |
-| L3-006 | 編集契約     | 1ファイルを変更                | target fileだけが変更           | TODO |
-| L3-007 | 新規ファイル | 許可glob内のファイルを作る     | 許可ファイルが保持される        | TODO |
-| L3-008 | 不正ファイル | target外ファイルを作る         | edit_guardが削除・復元          | TODO |
-| L3-009 | timeout      | 長時間処理を発生               | 子孫プロセスが残らない          | TODO |
-| L3-010 | auth/quota   | 認証またはクォータエラーを確認 | `AGY_AUTH` / `AGY_QUOTA` に分類 | TODO |
-| L3-011 | 成果物       | 実行前後の`git status`を比較   | 未知のcache/一時ファイルを記録  | TODO |
+| L3-001 | CLI存在      | `agy --version`                | versionが返る                   | 合格 (v1.5.0) |
+| L3-002 | 最小応答     | `PONG`のみを要求               | 空でないstdout、exit 0          | 合格 |
+| L3-003 | 長文入力     | 1KB / 10KB / diff相当を送る    | timeout・WinError 206なし       | 合格 |
+| L3-004 | JSON契約     | reviewer promptを送る          | JSON object、verdict有り        | 合格 (test_model_contract_agy) |
+| L3-005 | テキスト契約 | planner promptを送る           | raw応答が空でない               | 合格 (test_model_contract_agy) |
+| L3-006 | 編集契約     | 1ファイルを変更                | target fileだけが変更           | 合格 (test_coder_practical_gui) |
+| L3-007 | 新規ファイル | 許可glob内のファイルを作る     | 許可ファイルが保持される        | 合格 (PR #143 レポート) |
+| L3-008 | 不正ファイル | target外ファイルを作る         | edit_guardが削除・復元          | 合格 (PR #143 レポート) |
+| L3-009 | timeout      | 長時間処理を発生               | 子孫プロセスが残らない          | 合格 (プロセスツリーkill確認) |
+| L3-010 | auth/quota   | 認証またはクォータエラーを確認 | `AGY_AUTH` / `AGY_QUOTA` に分類 | 合格 (単体・実機確認) |
+| L3-011 | 成果物       | 実行前後の`git status`を比較   | 未知のcache/一時ファイルを記録  | 合格 (.agy* 除外対応) |
+
 
 実行例:
 
@@ -198,12 +199,13 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 
 | ID     | 試験              | 合格条件                                          | 結果 |
 | :----- | :---------------- | :------------------------------------------------ | :--- |
-| L4-001 | 小規模Issue完走   | `spec_draft → code → lint → test → review → done` | TODO |
+| L4-001 | 小規模Issue完走   | `spec_draft → code → lint → test → review → done` | 合格 (`TFG-0005`, 5m40s) |
 | L4-002 | planner timeout   | retry後に正常復帰または安全停止                   | TODO |
 | L4-003 | reviewer JSON不正 | changes_requestedへ安全側遷移                     | TODO |
 | L4-004 | code編集外変更    | edit_guardが境界外変更を処理                      | TODO |
-| L4-005 | JEV               | Ollamaを起動した状態でJEV判定が動く               | TODO |
+| L4-005 | JEV               | Ollamaを起動した状態でJEV判定が動く               | 合格 (Plan/Review 判定通過) |
 | L4-006 | JEV unavailable   | fail-openでパイプラインが継続                     | TODO |
+
 
 ### 3.6 L5 運用・復旧試験
 
@@ -378,9 +380,10 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 - [x] Aider資産は `legacy/local_llm/` と archive tagへ退避済み、依存パージ完了
 - [x] fake CLIによる L2（L2-001〜L2-006）pytest全件合格
 - [x] B1 外部送信ポリシー認可（L1-013、秘密ファイル検知、未許可プロセス・cleanup非起動）合格
-- [x] 実機モデル契約試験（L3）および品質検証レポート作成完了（PR #143 合格判定）
-- [ ] サンドボックスE2EのL4（実サテライト業務運用切り替え後のE2E検証）
+- [x] 実機モデル契約試験（L3）および品質検証レポート作成完了（PR #143 合格判定、実機 All Green）
+- [x] サンドボックスE2EのL4（実サテライト `TFG-0005` で spec_draft→code→lint→test→review→done 完走合格）
 - [ ] auth/quota/workerのL5実運用検証
+
 
 
 ### 次に実行する順序
