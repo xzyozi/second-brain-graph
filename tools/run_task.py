@@ -486,6 +486,12 @@ def main() -> None:
         help="Reset task state and satellite branch cleanly, then immediately re-run with --fresh",
     )
     parser.add_argument(
+        "--watch-ci",
+        action="store_true",
+        default=False,
+        help="Watch GitHub Actions CI completion after PR creation and auto-recover on failure (Issue #171)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -627,6 +633,8 @@ def main() -> None:
         exec_cmd.append("--resume")
     if args.auto_stash:
         exec_cmd.append("--auto-stash")
+    if getattr(args, "watch_ci", False):
+        exec_cmd.append("--watch-ci")
 
     logger.info(f"Starting orchestrator execution for {target_issue_id}...")
     res = subprocess.run(exec_cmd, cwd=str(PROJECT_ROOT))
