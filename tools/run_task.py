@@ -26,14 +26,14 @@ logger = logging.getLogger("run_task")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.metadata_store import (  # noqa: E402
-    GENERATED_ARTIFACT_GITIGNORE_ENTRIES,
-    resolve_target_spec,
-)
-from tools.orchestrator_graph import (  # noqa: E402
+from tools.core.orchestrator_graph import (  # noqa: E402
     ensure_satellite_environment,
     resolve_project_context,
     validate_project_consistency,
+)
+from tools.workspace.metadata_store import (  # noqa: E402
+    GENERATED_ARTIFACT_GITIGNORE_ENTRIES,
+    resolve_target_spec,
 )
 
 
@@ -324,7 +324,7 @@ def reset_task_environment(
     logger.info(
         f"=== Resetting task environment for '{target_issue_id}' (Project: {project_key}) ==="
     )
-    from tools.metadata_store import force_unlock_project, reset_task_state
+    from tools.workspace.metadata_store import force_unlock_project, reset_task_state
 
     root = project_root or PROJECT_ROOT
 

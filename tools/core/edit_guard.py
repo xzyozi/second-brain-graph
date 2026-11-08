@@ -95,7 +95,7 @@ SECRET_FILE_PATTERNS = [
 
 def _get_mother_root() -> Path:
     """母艦リポジトリのルートパスを解決する."""
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def validate_cwd_is_satellite(

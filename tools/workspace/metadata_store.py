@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from filelock import FileLock, Timeout
 
-from tools.sanitizer import sanitize_data
+from tools.core.sanitizer import sanitize_data
 
 logger = logging.getLogger("metadata_store")
 
@@ -116,7 +116,7 @@ def get_runtime_cache_dir(
     母艦の Git 管理から完全に除外された tools/.cache/projects/<PROJECT_KEY>/ 配下に配置される。
     """
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     cache_dir = project_root / "tools" / ".cache" / "projects" / project_key
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
@@ -187,7 +187,7 @@ def validate_project_consistency(
         )
 
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     if metadata_dir is None:
         metadata_dir = project_root / "metadata"
 
@@ -258,7 +258,7 @@ def _is_default_metadata_dir(metadata_dir: Optional[Path]) -> bool:
     """渡された metadata_dir が未指定、または母艦標準の metadata ディレクトリであるかを判定する。"""
     if metadata_dir is None:
         return True
-    default_meta = Path(__file__).resolve().parent.parent / "metadata"
+    default_meta = Path(__file__).resolve().parent.parent.parent / "metadata"
     try:
         return metadata_dir.resolve() == default_meta.resolve()
     except Exception:
@@ -435,7 +435,7 @@ def update_task_state(
     elif metadata_dir is None and state_file is None:
         # 新パスに state.json がまだ存在しない場合、旧パス (metadata/projects/<KEY>/state.json) があればフォールバック読み込み
         legacy_state_file = (
-            Path(__file__).resolve().parent.parent
+            Path(__file__).resolve().parent.parent.parent
             / "metadata"
             / "projects"
             / project_key
@@ -521,7 +521,7 @@ def reset_task_state(
     # 旧パス (metadata/projects/<KEY>/state.json) も存在する場合は削除
     if metadata_dir is None and state_file is None:
         legacy_state_file = (
-            Path(__file__).resolve().parent.parent
+            Path(__file__).resolve().parent.parent.parent
             / "metadata"
             / "projects"
             / project_key
@@ -615,7 +615,10 @@ def record_execution_history(
     """
     if history_file is None:
         history_file = (
-            Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
+            Path(__file__).resolve().parent.parent.parent
+            / "tools"
+            / ".cache"
+            / "execution_history.json"
         )
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -757,7 +760,7 @@ def resolve_project_context(
     特定のファイル名にハードコードせず、任意の衛星リポジトリの対象ファイルを動的に検出・解決する (MULTI-001 §2③・§4)。
     """
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     if metadata_dir is None:
         metadata_dir = project_root / "metadata"
 
@@ -905,7 +908,7 @@ def resolve_project_context(
 def load_project_registry(project_root: Optional[Path] = None) -> Dict[str, Any]:
     """metadata/.project-registry.json を読み込み、projects 辞書を返す。"""
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     reg_file = project_root / "metadata" / ".project-registry.json"
     if not reg_file.exists():
         return {}
@@ -972,7 +975,7 @@ def resolve_project_from_cwd(
         cwd = cwd.resolve()
 
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     project_root = project_root.resolve()
 
     # 1. CWD から上位ディレクトリを遡り docs/project.json を探索
@@ -1010,7 +1013,7 @@ def resolve_task_id_for_issue(
 ) -> Optional[str]:
     """project_key と GitHub Issue 番号からサテライト内の対応する task_id（例: TFG-0005）を逆引きする。"""
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
 
     projects = load_project_registry(project_root)
     pdata = projects.get(project_key, {})
@@ -1054,7 +1057,7 @@ def resolve_issue_number_for_task(
 ) -> Optional[int]:
     """task_id (例: TFG-0005) から対応する GitHub Issue 番号を逆引きする。"""
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
 
     project_key = task_id.split("-")[0]
     projects = load_project_registry(project_root)
@@ -1105,7 +1108,7 @@ def resolve_target_spec(
     project_key, task_id, issue_number, github_repo を高精度に解決する。
     """
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
 
     target = target.strip()
 

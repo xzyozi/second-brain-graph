@@ -169,7 +169,7 @@ class AppConfig(BaseModel):
 
 def get_config_dir() -> Path:
     """Get absolute path to config/ directory."""
-    return Path(__file__).resolve().parent.parent / "config"
+    return Path(__file__).resolve().parent.parent.parent / "config"
 
 
 def get_config_path(filename: str = "models.yaml") -> Path:

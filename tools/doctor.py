@@ -26,13 +26,13 @@ from typing import Any, Dict, List, Optional, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.metadata_store import (  # noqa: E402
+from tools.run_task import ensure_satellite_gitignore, missing_gitignore_entries  # noqa: E402
+from tools.workspace.metadata_store import (  # noqa: E402
     load_project_registry,
     resolve_project_from_cwd,
     resolve_target_spec,
     self_heal_satellite_project_json,
 )
-from tools.run_task import ensure_satellite_gitignore, missing_gitignore_entries  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("doctor")
