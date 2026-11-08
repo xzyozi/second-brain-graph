@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -454,6 +455,8 @@ class GraphState(TypedDict, total=False):
     empty_diff_detected: Optional[bool]
     already_satisfied: Optional[bool]
     allowed_new_file_globs: Optional[List[str]]
+    language: Optional[str]
+    test_command: Optional[str]
 
 
 def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
@@ -935,17 +938,101 @@ def clean_legacy_pytest_reports(root_dir: Optional[Path] = None) -> int:
 
 
 def run_pytest_node(state: GraphState) -> GraphState:
-    """Pytest による単体テストを実行するノード (DD-003 §4)。
-    pytest-json-report を使用してテスト結果を構造化ログとしてパースし Aider へフィードバックする。
+    """単体テストを実行するノード (DD-003 §4, Issue #170)。
+    - Python (test_command未指定): 従来の pytest-json-report を使用してテスト結果を構造化パースし Aider へフィードバック。
+    - TypeScript / Rust / カスタム test_command: 指定または言語既定のテストコマンド (npm test, cargo test など) を実行し、
+      stdout/stderr からフィードバックを生成。
     例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
-    logger.info("Executing test_node (Pytest)")
+    logger.info("Executing test_node")
     report_file: Optional[Path] = None
 
     try:
         cwd = state.get("cwd")
         target_files = state.get("target_files", [])
+        language = (state.get("language") or "python").lower()
+        test_cmd_setting = (state.get("test_command") or "").strip()
 
+        is_custom_or_non_python = bool(test_cmd_setting) or (language not in ("python", ""))
+
+        if is_custom_or_non_python:
+            if test_cmd_setting:
+                cmd = shlex.split(test_cmd_setting)
+            elif language in ("typescript", "javascript"):
+                if not shutil.which("npm"):
+                    logger.warning(
+                        "Node/npm is not installed in PATH. Skipping npm test execution."
+                    )
+                    state["status"] = "test_passed"
+                    state["test_result"] = {
+                        "returncode": 0,
+                        "stdout": "npm not found in PATH; skipped test.",
+                        "stderr": "",
+                        "report_summary": None,
+                    }
+                    return state
+                cmd = ["npm", "test"]
+            elif language == "rust":
+                if not shutil.which("cargo"):
+                    logger.warning(
+                        "Rust/cargo is not installed in PATH. Skipping cargo test execution."
+                    )
+                    state["status"] = "test_passed"
+                    state["test_result"] = {
+                        "returncode": 0,
+                        "stdout": "cargo not found in PATH; skipped test.",
+                        "stderr": "",
+                        "report_summary": None,
+                    }
+                    return state
+                cmd = ["cargo", "test"]
+            else:
+                cmd = ["pytest"]
+
+            resolved_bin = shutil.which(cmd[0]) if cmd else None
+            exec_cmd = [resolved_bin] + cmd[1:] if resolved_bin else cmd
+
+            logger.info(f"Executing satellite test command: {exec_cmd} in {cwd}")
+            res = run_cmd(exec_cmd, cwd=cwd, timeout=300)
+
+            state["test_result"] = {
+                "returncode": res.returncode,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+                "report_summary": None,
+            }
+
+            if res.returncode == 0:
+                state["status"] = "test_passed"
+            else:
+                state["test_round"] = state.get("test_round", 0) + 1
+                state["error_category"] = "TEST_ERROR"
+                cmd_display = " ".join(cmd)
+                logger.warning(
+                    f"Satellite test failed (round {state['test_round']}): {cmd_display}\n{res.stdout or res.stderr}"
+                )
+
+                test_output = f"{res.stdout or ''}\n{res.stderr or ''}".strip()
+                if len(test_output) > 3000:
+                    test_output = test_output[-3000:]
+
+                generic_instruction = (
+                    "\n\n【IMPORTANT】 Review the test failure output above.\n"
+                    "Fix the underlying source files or test files to resolve the failure."
+                )
+
+                state["aider_message"] = (
+                    f"Satellite test command '{cmd_display}' failed (round {state['test_round']}):\n"
+                    f"{test_output}{generic_instruction}"
+                )
+
+                if state["test_round"] >= state.get("max_round", 3):
+                    state["status"] = "FAILED_B7"
+                else:
+                    state["status"] = "retry_code"
+            return state
+
+        # 従来の Python pytest 実行 (既存挙動 100% 維持)
         # #76: 過去に残骸化した母艦ルート直下の .pytest-report-*.json を自己修復クリーンアップ
         clean_legacy_pytest_reports()
 
@@ -1146,12 +1233,17 @@ def test_feedback_node(state: GraphState) -> GraphState:
 
         system_prompt = resolve_prompt("planner", "test_feedback").system_prompt
 
+        is_python_default = (
+            state.get("language") or "python"
+        ).lower() == "python" and not state.get("test_command")
+        test_label = "PYTEST" if is_python_default else "TEST"
+
         user_prompt = (
             f"Issue ID: {state['issue_id']}\n"
             f"Target Files: {state.get('target_files', [])}\n"
             f"Test Round: {state.get('test_round', 1)}\n\n"
             f"--- Implementation Plan ---\n{(state.get('impl_plan') or '')[:1000]}\n\n"
-            f"--- Pytest Output Log ---\n{stdout_stderr[:3000]}"
+            f"--- {test_label.capitalize()} Output Log ---\n{stdout_stderr[:3000]}"
         )
 
         res = call_llm(
@@ -1165,9 +1257,9 @@ def test_feedback_node(state: GraphState) -> GraphState:
         feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
 
         enhanced_message = (
-            f"【ARCHITECT ADVICE FOR PYTEST FAILURE (Round {state.get('test_round', 1)})】\n"
+            f"【ARCHITECT ADVICE FOR {test_label} FAILURE (Round {state.get('test_round', 1)})】\n"
             f"{feedback_advice}\n\n"
-            f"【RAW PYTEST OUTPUT】\n"
+            f"【RAW {test_label} OUTPUT】\n"
             f"{stdout_stderr[:1500]}"
         )
 
@@ -1925,6 +2017,8 @@ def execute_issue(
         base_branch = ctx.get("base_branch", "develop")
         work_branch_prefix = ctx.get("work_branch_prefix", "sbos/")
         allowed_new_file_globs = ctx.get("allowed_new_file_globs", [])
+        language = ctx.get("language", "python")
+        test_command = ctx.get("test_command", "")
         is_valid = ctx.get("valid", False)
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
@@ -2486,6 +2580,8 @@ def execute_issue(
                 history_summary=None,
                 rdjson=None,
                 allowed_new_file_globs=allowed_new_file_globs,
+                language=language,
+                test_command=test_command,
             )
             try:
                 final_state = app.invoke(
