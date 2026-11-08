@@ -27,12 +27,13 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
 # プロジェクトルートをsys.pathに追加
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tools.agy_runner import CoderRunError
-from tools.backend_coordinator import get_coordinator
-from tools.git_utils import GitDiffError, get_git_diff
-from tools.metadata_store import (
+from tools.backends.agy_runner import CoderRunError
+from tools.backends.backend_coordinator import get_coordinator
+from tools.core.sanitizer import sanitize_text
+from tools.workspace.git_utils import GitDiffError, get_git_diff
+from tools.workspace.metadata_store import (
     GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
     MAX_CONSECUTIVE_B7,
@@ -51,7 +52,6 @@ from tools.metadata_store import (
     validate_project_consistency,
     write_event,
 )
-from tools.sanitizer import sanitize_text
 
 __all__ = [
     "ISSUE_ID_PATTERN",
@@ -458,8 +458,8 @@ class GraphState(TypedDict, total=False):
 
 def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
     """例外から ErrorCategory（LLM_TIMEOUT, AGY_AUTH, AGY_QUOTA, SYSTEM_ERROR等）を分類する."""
-    from tools.agy_client import AgyAuthError, AgyQuotaError
-    from tools.agy_policy import AgyPolicyDeniedError
+    from tools.backends.agy_client import AgyAuthError, AgyQuotaError
+    from tools.backends.agy_policy import AgyPolicyDeniedError
 
     if isinstance(e, AgyPolicyDeniedError):
         return "AGY_POLICY_DENIED"
@@ -509,13 +509,13 @@ def spec_draft_node(state: GraphState) -> GraphState:
     YAGNI違反・スコープ逸脱を検知した場合は再ドラフトを要求する。
     """
     logger.info("Executing spec_draft_node")
-    from tools.jev_adapter import verify_plan_conformance
-    from tools.llm_client import call_llm
+    from tools.backends.jev_adapter import verify_plan_conformance
+    from tools.backends.llm_client import call_llm
 
     state.setdefault("plan_conformance_round", 0)
 
     try:
-        from tools.prompt_harness import resolve_prompt
+        from tools.core.prompt_harness import resolve_prompt
 
         system_prompt = resolve_prompt("planner", "spec_draft").system_prompt
         target_files_str = ", ".join(state.get("target_files", []))
@@ -629,7 +629,7 @@ def code_node(state: GraphState) -> GraphState:
         def _do_code_edit(profile: Any) -> bool:
             # 編集エンジンは route が指す profile の backend で決まる。指示文は
             # prompt.yaml を正本とするハーネスが、エンジンごとの規則を付けて組み立てる。
-            from tools.prompt_harness import build_coder_instruction, engine_for_backend
+            from tools.core.prompt_harness import build_coder_instruction, engine_for_backend
 
             engine = engine_for_backend(profile.backend)
             instruction = build_coder_instruction(
@@ -640,7 +640,7 @@ def code_node(state: GraphState) -> GraphState:
                 feedback=state.get("aider_message"),
             )
             if engine == "agy":
-                from tools.agy_runner import run_agy_edit
+                from tools.backends.agy_runner import run_agy_edit
 
                 agy_timeout = profile.timeout or 1200
                 return run_agy_edit(
@@ -834,7 +834,7 @@ def clean_legacy_pytest_reports(root_dir: Optional[Path] = None) -> int:
         削除された残骸ファイルの数
     """
     if root_dir is None:
-        root_dir = Path(__file__).resolve().parent.parent
+        root_dir = Path(__file__).resolve().parent.parent.parent
 
     cleaned_count = 0
     try:
@@ -1057,12 +1057,12 @@ def test_feedback_node(state: GraphState) -> GraphState:
         return state
 
     try:
-        from tools.llm_client import call_llm
+        from tools.backends.llm_client import call_llm
 
         test_res: Dict[str, Any] = state.get("test_result") or {}
         stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
 
-        from tools.prompt_harness import resolve_prompt
+        from tools.core.prompt_harness import resolve_prompt
 
         system_prompt = resolve_prompt("planner", "test_feedback").system_prompt
 
@@ -1109,7 +1109,7 @@ def review_node(state: GraphState) -> GraphState:
     および LGTM を含む全レビューの review_rounds 履歴保存を行う。
     """
     logger.info("Executing review_node")
-    from tools.llm_client import call_llm
+    from tools.backends.llm_client import call_llm
 
     cwd = state.get("cwd")
 
@@ -1160,7 +1160,7 @@ def review_node(state: GraphState) -> GraphState:
     )
 
     try:
-        from tools.prompt_harness import resolve_prompt
+        from tools.core.prompt_harness import resolve_prompt
 
         res = call_llm(
             role="reviewer",
@@ -1228,7 +1228,7 @@ def review_node(state: GraphState) -> GraphState:
                 )
             else:
                 try:
-                    from tools.jev_adapter import verify_review_conformance
+                    from tools.backends.jev_adapter import verify_review_conformance
 
                     # pytest 終了コードの取得 (0: 成功, それ以外: 失敗)
                     pytest_rc: Optional[int] = None
@@ -1559,7 +1559,7 @@ def done_node(state: GraphState) -> GraphState:
                     f"All tests passed and implementation is verified as already satisfied on base branch '{base_branch}'. "
                     "Marking as COMPLETED."
                 )
-                from tools.metadata_store import mark_task_completed_in_tasks_md
+                from tools.workspace.metadata_store import mark_task_completed_in_tasks_md
 
                 # 作業ブランチの安全クリーンアップ
                 run_cmd(["git", "checkout", "-f", base_branch], cwd=cwd, timeout=60)
@@ -1693,7 +1693,7 @@ def escalate_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
     if cwd and state.get("error_category") in ["LINT_ERROR", "TEST_ERROR"]:
         try:
-            from tools.llm_client import call_llm
+            from tools.backends.llm_client import call_llm
 
             logger.info("Generating Failure Analysis Report...")
 
@@ -1702,7 +1702,7 @@ def escalate_node(state: GraphState) -> GraphState:
             lint_res = (state.get("lint_result") or {}).get("stdout", "")
             latest_error = test_res if state.get("error_category") == "TEST_ERROR" else lint_res
 
-            from tools.prompt_harness import resolve_prompt
+            from tools.core.prompt_harness import resolve_prompt
 
             system_prompt = resolve_prompt("reviewer", "failure_analysis").system_prompt
             user_prompt = f"Target Files: {state.get('target_files')}\n\nFinal Error Log:\n{latest_error[:2000]}"
@@ -1824,7 +1824,7 @@ def execute_issue(
     auto_stash: bool = False,
 ) -> None:
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     if metadata_dir is None:
         metadata_dir = project_root / "metadata"
 
@@ -2495,7 +2495,10 @@ def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path
     """
     if cache_file is None:
         cache_file = (
-            Path(__file__).resolve().parent.parent / "tools" / ".cache" / "priority-cache.json"
+            Path(__file__).resolve().parent.parent.parent
+            / "tools"
+            / ".cache"
+            / "priority-cache.json"
         )
     logger.info(f"Orchestrating uncompleted issues (project_key: {project_key or 'ALL'})")
 

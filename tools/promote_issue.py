@@ -13,8 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from tools.issue_spec_manager import fetch_remote_issue, sync_spec_for_task
-from tools.metadata_store import resolve_target_spec
+from tools.lifecycle.issue_spec_manager import fetch_remote_issue, sync_spec_for_task
+from tools.workspace.metadata_store import resolve_target_spec
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("promote_issue")
