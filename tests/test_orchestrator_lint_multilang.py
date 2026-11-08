@@ -1,9 +1,8 @@
 """Unit tests for multi-language syntax verification in orchestrator_graph lint_node (Issue #169)."""
 
 from pathlib import Path
-from typing import Any
 
-from tools.core.orchestrator_graph import lint_node
+from tools.core.orchestrator_graph import GraphState, lint_node
 
 
 def test_lint_node_typescript_valid_syntax(tmp_path: Path) -> None:
@@ -22,10 +21,10 @@ export function getUser(id: number): User {
         encoding="utf-8",
     )
 
-    state: dict[str, Any] = {
+    state: GraphState = {
         "cwd": str(tmp_path),
         "target_files": ["valid.ts"],
-        "status": "code_generated",
+        "status": "code_completed",
         "lint_round": 0,
         "max_round": 3,
     }
@@ -44,10 +43,10 @@ def test_lint_node_typescript_broken_syntax(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    state: dict[str, Any] = {
+    state: GraphState = {
         "cwd": str(tmp_path),
         "target_files": ["broken.ts"],
-        "status": "code_generated",
+        "status": "code_completed",
         "lint_round": 0,
         "max_round": 3,
     }
@@ -73,10 +72,10 @@ def test_lint_node_rust_valid_syntax(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    state: dict[str, Any] = {
+    state: GraphState = {
         "cwd": str(tmp_path),
         "target_files": ["lib.rs"],
-        "status": "code_generated",
+        "status": "code_completed",
         "lint_round": 0,
         "max_round": 3,
     }
@@ -96,10 +95,10 @@ def test_lint_node_rust_broken_syntax(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    state: dict[str, Any] = {
+    state: GraphState = {
         "cwd": str(tmp_path),
         "target_files": ["broken.rs"],
-        "status": "code_generated",
+        "status": "code_completed",
         "lint_round": 0,
         "max_round": 3,
     }
@@ -117,7 +116,7 @@ def test_lint_node_multilang_max_round_exceeded(tmp_path: Path) -> None:
     broken_ts = tmp_path / "broken.ts"
     broken_ts.write_text("function { broken", encoding="utf-8")
 
-    state: dict[str, Any] = {
+    state: GraphState = {
         "cwd": str(tmp_path),
         "target_files": ["broken.ts"],
         "status": "retry_code",
@@ -132,10 +131,10 @@ def test_lint_node_multilang_max_round_exceeded(tmp_path: Path) -> None:
 
 def test_lint_node_no_matching_targets(tmp_path: Path) -> None:
     """検査対象のファイルが存在しない場合は即座に lint_passed に遷移することを検証する。"""
-    state: dict[str, Any] = {
+    state: GraphState = {
         "cwd": str(tmp_path),
         "target_files": ["README.md", "docs/spec.txt"],
-        "status": "code_generated",
+        "status": "code_completed",
     }
 
     new_state = lint_node(state)
