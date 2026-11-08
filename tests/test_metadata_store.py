@@ -588,3 +588,123 @@ def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
     assert res_num["project_key"] == "TFG"
     assert res_num["task_id"] == "TFG-0005"
     assert res_num["issue_number"] == 5
+
+
+def test_resolve_project_context_multilang_ts_and_rust(tmp_path: Path) -> None:
+    """Issue #168: TypeScript および Rust サテライトのメタデータ・ファイル探索が正しく解決されることを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TSPROJ": {
+                "name": "ts_satellite",
+                "dir": "projects/ts_satellite",
+                "meta": "projects/ts_satellite/docs",
+            },
+            "RUSTPROJ": {
+                "name": "rust_satellite",
+                "dir": "projects/rust_satellite",
+                "meta": "projects/rust_satellite/docs",
+            },
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    # 1. TypeScript サテライトの模擬
+    ts_dir = tmp_path / "projects" / "ts_satellite"
+    ts_dir.mkdir(parents=True)
+    (ts_dir / ".git").mkdir()
+    (ts_dir / "src").mkdir()
+    (ts_dir / "src" / "index.ts").write_text("console.log('hi');", encoding="utf-8")
+    (ts_dir / "src" / "App.tsx").write_text("export const App = () => null;", encoding="utf-8")
+    ts_docs = ts_dir / "docs"
+    ts_docs.mkdir(parents=True)
+    (ts_docs / "project.json").write_text(
+        json.dumps(
+            {
+                "key": "TSPROJ",
+                "language": "typescript",
+                "test_command": "npm run test:unit",
+                "test_runner": "npm",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ctx_ts = resolve_project_context("TSPROJ", metadata_dir=meta_dir, project_root=tmp_path)
+    assert ctx_ts["valid"] is True
+    assert ctx_ts["language"] == "typescript"
+    assert ctx_ts["test_command"] == "npm run test:unit"
+    assert ctx_ts["test_runner"] == "npm"
+    assert "src/index.ts" in ctx_ts["target_files"]
+    assert "src/App.tsx" in ctx_ts["target_files"]
+
+    # 2. Rust サテライトの模擬
+    rust_dir = tmp_path / "projects" / "rust_satellite"
+    rust_dir.mkdir(parents=True)
+    (rust_dir / ".git").mkdir()
+    (rust_dir / "src").mkdir()
+    (rust_dir / "src" / "main.rs").write_text("fn main() {}", encoding="utf-8")
+    rust_docs = rust_dir / "docs"
+    rust_docs.mkdir(parents=True)
+    (rust_docs / "project.json").write_text(
+        json.dumps(
+            {
+                "key": "RUSTPROJ",
+                "language": "rust",
+                "test_command": "cargo test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ctx_rust = resolve_project_context("RUSTPROJ", metadata_dir=meta_dir, project_root=tmp_path)
+    assert ctx_rust["valid"] is True
+    assert ctx_rust["language"] == "rust"
+    assert ctx_rust["test_command"] == "cargo test"
+    assert "src/main.rs" in ctx_rust["target_files"]
+
+
+def test_validate_project_consistency_multilang_validation(tmp_path: Path) -> None:
+    """Issue #168: 不正な language や test_command が指定された場合に ValueError が発生することを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "BAD": {
+                "name": "bad_satellite",
+                "dir": "projects/bad_satellite",
+                "meta": "projects/bad_satellite/docs",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    bad_dir = tmp_path / "projects" / "bad_satellite"
+    bad_docs = bad_dir / "docs"
+    bad_docs.mkdir(parents=True)
+
+    # 未知の言語
+    (bad_docs / "project.json").write_text(
+        json.dumps({"key": "BAD", "language": "unsupported_lang"}),
+        encoding="utf-8",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Unsupported language"):
+        validate_project_consistency(
+            "BAD-0001", "BAD", metadata_dir=meta_dir, project_root=tmp_path
+        )
+
+    # 不正な test_command 型
+    (bad_docs / "project.json").write_text(
+        json.dumps({"key": "BAD", "language": "typescript", "test_command": 12345}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="'test_command' field in project.json must be a string"):
+        validate_project_consistency(
+            "BAD-0001", "BAD", metadata_dir=meta_dir, project_root=tmp_path
+        )

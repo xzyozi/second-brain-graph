@@ -392,3 +392,39 @@ def test_register_project_ensures_gitignore(
         content = f.read()
     assert ".venv/" in content
     assert ".aider*" in content
+
+
+def test_register_project_with_multilang(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Issue #168: register_project に language と test_command を指定した際、project.json に反映されることを検証する。"""
+    root_dir = str(tmp_path)
+    sat_dir = os.path.join(root_dir, "projects", "ts_app")
+    os.makedirs(sat_dir, exist_ok=True)
+
+    gitignore = os.path.join(sat_dir, ".gitignore")
+    with open(gitignore, "w", encoding="utf-8") as f:
+        f.write("# existing\n")
+
+    entry = register_project(
+        key="TSAPP",
+        name="TS App",
+        directory="projects/ts_app",
+        push=False,
+        language="typescript",
+        test_command="npm run test",
+        root_dir=root_dir,
+    )
+
+    assert entry["name"] == "TS App"
+    pjson_path = os.path.join(sat_dir, "docs", "project.json")
+    with open(pjson_path, "r", encoding="utf-8") as f:
+        pdata = json.load(f)
+    assert pdata["key"] == "TSAPP"
+    assert pdata["language"] == "typescript"
+    assert pdata["test_command"] == "npm run test"
+
+    with open(gitignore, "r", encoding="utf-8") as f:
+        gi_content = f.read()
+    assert "node_modules/" in gi_content
+    assert "dist/" in gi_content
