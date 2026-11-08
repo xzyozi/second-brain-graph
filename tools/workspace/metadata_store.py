@@ -252,6 +252,22 @@ def validate_project_consistency(
             raise ValueError(
                 f"Project key mismatch in project.json: expected '{project_key}', got '{pkey}'."
             )
+        # 多言語メタデータのバリデーション (Issue #168)
+        lang = pdata.get("language")
+        if lang is not None:
+            if not isinstance(lang, str) or not lang.strip():
+                raise ValueError(
+                    f"'language' field in project.json must be a non-empty string, got {type(lang).__name__}."
+                )
+            if lang.strip().lower() not in SUPPORTED_LANGUAGES:
+                raise ValueError(
+                    f"Unsupported language '{lang}' in project.json. Supported: {', '.join(SUPPORTED_LANGUAGES)}"
+                )
+        test_cmd = pdata.get("test_command")
+        if test_cmd is not None and not isinstance(test_cmd, str):
+            raise ValueError(
+                f"'test_command' field in project.json must be a string, got {type(test_cmd).__name__}."
+            )
 
 
 def _is_default_metadata_dir(metadata_dir: Optional[Path]) -> bool:
@@ -348,18 +364,55 @@ def force_unlock_project(
 # ==============================================================================
 
 
+#: サポート対象のサテライトプログラミング言語 (Issue #168)
+SUPPORTED_LANGUAGES: tuple[str, ...] = ("python", "typescript", "rust", "javascript")
+
+#: 言語別の生成物 .gitignore エントリ定義 (Issue #168)
+LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES: dict[str, tuple[str, ...]] = {
+    "python": (
+        ".aider*",
+        ".agy*",
+        ".pytest_cache/",
+        "__pycache__/",
+        ".venv/",
+        "*.pyc",
+        ".ruff_cache/",
+        ".mypy_cache/",
+    ),
+    "typescript": (
+        ".aider*",
+        ".agy*",
+        "node_modules/",
+        "dist/",
+        ".tsbuildinfo",
+    ),
+    "javascript": (
+        ".aider*",
+        ".agy*",
+        "node_modules/",
+        "dist/",
+    ),
+    "rust": (
+        ".aider*",
+        ".agy*",
+        "target/",
+    ),
+}
+
+
+def get_gitignore_entries_for_language(language: str = "python") -> tuple[str, ...]:
+    """サテライトの言語に応じた .gitignore 保証エントリを返す (Issue #168)。"""
+    norm_lang = (language or "python").strip().lower()
+    return LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES.get(
+        norm_lang, LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES["python"]
+    )
+
+
 #: 自律ワーカーが生成する成果物の .gitignore 向け表記 (Issue #98)。
 #: dirty 判定・Resume の WIP コミット除外・衛星 .gitignore の保証で共通利用する唯一の定義。
-GENERATED_ARTIFACT_GITIGNORE_ENTRIES: tuple[str, ...] = (
-    ".aider*",
-    ".agy*",
-    ".pytest_cache/",
-    "__pycache__/",
-    ".venv/",
-    "*.pyc",
-    ".ruff_cache/",
-    ".mypy_cache/",
-)
+GENERATED_ARTIFACT_GITIGNORE_ENTRIES: tuple[str, ...] = LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES[
+    "python"
+]
 
 #: パスの各要素に対する fnmatch 用パターン (末尾の "/" を除いたもの)。
 GENERATED_ARTIFACT_PATTERNS: tuple[str, ...] = tuple(
@@ -793,6 +846,9 @@ def resolve_project_context(
 
         base_branch = "develop"
         work_branch_prefix = "sbos/"
+        language = "python"
+        test_command = ""
+        test_runner = ""
         raw_target_files: List[str] = []
         exclude_files: List[str] = []
         allowed_new_file_globs: List[str] = []
@@ -810,6 +866,13 @@ def resolve_project_context(
                         pdata = json.load(pf)
                         base_branch = pdata.get("base_branch", "develop")
                         work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
+                        # 多言語メタデータ取得 (Issue #168)
+                        if "language" in pdata and isinstance(pdata["language"], str):
+                            language = pdata["language"].strip().lower()
+                        if "test_command" in pdata and isinstance(pdata["test_command"], str):
+                            test_command = pdata["test_command"].strip()
+                        if "test_runner" in pdata and isinstance(pdata["test_runner"], str):
+                            test_runner = pdata["test_runner"].strip()
                         if (
                             "target_files" in pdata
                             and isinstance(pdata["target_files"], list)
@@ -839,7 +902,8 @@ def resolve_project_context(
                 if tpath.exists():
                     try:
                         text = tpath.read_text(encoding="utf-8")
-                        matches = re.findall(r"[\w/.-]+\.py", text)
+                        # 拡張子に合わせたマッチング (.py, .ts, .tsx, .js, .jsx, .rs)
+                        matches = re.findall(r"[\w/.-]+\.(?:py|tsx?|jsx?|rs)", text)
                         for m in matches:
                             if m not in raw_target_files:
                                 raw_target_files.append(m)
@@ -848,15 +912,33 @@ def resolve_project_context(
                     except Exception as ex:
                         logger.warning(f"Failed to parse tasks.md at {tpath}: {ex}")
 
-        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在する Python ファイルを自動検出
+        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在するソースファイルを言語別自動検出 (Issue #168)
         if not raw_target_files:
-            for py_file in cwd_path.rglob("*.py"):
-                rel_p = str(py_file.relative_to(cwd_path)).replace("\\", "/")
-                if not any(
-                    excluded in rel_p
-                    for excluded in [".venv", "venv", "__pycache__", "build", "dist"]
-                ):
-                    raw_target_files.append(rel_p)
+            ignore_dirs = {
+                ".venv",
+                "venv",
+                "__pycache__",
+                "build",
+                "dist",
+                "node_modules",
+                "target",
+                ".git",
+                ".cache",
+            }
+            if language in ("typescript", "javascript"):
+                ext_patterns = ["*.ts", "*.tsx", "*.js", "*.jsx"]
+            elif language == "rust":
+                ext_patterns = ["*.rs"]
+            else:
+                ext_patterns = ["*.py"]
+
+            for pat in ext_patterns:
+                for src_file in cwd_path.rglob(pat):
+                    rel_p = str(src_file.relative_to(cwd_path)).replace("\\", "/")
+                    parts = set(rel_p.split("/"))
+                    if not parts.intersection(ignore_dirs):
+                        if rel_p not in raw_target_files:
+                            raw_target_files.append(rel_p)
 
         # ターゲットファイルの有効性を検証し、除外ファイルを適用
         valid_target_files = []
@@ -877,6 +959,9 @@ def resolve_project_context(
                 "base_branch": base_branch,
                 "work_branch_prefix": work_branch_prefix,
                 "allowed_new_file_globs": allowed_new_file_globs,
+                "language": language,
+                "test_command": test_command,
+                "test_runner": test_runner,
                 "valid": False,
             }
 
@@ -886,6 +971,9 @@ def resolve_project_context(
             "base_branch": base_branch,
             "work_branch_prefix": work_branch_prefix,
             "allowed_new_file_globs": allowed_new_file_globs,
+            "language": language,
+            "test_command": test_command,
+            "test_runner": test_runner,
             "valid": True,
         }
     except Exception as e:
@@ -896,6 +984,9 @@ def resolve_project_context(
             "base_branch": "develop",
             "work_branch_prefix": "sbos/",
             "allowed_new_file_globs": [],
+            "language": "python",
+            "test_command": "",
+            "test_runner": "",
             "valid": False,
         }
 
