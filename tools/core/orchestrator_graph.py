@@ -715,106 +715,186 @@ def code_node(state: GraphState) -> GraphState:
 
 
 def lint_node(state: GraphState) -> GraphState:
-    """Ruff による静的解析を実行するノード (DD-003 §4)。
+    """Ruff (Python) および Tree-sitter (TypeScript / Rust) による静的解析・構文検証を実行するノード (Issue #169, DD-003 §4)。
     例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
-    logger.info("Executing lint_node (Ruff check)")
+    logger.info("Executing lint_node (Multi-language verification)")
     cwd = state.get("cwd")
     target_files = state.get("target_files", [])
     try:
-        existing_targets = [
+        # 対象ファイルを言語別に分類
+        py_targets = [
             tf
             for tf in target_files
             if tf.endswith(".py")
-            and cwd
-            and (Path(cwd) / tf).exists()
-            and (Path(cwd) / tf).is_file()
+            and (not cwd or (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file())
         ]
-        targets_to_check = (
-            existing_targets
-            if existing_targets
-            else [tf for tf in target_files if tf.endswith(".py")]
-        )
-        if not targets_to_check:
+        ts_targets = [
+            tf
+            for tf in target_files
+            if any(tf.endswith(ext) for ext in [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"])
+            and (not cwd or (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file())
+        ]
+        rust_targets = [
+            tf
+            for tf in target_files
+            if tf.endswith(".rs")
+            and (not cwd or (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file())
+        ]
+
+        # 実在チェックで空だが target_files に存在する場合のフォールバック
+        if not py_targets and not ts_targets and not rust_targets and target_files:
+            py_targets = [tf for tf in target_files if tf.endswith(".py")]
+            ts_targets = [
+                tf
+                for tf in target_files
+                if any(tf.endswith(ext) for ext in [".ts", ".tsx", ".js", ".jsx"])
+            ]
+            rust_targets = [tf for tf in target_files if tf.endswith(".rs")]
+
+        if not py_targets and not ts_targets and not rust_targets:
             state["status"] = "lint_passed"
             return state
 
-        python_bin = ensure_satellite_environment(cwd)
-        cmd = [python_bin, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
-        # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
-        run_cmd([python_bin, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
-        run_cmd(
-            [python_bin, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
-            + targets_to_check,
-            cwd=cwd,
-            timeout=300,
-        )
-        res = run_cmd(cmd, cwd=cwd, timeout=300)
-        state["lint_result"] = {
-            "returncode": res.returncode,
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-        }
-        if res.returncode == 0:
+        all_lint_passed = True
+        error_messages: List[str] = []
+
+        # --- 1. Python ファイルの Ruff チェック ---
+        if py_targets and cwd:
+            python_bin = ensure_satellite_environment(cwd)
+            cmd = [python_bin, "-m", "ruff", "check", "--ignore", "E501"] + py_targets
+            # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
+            run_cmd([python_bin, "-m", "ruff", "format"] + py_targets, cwd=cwd, timeout=300)
+            run_cmd(
+                [python_bin, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
+                + py_targets,
+                cwd=cwd,
+                timeout=300,
+            )
+            res = run_cmd(cmd, cwd=cwd, timeout=300)
+            state["lint_result"] = {
+                "returncode": res.returncode,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+            if res.returncode != 0:
+                all_lint_passed = False
+                combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
+                lint_recovery_tips = []
+
+                # F811 (二重定義・再定義エラー) の動的抽出
+                redef_match = re.search(
+                    r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output
+                )
+                if not redef_match:
+                    redef_match = re.search(
+                        r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output
+                    )
+                if redef_match:
+                    groups = redef_match.groups()
+                    sym_name = groups[0]
+                    orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
+                    lint_recovery_tips.append(
+                        f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition (originally at line {orig_line}).\n"
+                        f"  ACTION REQUIRED:\n"
+                        f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
+                        f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
+                    )
+
+                # F821 (未定義変数エラー) の動的抽出
+                undef_match = re.search(r"F821 Undefined name `([^`]+)`", combined_lint_output)
+                if undef_match:
+                    undef_name = undef_match.group(1)
+                    lint_recovery_tips.append(
+                        f"・UNDEFINED NAME ERROR (F821): `{undef_name}` is used but not defined or imported. "
+                        f"Import or define `{undef_name}` before using it."
+                    )
+
+                dynamic_instructions = ""
+                if lint_recovery_tips:
+                    tips_str = "\n".join(lint_recovery_tips)
+                    dynamic_instructions = f"【DYNAMIC RECOVERY INSTRUCTIONS】\n{tips_str}\n\n"
+
+                lint_feedback = (
+                    f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
+                    f"{dynamic_instructions}"
+                    "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
+                    "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
+                    "Follow these general rules:\n"
+                    "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
+                    "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
+                    "3. Redefined/Duplicate symbols: If a function, class, or method is redefined or duplicated, delete the duplicate definition so that exactly one definition remains.\n"
+                    "4. Line too long (E501): Split long string literals, URLs, or expressions across multiple lines using parentheses `(...)` or multi-line string concatenation so that every line is strictly under 120 characters.\n"
+                    "5. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
+                )
+                error_messages.append(lint_feedback)
+
+        # --- 2. TypeScript / JavaScript ファイルの Tree-sitter 構文検証 (Issue #169) ---
+        if ts_targets and cwd:
+            from tools.lang import get_verifier
+
+            ts_verifier = get_verifier("typescript")
+            ts_syntax_errors: List[str] = []
+            for tf in ts_targets:
+                target_p = Path(cwd) / tf
+                if target_p.exists() and target_p.is_file():
+                    res_ts = ts_verifier.verify_syntax(target_p)
+                    if not res_ts.is_valid:
+                        err_lines = "\n  ".join(res_ts.errors)
+                        ts_syntax_errors.append(f"・{tf}:\n  {err_lines}")
+
+            if ts_syntax_errors:
+                all_lint_passed = False
+                ts_feedback = (
+                    "TypeScript/JavaScript Tree-sitter syntax verification failed:\n\n"
+                    + "\n".join(ts_syntax_errors)
+                    + "\n\n【CRITICAL INSTRUCTION - TS/JS SYNTAX ERROR RECOVERY】\n"
+                    "You MUST fix all syntax errors listed above while strictly maintaining existing code functionality.\n"
+                    "Follow these rules:\n"
+                    "1. Check unbalanced braces, parentheses, or brackets.\n"
+                    "2. Check invalid keywords, missing type annotations, or broken export/import syntax.\n"
+                    "3. Ensure the file forms a valid TypeScript/JavaScript AST."
+                )
+                error_messages.append(ts_feedback)
+
+        # --- 3. Rust ファイルの Tree-sitter 構文検証 (Issue #169) ---
+        if rust_targets and cwd:
+            from tools.lang import get_verifier
+
+            rust_verifier = get_verifier("rust")
+            rust_syntax_errors: List[str] = []
+            for tf in rust_targets:
+                target_p = Path(cwd) / tf
+                if target_p.exists() and target_p.is_file():
+                    res_rust = rust_verifier.verify_syntax(target_p)
+                    if not res_rust.is_valid:
+                        err_lines = "\n  ".join(res_rust.errors)
+                        rust_syntax_errors.append(f"・{tf}:\n  {err_lines}")
+
+            if rust_syntax_errors:
+                all_lint_passed = False
+                rust_feedback = (
+                    "Rust syntax / AST verification failed:\n\n"
+                    + "\n".join(rust_syntax_errors)
+                    + "\n\n【CRITICAL INSTRUCTION - RUST SYNTAX ERROR RECOVERY】\n"
+                    "You MUST fix all syntax errors listed above while strictly maintaining existing code functionality.\n"
+                    "Follow these rules:\n"
+                    "1. Check matching braces `{}` and parentheses `()`.\n"
+                    "2. Check proper struct/fn/impl declarations, semicolons `;`, and visibility specifiers.\n"
+                    "3. Ensure the file forms a valid Rust syntax tree."
+                )
+                error_messages.append(rust_feedback)
+
+        if all_lint_passed:
             state["status"] = "lint_passed"
         else:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
             logger.warning(
-                f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}"
+                f"Lint/Syntax check failed (round {state['lint_round']}):\n"
+                + "\n---\n".join(error_messages)
             )
-
-            # --- 動的エラー分析・復旧ルール (Lint Recovery Tips) ---
-            combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
-            lint_recovery_tips = []
-
-            # 1. F811 (二重定義・再定義エラー) の柔軟な動的抽出
-            redef_match = re.search(
-                r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output
-            )
-            if not redef_match:
-                redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output)
-
-            if redef_match:
-                groups = redef_match.groups()
-                sym_name = groups[0]
-                orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
-                lint_recovery_tips.append(
-                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition (originally at line {orig_line}).\n"
-                    f"  ACTION REQUIRED:\n"
-                    f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
-                    f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
-                )
-
-            # 2. F821 (未定義変数エラー) の動的抽出
-            undef_match = re.search(r"F821 Undefined name `([^`]+)`", combined_lint_output)
-            if undef_match:
-                undef_name = undef_match.group(1)
-                lint_recovery_tips.append(
-                    f"・UNDEFINED NAME ERROR (F821): `{undef_name}` is used but not defined or imported. "
-                    f"Import or define `{undef_name}` before using it."
-                )
-
-            # フィードバックメッセージの構築
-            dynamic_instructions = ""
-            if lint_recovery_tips:
-                tips_str = "\n".join(lint_recovery_tips)
-                dynamic_instructions = f"【DYNAMIC RECOVERY INSTRUCTIONS】\n{tips_str}\n\n"
-
-            lint_feedback = (
-                f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
-                f"{dynamic_instructions}"
-                "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
-                "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
-                "Follow these general rules:\n"
-                "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
-                "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
-                "3. Redefined/Duplicate symbols: If a function, class, or method is redefined or duplicated, delete the duplicate definition so that exactly one definition remains.\n"
-                "4. Line too long (E501): Split long string literals, URLs, or expressions across multiple lines using parentheses `(...)` or multi-line string concatenation so that every line is strictly under 120 characters.\n"
-                "5. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
-            )
-
-            state["aider_message"] = lint_feedback
+            state["aider_message"] = "\n\n".join(error_messages)
             if state["lint_round"] >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
