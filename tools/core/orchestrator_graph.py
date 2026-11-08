@@ -457,6 +457,13 @@ class GraphState(TypedDict, total=False):
     allowed_new_file_globs: Optional[List[str]]
     language: Optional[str]
     test_command: Optional[str]
+    watch_ci: Optional[bool]
+    ci_round: int
+    max_ci_round: int
+    ci_timeout_seconds: Optional[float]
+    ci_poll_interval: Optional[float]
+    pr_number: Optional[int]
+    pr_url: Optional[str]
 
 
 def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
@@ -1642,6 +1649,20 @@ def build_pr_content(state: GraphState) -> tuple[str, str]:
     return title, "\n".join(body_lines)
 
 
+def _resolve_gh_bin() -> str:
+    """GitHub CLI (gh) の実行パスを探索・解決する。"""
+    gh_bin = shutil.which("gh") or "gh"
+    if not shutil.which(gh_bin):
+        for candidate in [
+            r"C:\Program Files\GitHub CLI\gh.exe",
+            r"C:\Program Files (x86)\GitHub CLI\gh.exe",
+            os.path.expanduser(r"~\AppData\Local\Programs\GitHub CLI\gh.exe"),
+        ]:
+            if os.path.exists(candidate):
+                return candidate
+    return gh_bin
+
+
 def done_node(state: GraphState) -> GraphState:
     """PR 作成および完了ノード (DD-003 §4)。
     dirty working tree 拒否 -> git add -> ステージ済みファイル検証 -> git commit -> git push -> gh pr create パイプラインを実行。
@@ -1772,22 +1793,13 @@ def done_node(state: GraphState) -> GraphState:
                 )
                 return state
 
-            # 4. PR の作成 (事前確認: gh pr list --json number で構造化確認)
-            gh_bin = shutil.which("gh") or "gh"
-            if not shutil.which(gh_bin):
-                for candidate in [
-                    r"C:\Program Files\GitHub CLI\gh.exe",
-                    r"C:\Program Files (x86)\GitHub CLI\gh.exe",
-                    os.path.expanduser(r"~\AppData\Local\Programs\GitHub CLI\gh.exe"),
-                ]:
-                    if os.path.exists(candidate):
-                        gh_bin = candidate
-                        break
+            # 4. PR の作成 (事前確認: gh pr list --json number,url で構造化確認)
+            gh_bin = _resolve_gh_bin()
 
             try:
                 # 既存 PR の構造化データのプレ確認 (言語・ロケール依存の完全排除)
                 pr_list_res = run_cmd(
-                    [gh_bin, "pr", "list", "--head", head_branch, "--json", "number"],
+                    [gh_bin, "pr", "list", "--head", head_branch, "--json", "number,url"],
                     cwd=cwd,
                     timeout=30,
                 )
@@ -1796,6 +1808,10 @@ def done_node(state: GraphState) -> GraphState:
                         prs = json.loads(pr_list_res.stdout)
                         if isinstance(prs, list) and len(prs) > 0:
                             pr_num = prs[0].get("number")
+                            if pr_num is not None:
+                                state["pr_number"] = pr_num
+                            if prs[0].get("url"):
+                                state["pr_url"] = prs[0].get("url")
                             logger.info(
                                 f"Existing PR #{pr_num} detected for branch '{head_branch}'. Setting status to COMPLETED."
                             )
@@ -1823,6 +1839,11 @@ def done_node(state: GraphState) -> GraphState:
                     timeout=180,
                 )
                 if pr_res.returncode == 0:
+                    pr_url_output = pr_res.stdout.strip()
+                    state["pr_url"] = pr_url_output
+                    match = re.search(r"/pull/(\d+)", pr_url_output)
+                    if match:
+                        state["pr_number"] = int(match.group(1))
                     state["status"] = "COMPLETED"
                 else:
                     logger.error(f"gh pr create failed: {pr_res.stderr}")
@@ -1846,6 +1867,198 @@ def done_node(state: GraphState) -> GraphState:
         state["status"] = "PR_FAILED"
         state["error_category"] = "PR_ERROR"
         state["error"] = str(e)
+    return state
+
+
+def ci_watch_node(state: GraphState) -> GraphState:
+    """PR 起票後の GitHub Actions CI 実行完了を監視し、結果を判定するノード (Issue #171)。
+    - All Green: COMPLETED を維持して正常終了へ。
+    - Pending: 一定間隔でポーリング待機。タイムアウト時は FAILED_CI。
+    - Fail: 失敗ログ (gh run view --log-failed) を取得し、Aider リカバリプロンプトを構築して retry_code へ遷移。
+      リトライ回数が上限 (max_ci_round) に達した場合は FAILED_CI。
+    """
+    logger.info("Executing ci_watch_node (GitHub Actions CI Monitoring)")
+    cwd = state.get("cwd")
+    issue_id = state.get("issue_id", "UNKNOWN")
+    head_branch = f"sbos/{issue_id}"
+    gh_bin = _resolve_gh_bin()
+
+    timeout_seconds = state.get("ci_timeout_seconds", 600) or 600
+    poll_interval = state.get("ci_poll_interval", 15.0) or 15.0
+    max_ci_round = state.get("max_ci_round", 2)
+    ci_round = state.get("ci_round", 0)
+
+    try:
+        # PR 番号の特定
+        pr_number = state.get("pr_number")
+        if not pr_number and cwd:
+            pr_list_res = run_cmd(
+                [gh_bin, "pr", "list", "--head", head_branch, "--json", "number,url"],
+                cwd=cwd,
+                timeout=30,
+            )
+            if pr_list_res.returncode == 0:
+                try:
+                    prs = json.loads(pr_list_res.stdout)
+                    if isinstance(prs, list) and prs:
+                        pr_number = prs[0].get("number")
+                        state["pr_number"] = pr_number
+                        if prs[0].get("url"):
+                            state["pr_url"] = prs[0].get("url")
+                except Exception as pe:
+                    logger.warning(f"Failed to parse gh pr list JSON in ci_watch_node: {pe}")
+
+        if not pr_number:
+            logger.warning(
+                f"No PR number found for branch '{head_branch}'. Skipping CI watch and completing."
+            )
+            state["status"] = "COMPLETED"
+            return state
+
+        logger.info(
+            f"Monitoring CI checks for PR #{pr_number} (Timeout: {timeout_seconds}s, Poll: {poll_interval}s, Round: {ci_round + 1}/{max_ci_round})..."
+        )
+        start_time = time.time()
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout_seconds:
+                logger.error(
+                    f"CI watch timed out after {int(elapsed)}s for PR #{pr_number} on branch '{head_branch}'"
+                )
+                state["status"] = "FAILED_CI"
+                state["error_category"] = "CI_ERROR"
+                state["error"] = f"CI watch timed out after {int(elapsed)} seconds"
+                return state
+
+            checks_res = run_cmd(
+                [gh_bin, "pr", "checks", str(pr_number), "--json", "name,state,bucket,link"],
+                cwd=cwd,
+                timeout=60,
+            )
+
+            checks_data: List[Dict[str, Any]] = []
+            if checks_res.returncode == 0 and checks_res.stdout.strip():
+                try:
+                    parsed = json.loads(checks_res.stdout)
+                    if isinstance(parsed, list):
+                        checks_data = parsed
+                except Exception:
+                    pass
+
+            # まだ check run が 1 件も登録されていない場合は待機
+            if not checks_data:
+                logger.info(
+                    f"No CI checks reported yet for PR #{pr_number} ({int(elapsed)}s elapsed). Waiting {poll_interval}s..."
+                )
+                time.sleep(poll_interval)
+                continue
+
+            # 1. 失敗ジョブの判定
+            failed_checks = [
+                c
+                for c in checks_data
+                if str(c.get("bucket", "")).lower() in ["fail", "error", "cancel"]
+                or str(c.get("state", "")).upper() in ["FAILURE", "STARTUP_FAILURE", "CANCELLED"]
+            ]
+
+            if failed_checks:
+                logger.warning(
+                    f"CI check failure detected for PR #{pr_number}: {[c.get('name') for c in failed_checks]}"
+                )
+
+                # 失敗ログの取得を試みる (gh run list -> gh run view --log-failed)
+                failed_log = ""
+                run_list = run_cmd(
+                    [
+                        gh_bin,
+                        "run",
+                        "list",
+                        "--branch",
+                        head_branch,
+                        "--limit",
+                        "1",
+                        "--json",
+                        "databaseId",
+                    ],
+                    cwd=cwd,
+                    timeout=30,
+                )
+                if run_list.returncode == 0:
+                    try:
+                        rdata = json.loads(run_list.stdout)
+                        if isinstance(rdata, list) and rdata and rdata[0].get("databaseId"):
+                            run_id = rdata[0]["databaseId"]
+                            run_log_res = run_cmd(
+                                [gh_bin, "run", "view", str(run_id), "--log-failed"],
+                                cwd=cwd,
+                                timeout=60,
+                            )
+                            if run_log_res.returncode == 0 and run_log_res.stdout.strip():
+                                failed_log = run_log_res.stdout.strip()
+                    except Exception as le:
+                        logger.warning(f"Failed to fetch detailed run log: {le}")
+
+                if not failed_log:
+                    # フォールバック: checks_res の出力や失敗ジョブ名
+                    failed_names = ", ".join([str(c.get("name")) for c in failed_checks])
+                    failed_log = f"Failed checks: {failed_names}\n" + "\n".join(
+                        [f"- {c.get('name')}: {c.get('link')}" for c in failed_checks]
+                    )
+
+                if len(failed_log) > 3000:
+                    failed_log = failed_log[-3000:]
+
+                state["ci_round"] = ci_round + 1
+                state["error_category"] = "CI_ERROR"
+
+                generic_instruction = (
+                    "\n\n【CI FAILURE RECOVERY INSTRUCTIONS】\n"
+                    "Review the GitHub Actions CI failure output above.\n"
+                    "Fix the failing source files, tests, or configurations to make CI checks pass on GitHub Actions."
+                )
+
+                state["aider_message"] = (
+                    f"GitHub Actions CI failed for PR #{pr_number} (Round {state['ci_round']}/{max_ci_round}):\n"
+                    f"{failed_log}{generic_instruction}"
+                )
+
+                if state["ci_round"] >= max_ci_round:
+                    state["status"] = "FAILED_CI"
+                    state["error"] = f"CI failed after {state['ci_round']} round(s)"
+                else:
+                    state["status"] = "retry_code"
+                return state
+
+            # 2. 進行中ジョブの判定
+            pending_checks = [
+                c
+                for c in checks_data
+                if str(c.get("bucket", "")).lower() in ["pending", "in_progress", "wait"]
+                or str(c.get("state", "")).upper()
+                in ["PENDING", "QUEUED", "IN_PROGRESS", "WAITING"]
+            ]
+
+            if pending_checks:
+                logger.info(
+                    f"CI checks for PR #{pr_number} in progress ({len(pending_checks)} pending, {int(elapsed)}s elapsed). Waiting {poll_interval}s..."
+                )
+                time.sleep(poll_interval)
+                continue
+
+            # 3. すべて成功
+            logger.info(
+                f"All CI checks passed for PR #{pr_number} in {int(elapsed)}s. Marking status as COMPLETED."
+            )
+            state["status"] = "COMPLETED"
+            return state
+
+    except Exception as e:
+        logger.error(f"Error in ci_watch_node: {e}")
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(e)
+
     return state
 
 
@@ -1994,6 +2207,7 @@ def execute_issue(
     resume: Optional[bool] = None,
     fresh: bool = False,
     auto_stash: bool = False,
+    watch_ci: Optional[bool] = None,
 ) -> None:
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -2019,6 +2233,7 @@ def execute_issue(
         allowed_new_file_globs = ctx.get("allowed_new_file_globs", [])
         language = ctx.get("language", "python")
         test_command = ctx.get("test_command", "")
+        watch_ci_setting = watch_ci if watch_ci is not None else bool(ctx.get("watch_ci", False))
         is_valid = ctx.get("valid", False)
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
@@ -2372,6 +2587,7 @@ def execute_issue(
             workflow.add_node("test_feedback_node", test_feedback_node)
             workflow.add_node("review_node", review_node)
             workflow.add_node("done_node", done_node)
+            workflow.add_node("ci_watch_node", ci_watch_node)
             workflow.add_node("escalate_node", escalate_node)
 
             workflow.set_entry_point("spec_draft")
@@ -2501,7 +2717,42 @@ def execute_issue(
                 },
             )
 
-            workflow.add_edge("done_node", END)
+            def route_after_done(s: GraphState) -> str:
+                if s.get("status") in ["PR_FAILED", "FAILED_SYSTEM", "FAILED_B7"]:
+                    return "escalate_node"
+                if s.get("already_satisfied") or not s.get("watch_ci"):
+                    return "end"
+                return "ci_watch_node"
+
+            workflow.add_conditional_edges(
+                "done_node",
+                route_after_done,
+                {
+                    "ci_watch_node": "ci_watch_node",
+                    "escalate_node": "escalate_node",
+                    "end": END,
+                },
+            )
+
+            def route_after_ci_watch(s: GraphState) -> str:
+                if s.get("status") in ["FAILED_SYSTEM", "FAILED_CI", "FAILED_B7"]:
+                    return "escalate_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                if s.get("status") in ["COMPLETED", "ci_passed"]:
+                    return "end"
+                return _route_unknown_status("ci_watch_node", s)
+
+            workflow.add_conditional_edges(
+                "ci_watch_node",
+                route_after_ci_watch,
+                {
+                    "code_node": "code_node",
+                    "escalate_node": "escalate_node",
+                    "end": END,
+                },
+            )
+
             workflow.add_edge("escalate_node", END)
 
             app = workflow.compile()
@@ -2582,6 +2833,9 @@ def execute_issue(
                 allowed_new_file_globs=allowed_new_file_globs,
                 language=language,
                 test_command=test_command,
+                watch_ci=watch_ci_setting,
+                ci_round=0,
+                max_ci_round=2,
             )
             try:
                 final_state = app.invoke(
@@ -2747,6 +3001,12 @@ def main() -> None:
         default=False,
         help="Automatically stash uncommitted changes in satellite repository before execution",
     )
+    exec_parser.add_argument(
+        "--watch-ci",
+        action="store_true",
+        default=None,
+        help="Watch GitHub Actions CI completion after PR creation and auto-recover on failure (Issue #171)",
+    )
 
     orch_parser = subparsers.add_parser("orchestrate", help="Orchestrate uncompleted issues")
     orch_parser.add_argument("--project-key", help="Target Project Key (All if omitted)")
@@ -2769,6 +3029,7 @@ def main() -> None:
             resume=args.resume,
             fresh=args.fresh,
             auto_stash=args.auto_stash,
+            watch_ci=args.watch_ci,
         )
     elif args.subcommand == "orchestrate":
         cmd_orchestrate(args.project_key)
@@ -2776,10 +3037,11 @@ def main() -> None:
         legacy_parser = argparse.ArgumentParser()
         legacy_parser.add_argument("--issue-id", help="Target Issue ID")
         legacy_parser.add_argument("--project-key", help="Target Project Key")
+        legacy_parser.add_argument("--watch-ci", action="store_true", default=None)
         leg_args, _ = legacy_parser.parse_known_args()
         if leg_args.issue_id and leg_args.project_key:
             validate_project_consistency(leg_args.issue_id, leg_args.project_key)
-            execute_issue(leg_args.issue_id, leg_args.project_key)
+            execute_issue(leg_args.issue_id, leg_args.project_key, watch_ci=leg_args.watch_ci)
         else:
             parser.print_help()
 

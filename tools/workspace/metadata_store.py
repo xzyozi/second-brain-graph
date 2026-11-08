@@ -46,6 +46,7 @@ class TaskStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED_SYSTEM = "FAILED_SYSTEM"
     FAILED_B7 = "FAILED_B7"
+    FAILED_CI = "FAILED_CI"
     PR_FAILED = "PR_FAILED"
     SKIPPED_LOCKED = "SKIPPED_LOCKED"
     ESCALATED_NEEDS_REVISION = "ESCALATED_NEEDS_REVISION"
@@ -61,6 +62,7 @@ class ErrorCategory(str, Enum):
     SYSTEM_ERROR = "SYSTEM_ERROR"
     LOCKED = "LOCKED"
     PR_ERROR = "PR_ERROR"
+    CI_ERROR = "CI_ERROR"
     AGY_AUTH = "AGY_AUTH"
     AGY_QUOTA = "AGY_QUOTA"
     AGY_POLICY_DENIED = "AGY_POLICY_DENIED"
@@ -76,9 +78,12 @@ StatusLiteral = Literal[
     "retry_spec_draft",
     "retry_code",
     "retry_review",
+    "ci_watching",
+    "ci_passed",
     "COMPLETED",
     "FAILED_SYSTEM",
     "FAILED_B7",
+    "FAILED_CI",
     "PR_FAILED",
     "SKIPPED_LOCKED",
     "ESCALATED_NEEDS_REVISION",
@@ -92,6 +97,7 @@ ErrorCategoryLiteral = Literal[
     "SYSTEM_ERROR",
     "LOCKED",
     "PR_ERROR",
+    "CI_ERROR",
     "AGY_AUTH",
     "AGY_QUOTA",
     "AGY_POLICY_DENIED",
@@ -849,6 +855,7 @@ def resolve_project_context(
         language = "python"
         test_command = ""
         test_runner = ""
+        watch_ci = False
         raw_target_files: List[str] = []
         exclude_files: List[str] = []
         allowed_new_file_globs: List[str] = []
@@ -873,6 +880,8 @@ def resolve_project_context(
                             test_command = pdata["test_command"].strip()
                         if "test_runner" in pdata and isinstance(pdata["test_runner"], str):
                             test_runner = pdata["test_runner"].strip()
+                        if "watch_ci" in pdata and isinstance(pdata["watch_ci"], bool):
+                            watch_ci = pdata["watch_ci"]
                         if (
                             "target_files" in pdata
                             and isinstance(pdata["target_files"], list)
@@ -962,6 +971,7 @@ def resolve_project_context(
                 "language": language,
                 "test_command": test_command,
                 "test_runner": test_runner,
+                "watch_ci": watch_ci,
                 "valid": False,
             }
 
@@ -974,6 +984,7 @@ def resolve_project_context(
             "language": language,
             "test_command": test_command,
             "test_runner": test_runner,
+            "watch_ci": watch_ci,
             "valid": True,
         }
     except Exception as e:
