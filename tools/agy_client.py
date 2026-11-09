@@ -200,7 +200,8 @@ def _run_agy(
         raise AgyTimeoutError(f"agy execution timed out after {timeout} seconds") from None
 
     if proc.returncode != 0:
-        err_msg = f"agy process failed with returncode {proc.returncode}: {(stderr or '')[:500]}"
+        output = "\n".join(part for part in (stdout, stderr) if part)
+        err_msg = f"agy process failed with returncode {proc.returncode}: {output[:500]}"
         raise classify_agy_exit(err_msg, returncode=proc.returncode)
 
     return stdout or ""

@@ -90,6 +90,21 @@ def test_run_agy_text_builds_expected_command(
     assert cmd == ["agy.exe", "--dangerously-skip-permissions", "-p", "テストプロンプト"]
 
 
+@patch("tools.agy_client.resolve_agy_executable", return_value="agy.exe")
+@patch("subprocess.Popen")
+def test_run_agy_text_classifies_auth_error_from_stdout(
+    mock_popen: MagicMock, mock_resolve: MagicMock
+) -> None:
+    """stdoutだけに出力された認証エラーもAgyAuthErrorへ分類する。"""
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = ("Authentication failed: token expired", "")
+    mock_proc.returncode = 1
+    mock_popen.return_value = mock_proc
+
+    with pytest.raises(AgyAuthError):
+        run_agy_text("テストプロンプト")
+
+
 # ---------------------------------------------------------------------------
 # タイムアウト
 # ---------------------------------------------------------------------------
