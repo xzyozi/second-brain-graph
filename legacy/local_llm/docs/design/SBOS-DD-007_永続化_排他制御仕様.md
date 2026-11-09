@@ -80,4 +80,3 @@
 * **ロック取得**: デフォルトで `tools/.cache/projects/<PROJECT_KEY>/.lock` を `FileLock(timeout=0)` で取得する。母艦メタデータ領域に `.lock` を残さない。
 * **競合時の挙動**: 取得不能（既に別のプロセスが実行中）な場合は、待機やキューイングを行わず、即座に `SKIPPED_LOCKED` としてステータスを確定する。
 * **イベントの記録**: ロック競合が発生した場合は、`tools/.cache/projects/<PROJECT_KEY>/events/event_<execution_id>_<timestamp>.json` を作成して記録する。通常の遷移をイベントとして保存する機能は持たない。
-
