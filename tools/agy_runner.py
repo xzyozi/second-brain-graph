@@ -17,8 +17,7 @@ from tools.agy_policy import AgyPolicyDeniedError
 from tools.edit_guard import (
     MotherRepositoryProtectionError,
     cleanup_unauthorized_aider_artifacts,
-    validate_cwd_is_satellite,
-    warn_if_working_tree_dirty,
+    prepare_guard,
 )
 
 logger = logging.getLogger("agy_runner")
@@ -58,11 +57,13 @@ def run_agy_edit(
         raise AgyRunError("run_agy_edit requires a non-empty cwd")
 
     try:
-        validate_cwd_is_satellite(cwd)
+        prepare_guard(
+            cwd,
+            target_files,
+            allowed_new_file_globs=allowed_new_file_globs,
+        )
     except MotherRepositoryProtectionError as e:
         raise AgyRunError(f"Security violation: {e}") from e
-
-    warn_if_working_tree_dirty(cwd, target_files)
 
     try:
         policy_denied = False

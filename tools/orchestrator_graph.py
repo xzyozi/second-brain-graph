@@ -1524,12 +1524,16 @@ def done_node(state: GraphState) -> GraphState:
                     normalized_targets = [t.strip().replace("\\", "/") for t in target_files]
                     unauthorized = [sf for sf in staged_files if sf not in normalized_targets]
                     if unauthorized:
-                        logger.warning(
-                            f"[BOUNDARY WARNING] Unauthorized staged files detected outside initial target_files: {unauthorized}"
+                        logger.error(
+                            f"[BOUNDARY VIOLATION] Unauthorized staged files detected outside initial target_files: {unauthorized}"
                         )
+                        state["status"] = "PR_FAILED"
+                        state["error_category"] = "PR_ERROR"
                         state["boundary_warning"] = (
                             f"Unauthorized staged files detected outside initial target_files: {unauthorized}"
                         )
+                        state["error"] = state["boundary_warning"]
+                        return state
 
             # 2. 未コミット差分の存在確認とコミット
             status_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)

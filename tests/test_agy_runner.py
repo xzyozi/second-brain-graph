@@ -24,7 +24,31 @@ def test_run_agy_edit_success_returns_true(
     mock_cleanup.assert_called_once_with("/tmp/satellite", ["src/a.py"])
 
 
-def test_run_agy_edit_requires_cwd() -> None:
+
+
+@patch("tools.agy_runner.prepare_guard")
+@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
+@patch("tools.agy_runner.run_agy_in_workdir", return_value="done")
+def test_run_agy_edit_prepares_guard_before_execution(
+    mock_run_agy_in_workdir: MagicMock,
+    mock_cleanup: MagicMock,
+    mock_prepare_guard: MagicMock,
+) -> None:
+    """agy編集前に秘密情報検知を含む共通guardを準備する。"""
+    assert run_agy_edit(
+        "instruction",
+        ["src/a.py"],
+        "/tmp/satellite",
+        allowed_new_file_globs=["tests/**"],
+    )
+
+    mock_prepare_guard.assert_called_once_with(
+        "/tmp/satellite",
+        ["src/a.py"],
+        allowed_new_file_globs=["tests/**"],
+    )
+    mock_run_agy_in_workdir.assert_called_once()
+    mock_cleanup.assert_called_once()
     """cwd が None の場合、AgyRunError を送出することを検証する。"""
     with pytest.raises(AgyRunError, match="non-empty cwd"):
         run_agy_edit("instruction", ["src/a.py"], None)

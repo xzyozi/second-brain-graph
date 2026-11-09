@@ -1602,8 +1602,8 @@ def test_test_feedback_node_generates_categorized_instructions(
     assert "ARCHITECT ADVICE FOR PYTEST FAILURE" in result["aider_message"]
 
 
-def test_done_node_option_b_boundary_warning() -> None:
-    """Verify Option B behavior: unauthorized staged files emit boundary_warning without aborting PR flow."""
+def test_done_node_rejects_unauthorized_staged_files() -> None:
+    """対象外のstage済みファイルを検出した場合はPR作成フローを中断する。"""
     from tools.orchestrator_graph import done_node
 
     state = GraphState(
@@ -1664,7 +1664,9 @@ def test_done_node_option_b_boundary_warning() -> None:
         bw = res.get("boundary_warning")
         assert bw is not None
         assert "extra_unauthorized.py" in bw
-        assert res.get("status") == "COMPLETED"
+        assert res.get("status") == "PR_FAILED"
+        assert res.get("error_category") == "PR_ERROR"
+        assert not any("commit" in command for command in cmd_history)
 
 
 def test_execute_issue_dirty_working_tree_aborts_without_auto_stash(tmp_path: Path) -> None:
