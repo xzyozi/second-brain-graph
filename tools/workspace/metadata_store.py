@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from filelock import FileLock, Timeout
 
-from tools.sanitizer import sanitize_data
+from tools.core.sanitizer import sanitize_data
 
 logger = logging.getLogger("metadata_store")
 
@@ -46,6 +46,7 @@ class TaskStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED_SYSTEM = "FAILED_SYSTEM"
     FAILED_B7 = "FAILED_B7"
+    FAILED_CI = "FAILED_CI"
     PR_FAILED = "PR_FAILED"
     SKIPPED_LOCKED = "SKIPPED_LOCKED"
     ESCALATED_NEEDS_REVISION = "ESCALATED_NEEDS_REVISION"
@@ -61,6 +62,7 @@ class ErrorCategory(str, Enum):
     SYSTEM_ERROR = "SYSTEM_ERROR"
     LOCKED = "LOCKED"
     PR_ERROR = "PR_ERROR"
+    CI_ERROR = "CI_ERROR"
     AGY_AUTH = "AGY_AUTH"
     AGY_QUOTA = "AGY_QUOTA"
     AGY_POLICY_DENIED = "AGY_POLICY_DENIED"
@@ -76,9 +78,12 @@ StatusLiteral = Literal[
     "retry_spec_draft",
     "retry_code",
     "retry_review",
+    "ci_watching",
+    "ci_passed",
     "COMPLETED",
     "FAILED_SYSTEM",
     "FAILED_B7",
+    "FAILED_CI",
     "PR_FAILED",
     "SKIPPED_LOCKED",
     "ESCALATED_NEEDS_REVISION",
@@ -92,6 +97,7 @@ ErrorCategoryLiteral = Literal[
     "SYSTEM_ERROR",
     "LOCKED",
     "PR_ERROR",
+    "CI_ERROR",
     "AGY_AUTH",
     "AGY_QUOTA",
     "AGY_POLICY_DENIED",
@@ -116,7 +122,7 @@ def get_runtime_cache_dir(
     母艦の Git 管理から完全に除外された tools/.cache/projects/<PROJECT_KEY>/ 配下に配置される。
     """
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     cache_dir = project_root / "tools" / ".cache" / "projects" / project_key
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
@@ -187,7 +193,7 @@ def validate_project_consistency(
         )
 
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     if metadata_dir is None:
         metadata_dir = project_root / "metadata"
 
@@ -252,13 +258,29 @@ def validate_project_consistency(
             raise ValueError(
                 f"Project key mismatch in project.json: expected '{project_key}', got '{pkey}'."
             )
+        # 多言語メタデータのバリデーション (Issue #168)
+        lang = pdata.get("language")
+        if lang is not None:
+            if not isinstance(lang, str) or not lang.strip():
+                raise ValueError(
+                    f"'language' field in project.json must be a non-empty string, got {type(lang).__name__}."
+                )
+            if lang.strip().lower() not in SUPPORTED_LANGUAGES:
+                raise ValueError(
+                    f"Unsupported language '{lang}' in project.json. Supported: {', '.join(SUPPORTED_LANGUAGES)}"
+                )
+        test_cmd = pdata.get("test_command")
+        if test_cmd is not None and not isinstance(test_cmd, str):
+            raise ValueError(
+                f"'test_command' field in project.json must be a string, got {type(test_cmd).__name__}."
+            )
 
 
 def _is_default_metadata_dir(metadata_dir: Optional[Path]) -> bool:
     """渡された metadata_dir が未指定、または母艦標準の metadata ディレクトリであるかを判定する。"""
     if metadata_dir is None:
         return True
-    default_meta = Path(__file__).resolve().parent.parent / "metadata"
+    default_meta = Path(__file__).resolve().parent.parent.parent / "metadata"
     try:
         return metadata_dir.resolve() == default_meta.resolve()
     except Exception:
@@ -348,18 +370,55 @@ def force_unlock_project(
 # ==============================================================================
 
 
+#: サポート対象のサテライトプログラミング言語 (Issue #168)
+SUPPORTED_LANGUAGES: tuple[str, ...] = ("python", "typescript", "rust", "javascript")
+
+#: 言語別の生成物 .gitignore エントリ定義 (Issue #168)
+LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES: dict[str, tuple[str, ...]] = {
+    "python": (
+        ".aider*",
+        ".agy*",
+        ".pytest_cache/",
+        "__pycache__/",
+        ".venv/",
+        "*.pyc",
+        ".ruff_cache/",
+        ".mypy_cache/",
+    ),
+    "typescript": (
+        ".aider*",
+        ".agy*",
+        "node_modules/",
+        "dist/",
+        ".tsbuildinfo",
+    ),
+    "javascript": (
+        ".aider*",
+        ".agy*",
+        "node_modules/",
+        "dist/",
+    ),
+    "rust": (
+        ".aider*",
+        ".agy*",
+        "target/",
+    ),
+}
+
+
+def get_gitignore_entries_for_language(language: str = "python") -> tuple[str, ...]:
+    """サテライトの言語に応じた .gitignore 保証エントリを返す (Issue #168)。"""
+    norm_lang = (language or "python").strip().lower()
+    return LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES.get(
+        norm_lang, LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES["python"]
+    )
+
+
 #: 自律ワーカーが生成する成果物の .gitignore 向け表記 (Issue #98)。
 #: dirty 判定・Resume の WIP コミット除外・衛星 .gitignore の保証で共通利用する唯一の定義。
-GENERATED_ARTIFACT_GITIGNORE_ENTRIES: tuple[str, ...] = (
-    ".aider*",
-    ".agy*",
-    ".pytest_cache/",
-    "__pycache__/",
-    ".venv/",
-    "*.pyc",
-    ".ruff_cache/",
-    ".mypy_cache/",
-)
+GENERATED_ARTIFACT_GITIGNORE_ENTRIES: tuple[str, ...] = LANGUAGE_ARTIFACT_GITIGNORE_ENTRIES[
+    "python"
+]
 
 #: パスの各要素に対する fnmatch 用パターン (末尾の "/" を除いたもの)。
 GENERATED_ARTIFACT_PATTERNS: tuple[str, ...] = tuple(
@@ -435,7 +494,7 @@ def update_task_state(
     elif metadata_dir is None and state_file is None:
         # 新パスに state.json がまだ存在しない場合、旧パス (metadata/projects/<KEY>/state.json) があればフォールバック読み込み
         legacy_state_file = (
-            Path(__file__).resolve().parent.parent
+            Path(__file__).resolve().parent.parent.parent
             / "metadata"
             / "projects"
             / project_key
@@ -521,7 +580,7 @@ def reset_task_state(
     # 旧パス (metadata/projects/<KEY>/state.json) も存在する場合は削除
     if metadata_dir is None and state_file is None:
         legacy_state_file = (
-            Path(__file__).resolve().parent.parent
+            Path(__file__).resolve().parent.parent.parent
             / "metadata"
             / "projects"
             / project_key
@@ -615,7 +674,10 @@ def record_execution_history(
     """
     if history_file is None:
         history_file = (
-            Path(__file__).resolve().parent.parent / "tools" / ".cache" / "execution_history.json"
+            Path(__file__).resolve().parent.parent.parent
+            / "tools"
+            / ".cache"
+            / "execution_history.json"
         )
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -757,7 +819,7 @@ def resolve_project_context(
     特定のファイル名にハードコードせず、任意の衛星リポジトリの対象ファイルを動的に検出・解決する (MULTI-001 §2③・§4)。
     """
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     if metadata_dir is None:
         metadata_dir = project_root / "metadata"
 
@@ -790,6 +852,10 @@ def resolve_project_context(
 
         base_branch = "develop"
         work_branch_prefix = "sbos/"
+        language = "python"
+        test_command = ""
+        test_runner = ""
+        watch_ci = False
         raw_target_files: List[str] = []
         exclude_files: List[str] = []
         allowed_new_file_globs: List[str] = []
@@ -807,6 +873,15 @@ def resolve_project_context(
                         pdata = json.load(pf)
                         base_branch = pdata.get("base_branch", "develop")
                         work_branch_prefix = pdata.get("work_branch_prefix", "sbos/")
+                        # 多言語メタデータ取得 (Issue #168)
+                        if "language" in pdata and isinstance(pdata["language"], str):
+                            language = pdata["language"].strip().lower()
+                        if "test_command" in pdata and isinstance(pdata["test_command"], str):
+                            test_command = pdata["test_command"].strip()
+                        if "test_runner" in pdata and isinstance(pdata["test_runner"], str):
+                            test_runner = pdata["test_runner"].strip()
+                        if "watch_ci" in pdata and isinstance(pdata["watch_ci"], bool):
+                            watch_ci = pdata["watch_ci"]
                         if (
                             "target_files" in pdata
                             and isinstance(pdata["target_files"], list)
@@ -836,7 +911,8 @@ def resolve_project_context(
                 if tpath.exists():
                     try:
                         text = tpath.read_text(encoding="utf-8")
-                        matches = re.findall(r"[\w/.-]+\.py", text)
+                        # 拡張子に合わせたマッチング (.py, .ts, .tsx, .js, .jsx, .rs)
+                        matches = re.findall(r"[\w/.-]+\.(?:py|tsx?|jsx?|rs)", text)
                         for m in matches:
                             if m not in raw_target_files:
                                 raw_target_files.append(m)
@@ -845,15 +921,33 @@ def resolve_project_context(
                     except Exception as ex:
                         logger.warning(f"Failed to parse tasks.md at {tpath}: {ex}")
 
-        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在する Python ファイルを自動検出
+        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在するソースファイルを言語別自動検出 (Issue #168)
         if not raw_target_files:
-            for py_file in cwd_path.rglob("*.py"):
-                rel_p = str(py_file.relative_to(cwd_path)).replace("\\", "/")
-                if not any(
-                    excluded in rel_p
-                    for excluded in [".venv", "venv", "__pycache__", "build", "dist"]
-                ):
-                    raw_target_files.append(rel_p)
+            ignore_dirs = {
+                ".venv",
+                "venv",
+                "__pycache__",
+                "build",
+                "dist",
+                "node_modules",
+                "target",
+                ".git",
+                ".cache",
+            }
+            if language in ("typescript", "javascript"):
+                ext_patterns = ["*.ts", "*.tsx", "*.js", "*.jsx"]
+            elif language == "rust":
+                ext_patterns = ["*.rs"]
+            else:
+                ext_patterns = ["*.py"]
+
+            for pat in ext_patterns:
+                for src_file in cwd_path.rglob(pat):
+                    rel_p = str(src_file.relative_to(cwd_path)).replace("\\", "/")
+                    parts = set(rel_p.split("/"))
+                    if not parts.intersection(ignore_dirs):
+                        if rel_p not in raw_target_files:
+                            raw_target_files.append(rel_p)
 
         # ターゲットファイルの有効性を検証し、除外ファイルを適用
         valid_target_files = []
@@ -874,6 +968,10 @@ def resolve_project_context(
                 "base_branch": base_branch,
                 "work_branch_prefix": work_branch_prefix,
                 "allowed_new_file_globs": allowed_new_file_globs,
+                "language": language,
+                "test_command": test_command,
+                "test_runner": test_runner,
+                "watch_ci": watch_ci,
                 "valid": False,
             }
 
@@ -883,6 +981,10 @@ def resolve_project_context(
             "base_branch": base_branch,
             "work_branch_prefix": work_branch_prefix,
             "allowed_new_file_globs": allowed_new_file_globs,
+            "language": language,
+            "test_command": test_command,
+            "test_runner": test_runner,
+            "watch_ci": watch_ci,
             "valid": True,
         }
     except Exception as e:
@@ -893,6 +995,9 @@ def resolve_project_context(
             "base_branch": "develop",
             "work_branch_prefix": "sbos/",
             "allowed_new_file_globs": [],
+            "language": "python",
+            "test_command": "",
+            "test_runner": "",
             "valid": False,
         }
 
@@ -905,7 +1010,7 @@ def resolve_project_context(
 def load_project_registry(project_root: Optional[Path] = None) -> Dict[str, Any]:
     """metadata/.project-registry.json を読み込み、projects 辞書を返す。"""
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     reg_file = project_root / "metadata" / ".project-registry.json"
     if not reg_file.exists():
         return {}
@@ -972,7 +1077,7 @@ def resolve_project_from_cwd(
         cwd = cwd.resolve()
 
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     project_root = project_root.resolve()
 
     # 1. CWD から上位ディレクトリを遡り docs/project.json を探索
@@ -1010,7 +1115,7 @@ def resolve_task_id_for_issue(
 ) -> Optional[str]:
     """project_key と GitHub Issue 番号からサテライト内の対応する task_id（例: TFG-0005）を逆引きする。"""
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
 
     projects = load_project_registry(project_root)
     pdata = projects.get(project_key, {})
@@ -1054,7 +1159,7 @@ def resolve_issue_number_for_task(
 ) -> Optional[int]:
     """task_id (例: TFG-0005) から対応する GitHub Issue 番号を逆引きする。"""
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
 
     project_key = task_id.split("-")[0]
     projects = load_project_registry(project_root)
@@ -1105,7 +1210,7 @@ def resolve_target_spec(
     project_key, task_id, issue_number, github_repo を高精度に解決する。
     """
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
 
     target = target.strip()
 

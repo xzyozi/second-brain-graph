@@ -9,10 +9,10 @@ from typing import Any, Dict, Optional
 
 from openai import OpenAI
 
-from tools.agy_client import run_agy_text
-from tools.backend_coordinator import get_coordinator
-from tools.config_loader import ProfileConfig, get_model_params
-from tools.sanitizer import sanitize_text
+from tools.backends.agy_client import run_agy_text
+from tools.backends.backend_coordinator import get_coordinator
+from tools.core.sanitizer import sanitize_text
+from tools.workspace.config_loader import ProfileConfig, get_model_params
 
 logger = logging.getLogger("llm_client")
 

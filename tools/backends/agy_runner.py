@@ -6,15 +6,15 @@
 import logging
 from typing import List, Optional
 
-from tools.agy_client import (
+from tools.backends.agy_client import (
     AgyError,
     AgyExitError,
     AgyNotFoundError,
     AgyTimeoutError,
     run_agy_in_workdir,
 )
-from tools.agy_policy import AgyPolicyDeniedError
-from tools.edit_guard import (
+from tools.backends.agy_policy import AgyPolicyDeniedError
+from tools.core.edit_guard import (
     MotherRepositoryProtectionError,
     cleanup_unauthorized_aider_artifacts,
     prepare_guard,

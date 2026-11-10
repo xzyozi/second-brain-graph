@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-from tools.config_loader import AgyExternalSendConfig, get_backend_execution_config
-from tools.edit_guard import detect_secret_files
-from tools.metadata_store import resolve_project_from_cwd
+from tools.core.edit_guard import detect_secret_files
+from tools.workspace.config_loader import AgyExternalSendConfig, get_backend_execution_config
+from tools.workspace.metadata_store import resolve_project_from_cwd
 
 AgyOperation = Literal["text", "edit", "review"]
 

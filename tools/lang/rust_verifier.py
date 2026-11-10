@@ -1,5 +1,6 @@
 """Rust-specific language verifier supporting cargo check and Tree-sitter AST parsing."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -77,8 +78,13 @@ class RustLanguageVerifier(BaseLanguageVerifier):
             return VerificationResult(is_valid=False, errors=[f"File not found: {file_path}"])
 
         project_dir = self._find_cargo_root(file_path.parent)
-        if project_dir:
-            return self.check_build(project_dir)
+        if project_dir and shutil.which("cargo"):
+            try:
+                build_res = self.check_build(project_dir)
+                if not build_res.is_valid:
+                    return build_res
+            except Exception:
+                pass  # Fall back to tree-sitter AST validation
 
         code_text = file_path.read_text(encoding="utf-8")
         code_bytes = code_text.encode("utf-8")

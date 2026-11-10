@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.agy_client import (
+from tools.backends.agy_client import (
     AgyAuthError,
     AgyExitError,
     AgyNotFoundError,
@@ -21,7 +21,7 @@ from tools.agy_client import (
     run_agy_in_workdir,
     run_agy_text,
 )
-from tools.agy_policy import AgyPolicyDeniedError
+from tools.backends.agy_policy import AgyPolicyDeniedError
 
 # ---------------------------------------------------------------------------
 # resolve_agy_executable
