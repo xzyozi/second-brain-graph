@@ -1,0 +1,65 @@
+{
+  "test_level": "L5",
+  "test_name": "運用・復旧試験 (L5 Worker & Recovery Verification)",
+  "executed_at": "2026-11-06T08:27:40+00:00",
+  "scope": "Issue #163 P1/P2 現行スコープ段階的進行計画",
+  "dry_run_worker": {
+    "command": "uv run python tools/nightly_task_worker.py --config config/nightly_worker.toml --dry-run",
+    "exit_code": 0,
+    "exit_reason": "batch_cycle_completed",
+    "selected_task": "TFG-0005",
+    "score": 85.0,
+    "priority": "high",
+    "candidates_count": 5
+  },
+  "items": [
+    {
+      "id": "L5-001",
+      "name": "auth連続失敗停止",
+      "status": "PASSED",
+      "verification_method": "mock_contract_test",
+      "test_case": "tests/test_nightly_task_worker.py::test_run_batch_cycle_aborts_on_consecutive_auth_quota_failures",
+      "detail": "AGY_AUTH が連続2回発生した時点で後続タスクを即座に中断し安全停止"
+    },
+    {
+      "id": "L5-002",
+      "name": "quota連続失敗停止",
+      "status": "PASSED",
+      "verification_method": "mock_contract_test",
+      "test_case": "tests/test_nightly_task_worker.py::test_run_batch_cycle_aborts_on_consecutive_auth_quota_failures",
+      "detail": "AGY_QUOTA が連続2回発生した時点で後続タスクを即座に中断し安全停止"
+    },
+    {
+      "id": "L5-003",
+      "name": "timeoutリトライ・上限停止",
+      "status": "PASSED",
+      "verification_method": "unit_integration_test",
+      "test_case": "tests/test_orchestrator_agy_integration.py::test_code_node_handles_agy_timeout_retry_and_escalation",
+      "detail": "1回目 timeout で retry_code (指数バックオフsleep)、2回目 timeout で FAILED_SYSTEM にエスカレーション停止"
+    },
+    {
+      "id": "L5-004",
+      "name": "worker子孫プロセス終了",
+      "status": "PASSED",
+      "verification_method": "process_tree_test",
+      "test_case": "tests/test_nightly_task_worker.py::test_run_with_tree_kill_terminates_grandchild",
+      "detail": "_terminate_process_tree (Windows taskkill /F /T, POSIX killpg) により孫プロセスを含め完全終了"
+    },
+    {
+      "id": "L5-005",
+      "name": "旧資産復旧",
+      "status": "PASSED",
+      "verification_method": "git_tag_and_manifest_check",
+      "evidence": "archive/local-llm-20261104 tag and legacy/local_llm/ directory",
+      "detail": "archive tagおよびlegacy/local_llm/配下にAider・旧モデル資産が完全に退避済み"
+    },
+    {
+      "id": "L5-006",
+      "name": "routes切り戻し手順確立",
+      "status": "PASSED",
+      "verification_method": "manifest_documentation_check",
+      "evidence": "legacy/local_llm/MANIFEST.md §6",
+      "detail": "git switch/checkout による旧設定・コード復元および Ollama 登録手順が確立済み"
+    }
+  ]
+}

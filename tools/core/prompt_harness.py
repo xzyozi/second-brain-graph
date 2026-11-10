@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Dict, List, Optional, Tuple
 
-from tools.config_loader import PromptConfig, load_prompt_config
+from tools.workspace.config_loader import PromptConfig, load_prompt_config
 
 logger = logging.getLogger("prompt_harness")
 

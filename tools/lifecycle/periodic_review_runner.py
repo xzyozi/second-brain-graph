@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tools.issue_spec_manager import self_heal_missing_specs
+from tools.lifecycle.issue_spec_manager import self_heal_missing_specs
 
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("periodic_reviewer")
