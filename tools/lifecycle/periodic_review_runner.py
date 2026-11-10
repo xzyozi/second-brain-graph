@@ -262,7 +262,7 @@ def sync_issue_statuses_to_tasks_md(
                 new_line = new_line.replace("stage:ideation", "stage:ready")
                 updated_count += 1
                 logger.info(f"tasks.md ステータス昇格反映: Issue #{issue_num} -> stage:ready")
-            elif "stage:in_progress" in label_names and line.startswith("- [ ]"):
+            elif "stage:in-progress" in label_names and line.startswith("- [ ]"):
                 new_line = "- [/]" + line[5:]
                 updated_count += 1
                 logger.info(f"tasks.md 進行中反映: Issue #{issue_num} -> [/]")
@@ -280,15 +280,18 @@ def sync_issue_statuses_to_tasks_md(
         if num in seen_issue_nums:
             continue
 
+        label_names = [lbl["name"] for lbl in iss.get("labels", [])]
+        if "stage:ready" not in label_names:
+            logger.info(f"tasks.md 同期対象外（stage:ready未付与）: Issue #{num}")
+            continue
+
         # 新規追記
         task_id = f"{project_key}-{next_task_num:04d}"
         next_task_num += 1
 
         state = iss.get("state", "OPEN")
-        label_names = [lbl["name"] for lbl in iss.get("labels", [])]
-
         box = "[x]" if state == "CLOSED" else "[ ]"
-        stage_tag = "stage:ready" if "stage:ready" in label_names else "stage:ideation"
+        stage_tag = "stage:ready"
         theme_tag = next((lbl for lbl in label_names if lbl.startswith("theme:")), "theme:security")
         priority = "high" if "priority:high" in label_names else "medium"
 

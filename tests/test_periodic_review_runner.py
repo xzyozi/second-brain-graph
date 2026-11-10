@@ -61,7 +61,7 @@ def test_sync_issue_statuses_to_tasks_md_closed_and_ready(
 def test_sync_issue_statuses_to_tasks_md_in_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """stage:in_progress ラベル時に [/] へ更新されることを検証する."""
+    """stage:in-progress ラベル時に [/] へ更新されることを検証する。"""
     tasks_path = tmp_path / "docs" / "tasks.md"
     tasks_path.parent.mkdir(parents=True)
     tasks_path.write_text(
@@ -74,7 +74,7 @@ def test_sync_issue_statuses_to_tasks_md_in_progress(
             "number": 101,
             "title": "Task 1",
             "state": "OPEN",
-            "labels": [{"name": "stage:in_progress"}],
+            "labels": [{"name": "stage:in-progress"}],
         },
     ]
     monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
@@ -108,7 +108,7 @@ def test_sync_issue_statuses_to_tasks_md_import_new_issues(
             "number": 106,
             "title": "New Issue B",
             "state": "CLOSED",
-            "labels": [{"name": "theme:edge_cases"}],
+            "labels": [{"name": "theme:edge_cases"}, {"name": "stage:ideation"}],
         },
     ]
     monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
@@ -117,17 +117,14 @@ def test_sync_issue_statuses_to_tasks_md_import_new_issues(
         tasks_path, "mock/repo", "TEST", dry_run=False
     )
     assert updated == 0
-    assert added == 2
+    assert added == 1
 
     content = tasks_path.read_text(encoding="utf-8")
     assert (
         "- [ ] [TEST-0001] New Issue A <!-- priority:medium issue:#105 theme:security stage:ready"
         in content
     )
-    assert (
-        "- [x] [TEST-0002] New Issue B <!-- priority:medium issue:#106 theme:edge_cases stage:ideation completed:"
-        in content
-    )
+    assert "New Issue B" not in content
 
 
 def test_main_status_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
