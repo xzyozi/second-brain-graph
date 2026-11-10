@@ -291,18 +291,26 @@ def _run_with_tree_kill(
 
 
 def get_task_error_category(root_dir: Path, task: CandidateTask) -> str | None:
-    """実行後の state.json から error_category を取得する."""
+    """正本または後方互換パスの state.json から対象タスクのエラー分類を取得する."""
     paths = [
+        root_dir / "tools" / ".cache" / "projects" / task.project_key / "state.json",
         root_dir / "metadata" / "projects" / task.project_key / "state.json",
         task.satellite_dir / "docs" / "state.json",
     ]
-    for p in paths:
-        if p.is_file():
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                return data.get("error_category")
-            except Exception:
-                pass
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            entry = data.get(task.task_id)
+            if isinstance(entry, dict):
+                category = entry.get("error_category")
+            else:
+                category = data.get("error_category")
+            if category is not None:
+                return category
+        except Exception:
+            continue
     return None
 
 
@@ -460,6 +468,7 @@ def run_batch_cycle(
     root_dir: Path,
     config: dict[str, Any],
     opts: argparse.Namespace,
+    stop_event: threading.Event | None = None,
 ) -> int:
     """1 回分のバッチ巡回・タスク抽出・実行を行う.
 
@@ -552,6 +561,8 @@ def run_batch_cycle(
                         f"agy の認証・クォータ・ポリシー拒否 ({cat}) が "
                         f"{consecutive_auth_quota_failures} 回連続したため、以降のタスク実行を安全に中断します。"
                     )
+                    if stop_event is not None:
+                        stop_event.set()
                     break
             else:
                 consecutive_auth_quota_failures = 0
@@ -649,7 +660,7 @@ def run_loop(
             )
 
             logger.info(f"--- ループ周回 #{iteration} 開始 (方式: {mode}) ---")
-            run_batch_cycle(root_dir, config, opts)
+            run_batch_cycle(root_dir, config, opts, stop_event=stop_event)
 
             if stop_event.is_set():
                 set_termination_reason("stop_event")

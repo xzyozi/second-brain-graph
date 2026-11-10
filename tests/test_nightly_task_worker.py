@@ -244,7 +244,12 @@ def test_run_loop_with_max_iterations(
 
     cycle_count = 0
 
-    def mock_cycle(root: Path, config: dict, opts: object) -> int:
+    def mock_cycle(
+        root: Path,
+        config: dict,
+        opts: object,
+        stop_event: threading.Event | None = None,
+    ) -> int:
         nonlocal cycle_count
         cycle_count += 1
         return 0
@@ -271,6 +276,52 @@ def test_run_loop_with_max_iterations(
     assert "終了理由 (Exit Reason): max_iterations" in caplog.text
 
 
+def test_run_loop_stops_after_safety_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """安全停止イベントが設定された周回後に次の周回を開始しない。"""
+    cfg_file = tmp_path / "safety_loop_config.toml"
+    cfg_file.write_text(
+        'enabled = true\n[loop]\nenabled = true\nmode = "interval"\ninterval_seconds = 0\n',
+        encoding="utf-8",
+    )
+
+    cycle_count = 0
+
+    def mock_cycle(
+        root: Path,
+        config: dict,
+        opts: object,
+        stop_event: threading.Event | None = None,
+    ) -> int:
+        nonlocal cycle_count
+        cycle_count += 1
+        assert stop_event is not None
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", mock_cycle)
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(
+            [
+                "--config",
+                str(cfg_file),
+                "--loop",
+                "--loop-mode",
+                "interval",
+                "--interval",
+                "0",
+            ]
+        )
+
+    assert exit_code == 0
+    assert cycle_count == 1
+    assert "終了理由 (Exit Reason): stop_event" in caplog.text
+
+
 def test_run_loop_logs_daily_boundary_reached(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -285,7 +336,12 @@ def test_run_loop_logs_daily_boundary_reached(
 
     cycle_count = 0
 
-    def mock_cycle(root: Path, config: dict, opts: object) -> int:
+    def mock_cycle(
+        root: Path,
+        config: dict,
+        opts: object,
+        stop_event: threading.Event | None = None,
+    ) -> int:
         nonlocal cycle_count
         cycle_count += 1
         return 0
@@ -358,7 +414,11 @@ def test_run_loop_keyboard_interrupt_logs_exit_reason(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", lambda root, config, opts: 0)
+    monkeypatch.setattr(
+        nightly_task_worker,
+        "run_batch_cycle",
+        lambda root, config, opts, stop_event=None: 0,
+    )
 
     def raise_keyboard_interrupt(*args: object, **kwargs: object) -> bool:
         raise KeyboardInterrupt
@@ -393,7 +453,11 @@ def test_windows_does_not_register_sigterm(
 
     monkeypatch.setattr(nightly_task_worker.sys, "platform", "win32")
     monkeypatch.setattr(nightly_task_worker.signal, "signal", fake_signal)
-    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", lambda root, config, opts: 0)
+    monkeypatch.setattr(
+        nightly_task_worker,
+        "run_batch_cycle",
+        lambda root, config, opts, stop_event=None: 0,
+    )
 
     with caplog.at_level(logging.INFO, logger="nightly_worker"):
         exit_code = nightly_task_worker.main(
@@ -469,7 +533,14 @@ def test_get_task_error_category(tmp_path: Path) -> None:
     state_file.write_text('{"error_category": "AGY_AUTH"}', encoding="utf-8")
     assert nightly_task_worker.get_task_error_category(tmp_path, task) == "AGY_AUTH"
 
-    # 3. metadata/projects/TEST_PROJ/state.json が優先されること
+    # 3. tools/.cache/projects/<KEY>/state.json の対象Issueエントリを最優先する
+    cache_state = tmp_path / "tools" / ".cache" / "projects" / "TEST_PROJ" / "state.json"
+    cache_state.parent.mkdir(parents=True, exist_ok=True)
+    cache_state.write_text('{"T1": {"error_category": "AGY_QUOTA"}}', encoding="utf-8")
+    assert nightly_task_worker.get_task_error_category(tmp_path, task) == "AGY_QUOTA"
+
+    # 4. cacheに対象エントリがない場合は旧metadataパスへフォールバックする
+    cache_state.write_text('{"OTHER": {"error_category": "SYSTEM_ERROR"}}', encoding="utf-8")
     meta_state = tmp_path / "metadata" / "projects" / "TEST_PROJ" / "state.json"
     meta_state.parent.mkdir(parents=True, exist_ok=True)
     meta_state.write_text('{"error_category": "AGY_QUOTA"}', encoding="utf-8")

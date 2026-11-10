@@ -57,7 +57,7 @@ def test_resolve_agy_executable_not_found_raises_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-@patch("tools.agy_client.resolve_agy_executable", return_value="agy.exe")
+@patch("tools.backends.agy_client.resolve_agy_executable", return_value="agy.exe")
 @patch("subprocess.Popen")
 def test_run_agy_text_success_returns_stdout(
     mock_popen: MagicMock, mock_resolve: MagicMock
@@ -73,7 +73,7 @@ def test_run_agy_text_success_returns_stdout(
     assert result == "hello from agy"
 
 
-@patch("tools.agy_client.resolve_agy_executable", return_value="agy.exe")
+@patch("tools.backends.agy_client.resolve_agy_executable", return_value="agy.exe")
 @patch("subprocess.Popen")
 def test_run_agy_text_builds_expected_command(
     mock_popen: MagicMock, mock_resolve: MagicMock
@@ -90,13 +90,28 @@ def test_run_agy_text_builds_expected_command(
     assert cmd == ["agy.exe", "--dangerously-skip-permissions", "-p", "テストプロンプト"]
 
 
+@patch("tools.backends.agy_client.resolve_agy_executable", return_value="agy.exe")
+@patch("subprocess.Popen")
+def test_run_agy_text_classifies_auth_error_from_stdout(
+    mock_popen: MagicMock, mock_resolve: MagicMock
+) -> None:
+    """stdoutだけに出力された認証エラーもAgyAuthErrorへ分類する。"""
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = ("Authentication failed: token expired", "")
+    mock_proc.returncode = 1
+    mock_popen.return_value = mock_proc
+
+    with pytest.raises(AgyAuthError):
+        run_agy_text("テストプロンプト")
+
+
 # ---------------------------------------------------------------------------
 # タイムアウト
 # ---------------------------------------------------------------------------
 
 
-@patch("tools.agy_client._terminate_process_tree")
-@patch("tools.agy_client.resolve_agy_executable", return_value="agy.exe")
+@patch("tools.backends.agy_client._terminate_process_tree")
+@patch("tools.backends.agy_client.resolve_agy_executable", return_value="agy.exe")
 @patch("subprocess.Popen")
 def test_run_agy_text_timeout_raises_agy_timeout_error(
     mock_popen: MagicMock, mock_resolve: MagicMock, mock_terminate: MagicMock
@@ -120,7 +135,7 @@ def test_run_agy_text_timeout_raises_agy_timeout_error(
 # ---------------------------------------------------------------------------
 
 
-@patch("tools.agy_client.resolve_agy_executable", return_value="agy.exe")
+@patch("tools.backends.agy_client.resolve_agy_executable", return_value="agy.exe")
 @patch("subprocess.Popen")
 def test_run_agy_text_nonzero_exit_raises_agy_exit_error(
     mock_popen: MagicMock, mock_resolve: MagicMock
@@ -155,7 +170,7 @@ def test_run_agy_in_workdir_requires_cwd_none() -> None:
         run_agy_in_workdir("テストプロンプト", cwd=None)  # type: ignore[arg-type]
 
 
-@patch("tools.agy_client.resolve_agy_executable", return_value="agy.exe")
+@patch("tools.backends.agy_client.resolve_agy_executable", return_value="agy.exe")
 @patch("subprocess.Popen")
 def test_run_agy_in_workdir_passes_cwd_to_popen(
     mock_popen: MagicMock, mock_resolve: MagicMock
@@ -178,7 +193,7 @@ def test_run_agy_in_workdir_passes_cwd_to_popen(
 
 
 @patch(
-    "tools.agy_client.resolve_agy_executable",
+    "tools.backends.agy_client.resolve_agy_executable",
     side_effect=AgyNotFoundError("agy が見つかりません"),
 )
 def test_run_agy_text_propagates_not_found_error(mock_resolve: MagicMock) -> None:
@@ -188,7 +203,7 @@ def test_run_agy_text_propagates_not_found_error(mock_resolve: MagicMock) -> Non
 
 
 @patch(
-    "tools.agy_client.resolve_agy_executable",
+    "tools.backends.agy_client.resolve_agy_executable",
     side_effect=AgyNotFoundError("agy が見つかりません"),
 )
 def test_run_agy_in_workdir_propagates_not_found_error(mock_resolve: MagicMock) -> None:
@@ -237,9 +252,9 @@ def test_classify_agy_exit_generic_error() -> None:
     assert err.returncode == 2
 
 
-@patch("tools.agy_client.subprocess.Popen")
+@patch("tools.backends.agy_client.subprocess.Popen")
 @patch(
-    "tools.agy_client.authorize_agy_execution",
+    "tools.backends.agy_client.authorize_agy_execution",
     side_effect=AgyPolicyDeniedError("AGY_POLICY_DENIED: blocked"),
 )
 def test_run_agy_text_denied_before_popen(mock_authorize: MagicMock, mock_popen: MagicMock) -> None:
@@ -251,9 +266,9 @@ def test_run_agy_text_denied_before_popen(mock_authorize: MagicMock, mock_popen:
     mock_popen.assert_not_called()
 
 
-@patch("tools.agy_client.subprocess.Popen")
+@patch("tools.backends.agy_client.subprocess.Popen")
 @patch(
-    "tools.agy_client.authorize_agy_execution",
+    "tools.backends.agy_client.authorize_agy_execution",
     side_effect=AgyPolicyDeniedError("AGY_POLICY_DENIED: blocked"),
 )
 def test_run_agy_in_workdir_denied_before_popen(
