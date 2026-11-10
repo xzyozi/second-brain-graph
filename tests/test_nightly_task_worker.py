@@ -276,7 +276,6 @@ def test_run_loop_with_max_iterations(
     assert "終了理由 (Exit Reason): max_iterations" in caplog.text
 
 
-
 def test_run_loop_stops_after_safety_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -537,9 +536,7 @@ def test_get_task_error_category(tmp_path: Path) -> None:
     # 3. tools/.cache/projects/<KEY>/state.json の対象Issueエントリを最優先する
     cache_state = tmp_path / "tools" / ".cache" / "projects" / "TEST_PROJ" / "state.json"
     cache_state.parent.mkdir(parents=True, exist_ok=True)
-    cache_state.write_text(
-        '{"T1": {"error_category": "AGY_QUOTA"}}', encoding="utf-8"
-    )
+    cache_state.write_text('{"T1": {"error_category": "AGY_QUOTA"}}', encoding="utf-8")
     assert nightly_task_worker.get_task_error_category(tmp_path, task) == "AGY_QUOTA"
 
     # 4. cacheに対象エントリがない場合は旧metadataパスへフォールバックする
