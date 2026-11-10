@@ -9,11 +9,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.agy_runner import CoderRunError
-from tools.backend_coordinator import get_coordinator
-from tools.config_loader import BackendExecutionConfig, get_backend_execution_config
-from tools.git_utils import GitDiffError
-from tools.orchestrator_graph import (
+from tools.backends.agy_runner import CoderRunError
+from tools.backends.backend_coordinator import get_coordinator
+from tools.core.orchestrator_graph import (
     GraphState,
     ProjectLockManager,
     cmd_orchestrate,
@@ -29,6 +27,8 @@ from tools.orchestrator_graph import (
     validate_issue_id,
     validate_project_consistency,
 )
+from tools.workspace.config_loader import BackendExecutionConfig, get_backend_execution_config
+from tools.workspace.git_utils import GitDiffError
 
 
 @pytest.fixture(autouse=True)
@@ -50,8 +50,8 @@ def _force_test_routes(monkeypatch: pytest.MonkeyPatch) -> Any:
         }
         return cfg.model_copy(update={"routes": agy_routes})
 
-    monkeypatch.setattr("tools.backend_coordinator.get_backend_execution_config", mock_get_config)
-    monkeypatch.setattr("tools.config_loader.get_backend_execution_config", mock_get_config)
+    monkeypatch.setattr("tools.backends.backend_coordinator.get_backend_execution_config", mock_get_config)
+    monkeypatch.setattr("tools.workspace.config_loader.get_backend_execution_config", mock_get_config)
     get_coordinator.cache_clear()
     yield
     get_coordinator.cache_clear()
@@ -172,10 +172,10 @@ def test_done_node_handles_git_failures() -> None:
         rdjson=None,
     )
 
-    with patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True):
+    with patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True):
         # 1. git diff --cached returns non-zero code
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             return_value=MagicMock(returncode=1, stderr="diff error"),
         ):
             res = done_node(state.copy())
@@ -184,7 +184,7 @@ def test_done_node_handles_git_failures() -> None:
 
         # 2. git diff --cached non-empty staged changes
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             side_effect=[
                 MagicMock(returncode=0, stdout="staged_file.py\n"),
             ],
@@ -196,7 +196,7 @@ def test_done_node_handles_git_failures() -> None:
 
         # 3. git add returns non-zero code
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             side_effect=[
                 MagicMock(returncode=0, stdout=""),  # diff --cached (first)
                 MagicMock(returncode=1, stderr="add error"),  # git add
@@ -209,7 +209,7 @@ def test_done_node_handles_git_failures() -> None:
 
         # 4. git status returns non-zero code
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             side_effect=[
                 MagicMock(returncode=0, stdout=""),  # diff --cached (first)
                 MagicMock(returncode=0, stdout=""),  # git add
@@ -226,7 +226,7 @@ def test_done_node_handles_git_failures() -> None:
 
         # 5. git commit returns non-zero code
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             side_effect=[
                 MagicMock(returncode=0, stdout=""),  # diff --cached (first)
                 MagicMock(returncode=0, stdout=""),  # git add
@@ -246,7 +246,7 @@ def test_done_node_handles_git_failures() -> None:
 
         # 6. git push returns non-zero code
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             side_effect=[
                 MagicMock(returncode=0, stdout=""),  # diff --cached (first)
                 MagicMock(returncode=0, stdout=""),  # git add
@@ -268,7 +268,7 @@ def test_done_node_handles_git_failures() -> None:
 
         # 7. gh pr create returns non-zero code (real error, no existing PR found via gh pr list)
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             side_effect=[
                 MagicMock(returncode=0, stdout=""),  # diff --cached (first)
                 MagicMock(returncode=0, stdout=""),  # git add
@@ -288,7 +288,7 @@ def test_done_node_handles_git_failures() -> None:
 
         # 8. gh pr list detects existing PR (structured pre-check)
         with patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             side_effect=[
                 MagicMock(returncode=0, stdout=""),  # diff --cached (first)
                 MagicMock(returncode=0, stdout=""),  # git add
@@ -305,7 +305,7 @@ def test_done_node_handles_git_failures() -> None:
             assert res["status"] == "COMPLETED"
 
     # 8. Non-git workspace handles PR creation gracefully
-    with patch("tools.orchestrator_graph.is_in_git_workspace", return_value=False):
+    with patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=False):
         res = done_node(state.copy())
         assert res["status"] == "PR_FAILED"
         assert res["error_category"] == "PR_ERROR"
@@ -343,7 +343,7 @@ def test_spec_draft_node_timeout_retry() -> None:
         rdjson=None,
     )
 
-    with patch("tools.llm_client.call_llm", side_effect=RuntimeError("Timeout occurred")):
+    with patch("tools.backends.llm_client.call_llm", side_effect=RuntimeError("Timeout occurred")):
         res_1 = spec_draft_node(state.copy())
         assert res_1["status"] == "retry_spec_draft"
         assert res_1["llm_timeout_count"] == 1
@@ -390,7 +390,7 @@ def test_spec_draft_node_passes_instruction_and_unpacks_raw() -> None:
         captured_call.update(kwargs)
         return {"raw": "  ## Technical Spec\n- Phase 1: Core\n- Phase 2: Tests  "}
 
-    with patch("tools.llm_client.call_llm", side_effect=mock_call_llm):
+    with patch("tools.backends.llm_client.call_llm", side_effect=mock_call_llm):
         result = spec_draft_node(state.copy())
 
     assert "Implement is_safe_path and format_file_size functions." in captured_call["user_prompt"]
@@ -431,7 +431,7 @@ def test_code_node_handles_aider_timeout_retry_and_escalation() -> None:
     )
 
     with patch(
-        "tools.agy_runner.run_agy_edit",
+        "tools.backends.agy_runner.run_agy_edit",
         side_effect=CoderRunError("Coder execution timed out after 300 seconds"),
     ):
         # First timeout -> retry
@@ -479,7 +479,7 @@ def test_code_node_handles_aider_nonzero_exit_as_failed_system() -> None:
     )
 
     with patch(
-        "tools.agy_runner.run_agy_edit",
+        "tools.backends.agy_runner.run_agy_edit",
         side_effect=CoderRunError("Coder process failed with returncode 1"),
     ):
         state_after_failure = code_node(initial_state)
@@ -491,7 +491,7 @@ def test_code_node_handles_aider_nonzero_exit_as_failed_system() -> None:
 
 def test_nodes_normalize_exceptions_to_failed_system() -> None:
     """Verify that exceptions in lint_node, test_node, and review_node normalize to FAILED_SYSTEM."""
-    from tools.orchestrator_graph import ProcessTimeoutError
+    from tools.core.orchestrator_graph import ProcessTimeoutError
 
     state = GraphState(
         issue_id="TFG-0004",
@@ -523,7 +523,7 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
     )
 
     # Test RuntimeError
-    with patch("tools.orchestrator_graph.run_cmd", side_effect=RuntimeError("Subprocess failed")):
+    with patch("tools.core.orchestrator_graph.run_cmd", side_effect=RuntimeError("Subprocess failed")):
         lint_res = lint_node(state.copy())
         assert lint_res["status"] == "FAILED_SYSTEM"
         assert lint_res["error_category"] == "SYSTEM_ERROR"
@@ -534,7 +534,7 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
 
     # Test ProcessTimeoutError
     with patch(
-        "tools.orchestrator_graph.run_cmd",
+        "tools.core.orchestrator_graph.run_cmd",
         side_effect=ProcessTimeoutError("Command timed out after 300 seconds"),
     ):
         lint_res_timeout = lint_node(state.copy())
@@ -578,7 +578,7 @@ def test_review_node_fail_closed_on_git_diff_error() -> None:
     )
 
     with patch(
-        "tools.orchestrator_graph.get_git_diff", side_effect=GitDiffError("git diff failed")
+        "tools.core.orchestrator_graph.get_git_diff", side_effect=GitDiffError("git diff failed")
     ):
         res = review_node(state)
         assert res["status"] == "FAILED_SYSTEM"
@@ -629,8 +629,8 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
         ],
     }
     with (
-        patch("tools.llm_client.call_llm", return_value=mock_resp),
-        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
+        patch("tools.backends.llm_client.call_llm", return_value=mock_resp),
+        patch("tools.core.orchestrator_graph.get_git_diff", return_value="diff text"),
     ):
         res = review_node(state.copy())
         assert res["status"] == "retry_code"
@@ -647,8 +647,8 @@ def test_review_node_validates_response_records_lgtm_and_structures_rdjson() -> 
     state_lgtm["review_rounds"] = []
     mock_lgtm = {"verdict": "LGTM", "comments": []}
     with (
-        patch("tools.llm_client.call_llm", return_value=mock_lgtm),
-        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
+        patch("tools.backends.llm_client.call_llm", return_value=mock_lgtm),
+        patch("tools.core.orchestrator_graph.get_git_diff", return_value="diff text"),
     ):
         res_lgtm = review_node(state_lgtm)
         assert res_lgtm["status"] == "review_lgtm"
@@ -692,14 +692,14 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
     mock_rd_fail = MagicMock(returncode=1, stdout="", stderr="reviewdog error")
 
     with (
-        patch("tools.llm_client.call_llm", return_value=mock_lgtm),
-        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.backends.llm_client.call_llm", return_value=mock_lgtm),
+        patch("tools.core.orchestrator_graph.get_git_diff", return_value="diff text"),
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
         # reviewdog が導入済みの環境を模擬する (未導入ならスキップされるため、Issue #106)
-        patch("tools.orchestrator_graph.shutil.which", return_value="/usr/bin/reviewdog"),
-        patch("tools.orchestrator_graph.run_cmd", return_value=mock_rd_fail),
+        patch("tools.core.orchestrator_graph.shutil.which", return_value="/usr/bin/reviewdog"),
+        patch("tools.core.orchestrator_graph.run_cmd", return_value=mock_rd_fail),
         patch(
-            "tools.jev_adapter.verify_review_conformance",
+            "tools.backends.jev_adapter.verify_review_conformance",
             return_value=(True, 1.0, "JEV conformance passed"),
         ),
     ):
@@ -710,8 +710,8 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
         assert res["reviewdog_result"]["stderr"] == "reviewdog error"
 
 
-@patch("tools.agy_runner.run_agy_edit", side_effect=CoderRunError("Coder execution timed out"))
-@patch("tools.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []})
+@patch("tools.backends.agy_runner.run_agy_edit", side_effect=CoderRunError("Coder execution timed out"))
+@patch("tools.backends.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []})
 def test_execute_issue_aider_timeout_flow_fully_isolated(
     mock_call_llm: MagicMock, mock_run_coder: MagicMock, tmp_path: Path
 ) -> None:
@@ -761,13 +761,13 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     with (
         patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire,
         patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release,
-        patch("tools.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")),
+        patch("tools.core.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")),
         patch(
-            "tools.jev_adapter.verify_plan_conformance",
+            "tools.backends.jev_adapter.verify_plan_conformance",
             return_value=(True, 1.0, "JEV conformance passed"),
         ),
         patch(
-            "tools.jev_adapter.verify_review_conformance",
+            "tools.backends.jev_adapter.verify_review_conformance",
             return_value=(True, 1.0, "JEV conformance passed"),
         ),
     ):
@@ -818,7 +818,7 @@ def test_cmd_orchestrate_reads_canonical_issues_schema(tmp_path: Path) -> None:
     }
     cache_file.write_text(json.dumps(dummy_cache), encoding="utf-8")
 
-    with patch("tools.orchestrator_graph.logger") as mock_logger:
+    with patch("tools.core.orchestrator_graph.logger") as mock_logger:
         cmd_orchestrate("TFG", cache_file=cache_file)
         log_calls = [call.args[0] for call in mock_logger.info.call_args_list]
         assert any("TFG-0004" in msg for msg in log_calls)
@@ -843,7 +843,7 @@ def test_failsafe_invalid_satellite_context(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with patch("tools.agy_runner.run_agy_edit") as mock_run_coder:
+    with patch("tools.backends.agy_runner.run_agy_edit") as mock_run_coder:
         execute_issue(
             issue_id,
             project_key,
@@ -911,11 +911,11 @@ def test_run_pytest_node_json_report_parsing(tmp_path: Path) -> None:
 
     with (
         patch(
-            "tools.orchestrator_graph.tempfile.mkstemp",
+            "tools.core.orchestrator_graph.tempfile.mkstemp",
             return_value=(fd, str(report_file)),
         ),
         patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             return_value=MagicMock(returncode=1, stdout="Failed", stderr=""),
         ),
     ):
@@ -930,7 +930,7 @@ def test_run_pytest_node_json_report_parsing(tmp_path: Path) -> None:
 
 def test_clean_legacy_pytest_reports(tmp_path: Path) -> None:
     """Issue #76: 過去の .pytest-report-*.json 残骸が一括削除され、他ファイルは保護されることを検証する。"""
-    from tools.orchestrator_graph import clean_legacy_pytest_reports
+    from tools.core.orchestrator_graph import clean_legacy_pytest_reports
 
     # 残骸ファイルを作成
     legacy1 = tmp_path / ".pytest-report-12345-abc.json"
@@ -977,7 +977,7 @@ def test_run_pytest_node_isolates_report_from_cwd(tmp_path: Path) -> None:
 
     with (
         patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             return_value=MagicMock(returncode=0, stdout="Passed", stderr=""),
         ),
     ):
@@ -1043,8 +1043,8 @@ def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", side_effect=cmd_responses),
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.run_cmd", side_effect=cmd_responses),
     ):
         execute_issue(
             issue_id,
@@ -1060,7 +1060,7 @@ def test_execute_issue_rebase_existing_branch(tmp_path: Path) -> None:
     assert saved_data[issue_id]["error_category"] == "SYSTEM_ERROR"
 
 
-@patch("tools.agy_runner.run_agy_edit", return_value=True)
+@patch("tools.backends.agy_runner.run_agy_edit", return_value=True)
 def test_code_node_target_files_keyerror_prevention(mock_run_coder: MagicMock) -> None:
     """state に target_files キーが存在しない場合でも、KeyError を起こさず安全にセットされることを検証する。"""
     state: GraphState = {"issue_id": "TFG-0010", "cwd": "."}
@@ -1085,7 +1085,7 @@ def test_run_pytest_node_nonexistent_candidate_handling(tmp_path: Path) -> None:
         "target_files": ["src/nonexistent.py"],
     }
     with patch(
-        "tools.orchestrator_graph.run_cmd",
+        "tools.core.orchestrator_graph.run_cmd",
         return_value=MagicMock(returncode=0, stdout="", stderr=""),
     ):
         res = run_pytest_node(state)
@@ -1157,7 +1157,7 @@ def test_escalate_node_writes_failure_report_outside_worktree(tmp_path: Path) ->
     }
 
     with patch(
-        "tools.llm_client.call_llm",
+        "tools.backends.llm_client.call_llm",
         return_value={"content": "root cause analysis"},
     ):
         res = escalate_node(state)
@@ -1224,9 +1224,9 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
     mock_workflow.compile.return_value = mock_app
 
     with (
-        patch("tools.orchestrator_graph.StateGraph", return_value=mock_workflow),
+        patch("tools.core.orchestrator_graph.StateGraph", return_value=mock_workflow),
         patch(
-            "tools.orchestrator_graph.run_cmd",
+            "tools.core.orchestrator_graph.run_cmd",
             return_value=MagicMock(returncode=0, stdout="", stderr=""),
         ),
     ):
@@ -1276,7 +1276,7 @@ def test_lint_node_passes_ignore_e501_flag() -> None:
     }
 
     with (
-        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("tools.core.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.is_file", return_value=True),
     ):
@@ -1288,7 +1288,7 @@ def test_lint_node_passes_ignore_e501_flag() -> None:
 
 def test_extract_target_files_from_issue_text() -> None:
     """Issue Markdown の『編集対象ファイル (Target Files)』セクションから target_files が抽出されることを検証する。"""
-    from tools.orchestrator_graph import extract_target_files_from_issue_text
+    from tools.core.orchestrator_graph import extract_target_files_from_issue_text
 
     text = """
 # [TFG-0006] 暗号化 Office ドキュメント対応
@@ -1346,10 +1346,10 @@ def test_review_node_empty_comments_guard() -> None:
     mock_llm_res = {"verdict": "changes_requested", "comments": []}
 
     with (
-        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
-        patch("tools.llm_client.call_llm", return_value=mock_llm_res),
+        patch("tools.core.orchestrator_graph.get_git_diff", return_value="diff text"),
+        patch("tools.backends.llm_client.call_llm", return_value=mock_llm_res),
         patch(
-            "tools.jev_adapter.verify_review_conformance",
+            "tools.backends.jev_adapter.verify_review_conformance",
             return_value=(True, 1.0, "JEV conformance passed"),
         ),
     ):
@@ -1397,7 +1397,7 @@ def test_run_pytest_node_dynamic_recovery_tips(tmp_path: Path) -> None:
     )
 
     with (
-        patch("tools.orchestrator_graph.run_cmd", return_value=mock_res),
+        patch("tools.core.orchestrator_graph.run_cmd", return_value=mock_res),
         patch("pathlib.Path.exists", return_value=False),
     ):
         res_state = run_pytest_node(state)
@@ -1446,7 +1446,7 @@ def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
     )
 
     with (
-        patch("tools.orchestrator_graph.run_cmd", return_value=mock_res),
+        patch("tools.core.orchestrator_graph.run_cmd", return_value=mock_res),
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.is_file", return_value=True),
     ):
@@ -1463,7 +1463,7 @@ def test_lint_node_dynamic_recovery_tips(tmp_path: Path) -> None:
 
 def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
     """resolve_target_files_against_cwd が実在ファイルへ補正マッピングすることを検証する。"""
-    from tools.orchestrator_graph import resolve_target_files_against_cwd
+    from tools.core.orchestrator_graph import resolve_target_files_against_cwd
 
     (tmp_path / "src" / "grep").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
@@ -1481,7 +1481,7 @@ def test_resolve_target_files_against_cwd(tmp_path: Path) -> None:
 
 def test_resolve_target_files_prevents_cross_type_mismapping(tmp_path: Path) -> None:
     """非テストファイル（history.py等）がテストファイルへ誤マッピングされないことを検証する。"""
-    from tools.orchestrator_graph import resolve_target_files_against_cwd
+    from tools.core.orchestrator_graph import resolve_target_files_against_cwd
 
     (tmp_path / "src" / "core").mkdir(parents=True, exist_ok=True)
     (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
@@ -1503,7 +1503,7 @@ def test_resolve_target_files_prevents_cross_type_mismapping(tmp_path: Path) -> 
 
 def test_resolve_target_files_rejects_path_traversal(tmp_path: Path) -> None:
     """衛星リポジトリ外を指す target_files（../ 等）が拒否されることを検証する（#23 path traversal）。"""
-    from tools.orchestrator_graph import resolve_target_files_against_cwd
+    from tools.core.orchestrator_graph import resolve_target_files_against_cwd
 
     repo = tmp_path / "satellite"
     (repo / "src").mkdir(parents=True, exist_ok=True)
@@ -1526,7 +1526,7 @@ def test_resolve_target_files_rejects_path_traversal(tmp_path: Path) -> None:
 
 def test_is_within_directory(tmp_path: Path) -> None:
     """is_within_directory が配下判定と範囲外拒否を正しく行うことを検証する（#23）。"""
-    from tools.orchestrator_graph import is_within_directory
+    from tools.core.orchestrator_graph import is_within_directory
 
     root = tmp_path / "repo"
     (root / "pkg").mkdir(parents=True, exist_ok=True)
@@ -1541,7 +1541,7 @@ def test_test_feedback_node_generates_categorized_instructions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """test_feedback_node が Reasoning LLM を呼び出してエラー分析メッセージを生成することを検証する。"""
-    from tools.orchestrator_graph import GraphState, test_feedback_node
+    from tools.core.orchestrator_graph import GraphState, test_feedback_node
 
     called_intent = None
 
@@ -1560,7 +1560,7 @@ def test_test_feedback_node_generates_categorized_instructions(
             "content": "ASSERTION_MISMATCH: Update assertion expected count from 3 to 2 in test_parallel_mode."
         }
 
-    monkeypatch.setattr("tools.llm_client.call_llm", mock_call_llm)
+    monkeypatch.setattr("tools.backends.llm_client.call_llm", mock_call_llm)
 
     state: GraphState = {
         "issue_id": "TFG-0007",
@@ -1604,7 +1604,7 @@ def test_test_feedback_node_generates_categorized_instructions(
 
 def test_done_node_rejects_unauthorized_staged_files() -> None:
     """対象外のstage済みファイルを検出した場合はPR作成フローを中断する。"""
-    from tools.orchestrator_graph import done_node
+    from tools.core.orchestrator_graph import done_node
 
     state = GraphState(
         issue_id="TFG-0004",
@@ -1656,8 +1656,8 @@ def test_done_node_rejects_unauthorized_staged_files() -> None:
         return MagicMock(returncode=0, stdout="")
 
     with (
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
         patch("shutil.which", return_value="/usr/bin/gh"),
     ):
         res = done_node(state)
@@ -1717,8 +1717,8 @@ def test_execute_issue_dirty_working_tree_aborts_without_auto_stash(tmp_path: Pa
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", side_effect=cmd_responses),
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.run_cmd", side_effect=cmd_responses),
     ):
         execute_issue(
             issue_id,
@@ -1785,9 +1785,9 @@ def test_execute_issue_dirty_working_tree_auto_stash(tmp_path: Path) -> None:
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
-        patch("tools.orchestrator_graph.StateGraph") as mock_state_graph,
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("tools.core.orchestrator_graph.StateGraph") as mock_state_graph,
     ):
         mock_app = MagicMock()
         mock_app.invoke.return_value = {"status": "COMPLETED"}
@@ -1809,7 +1809,7 @@ def test_execute_issue_dirty_working_tree_auto_stash(tmp_path: Path) -> None:
 
 def test_get_satellite_python_path(tmp_path: Path) -> None:
     """OS に応じたサテライト仮想環境内の Python パスを返すことを検証する。"""
-    from tools.orchestrator_graph import get_satellite_python_path
+    from tools.core.orchestrator_graph import get_satellite_python_path
 
     py_path = get_satellite_python_path(tmp_path)
     if os.name == "nt":
@@ -1820,7 +1820,7 @@ def test_get_satellite_python_path(tmp_path: Path) -> None:
 
 def test_ensure_satellite_environment_fallback() -> None:
     """cwd が未指定または pyproject.toml / requirements.txt がない場合、母艦 Python (sys.executable) を返すことを検証する。"""
-    from tools.orchestrator_graph import ensure_satellite_environment
+    from tools.core.orchestrator_graph import ensure_satellite_environment
 
     assert ensure_satellite_environment(None) == sys.executable
     assert ensure_satellite_environment("/non/existent/path") == sys.executable
@@ -1828,7 +1828,7 @@ def test_ensure_satellite_environment_fallback() -> None:
 
 def test_ensure_satellite_environment_resolves_existing_venv(tmp_path: Path) -> None:
     """サテライトに pyproject.toml と .venv が存在する場合、サテライトの Python パスを返すことを検証する。"""
-    from tools.orchestrator_graph import (
+    from tools.core.orchestrator_graph import (
         ensure_satellite_environment,
         get_satellite_python_path,
     )
@@ -1840,7 +1840,7 @@ def test_ensure_satellite_environment_resolves_existing_venv(tmp_path: Path) -> 
 
     with (
         patch("subprocess.run") as mock_sub_run,
-        patch("tools.orchestrator_graph.run_cmd") as mock_run_cmd,
+        patch("tools.core.orchestrator_graph.run_cmd") as mock_run_cmd,
     ):
         mock_sub_run.return_value = MagicMock(returncode=0)
         mock_run_cmd.return_value = MagicMock(returncode=0)
@@ -1851,7 +1851,7 @@ def test_ensure_satellite_environment_resolves_existing_venv(tmp_path: Path) -> 
 
 def test_done_node_already_satisfied_completion() -> None:
     """Issue #80: 差分も新コミットもない既済タスクの場合、PR作成をスキップしてCOMPLETEDにし、ブランチ削除とtasks.md完了反映を行うことを検証する。"""
-    from tools.orchestrator_graph import done_node
+    from tools.core.orchestrator_graph import done_node
 
     state = GraphState(
         issue_id="CW-0038",
@@ -1902,8 +1902,8 @@ def test_done_node_already_satisfied_completion() -> None:
         return MagicMock(returncode=0, stdout="", stderr="")
 
     with (
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
         patch("tools.metadata_store.mark_task_completed_in_tasks_md") as mock_mark_tasks,
     ):
         res = done_node(state)
