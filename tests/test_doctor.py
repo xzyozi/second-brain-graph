@@ -326,3 +326,66 @@ def test_check_gitignore_covers_all_generated_artifacts(tmp_path: Path) -> None:
         assert content.splitlines().count(entry) == 1
 
     assert check_gitignore(tmp_path, fix=False).status == "OK"
+
+
+def test_doctor_multilang_environment_and_gitignore(tmp_path: Path) -> None:
+    """Issue #168: TypeScript および Rust サテライトに対する check_environment と check_gitignore の動作を検証する。"""
+    from unittest.mock import MagicMock
+
+    from tools.doctor import check_environment
+
+    # 1. TypeScript サテライト
+    ts_dir = tmp_path / "ts_sat"
+    ts_dir.mkdir()
+    (ts_dir / "package.json").write_text('{"name": "ts-sat"}', encoding="utf-8")
+
+    # node_modules なしの場合: WARN
+    with (
+        patch(
+            "shutil.which", side_effect=lambda cmd: "fake_node" if cmd in ("node", "npm") else None
+        ),
+        patch("subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout="v20.0.0", stderr="")
+        res_ts_warn = check_environment(ts_dir, language="typescript", fix=False)
+        assert res_ts_warn.status == "WARN"
+        assert "node_modules" in res_ts_warn.message
+
+        # --fix で npm install を試行 -> FIXED
+        res_ts_fixed = check_environment(ts_dir, language="typescript", fix=True)
+        assert res_ts_fixed.status == "FIXED"
+
+        # node_modules が存在する場合 -> OK
+        nm_dir = ts_dir / "node_modules"
+        nm_dir.mkdir(exist_ok=True)
+        (nm_dir / "dummy.txt").write_text("ok", encoding="utf-8")
+        res_ts_ok = check_environment(ts_dir, language="typescript", fix=False)
+        assert res_ts_ok.status == "OK"
+
+    # TypeScript gitignore
+    gi_ts = ts_dir / ".gitignore"
+    gi_ts.write_text(".aider*\n", encoding="utf-8")
+    res_gi_ts = check_gitignore(ts_dir, language="typescript", fix=True)
+    assert res_gi_ts.status == "FIXED"
+    assert "node_modules/" in gi_ts.read_text(encoding="utf-8")
+
+    # 2. Rust サテライト
+    rust_dir = tmp_path / "rust_sat"
+    rust_dir.mkdir()
+    (rust_dir / "Cargo.toml").write_text('[package]\nname = "rust-sat"\n', encoding="utf-8")
+
+    with (
+        patch("shutil.which", side_effect=lambda cmd: "fake_cargo" if cmd == "cargo" else None),
+        patch("subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout="cargo 1.75.0", stderr="")
+        res_rust_ok = check_environment(rust_dir, language="rust", fix=False)
+        assert res_rust_ok.status == "OK"
+        assert "Rust 環境 有効" in res_rust_ok.message
+
+    # Rust gitignore
+    gi_rust = rust_dir / ".gitignore"
+    gi_rust.write_text(".aider*\n", encoding="utf-8")
+    res_gi_rust = check_gitignore(rust_dir, language="rust", fix=True)
+    assert res_gi_rust.status == "FIXED"
+    assert "target/" in gi_rust.read_text(encoding="utf-8")

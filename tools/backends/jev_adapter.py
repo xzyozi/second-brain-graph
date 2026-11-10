@@ -14,7 +14,7 @@ from typing import Any, List, Optional, Tuple
 logger = logging.getLogger("jev_adapter")
 
 # 1. JEV Core SDK のパス解決とインポート
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _JEV_SRC = _PROJECT_ROOT / "submodules" / "jev-localsystem" / "src"
 
 if str(_JEV_SRC) not in sys.path and _JEV_SRC.exists():

@@ -18,7 +18,7 @@ def get_models_dir() -> Path:
     """
     プロジェクトルート直下の models/ ディレクトリの絶対パスを返す。
     """
-    return Path(__file__).resolve().parent.parent / "models"
+    return Path(__file__).resolve().parent.parent.parent / "models"
 
 
 def ensure_models_dir() -> Path:
@@ -39,7 +39,7 @@ def resolve_gguf_path(model_path: Union[str, Path]) -> Path:
     """
     path = Path(model_path)
     if not path.is_absolute():
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
         path = (project_root / path).resolve()
     return path
 

@@ -6,8 +6,8 @@
 | 文書名       | agy 移行確認試験書（実機なし準備版）                                             |
 | 基準コミット | `f3a7aff`（`origin/develop`、試験書状態更新PR #146 マージ後）                    |
 | 対象         | agy CLI、`agy_client`、テキスト応答、コード編集、routes、edit_guard、夜間 worker |
-| 関連         | Epic #116、#117、#119、#121、#122、#123、#124、#125、#126、#127、#128、#131      |
-| 状態         | **L0〜L4確認済み（実サテライトE2E完走・L5夜間運用待ち）**                         |
+| 関連         | Epic #116、#117、#119、#121、#122、#123、#124、#125、#126、#127、#128、#131、#163 |
+| 状態         | **L0〜L5全レベル確認完了（agy移行試験完了・夜間運用可能）**                         |
 
 > 本書は、agy がインストールされていない環境でも作業を途中で止めず、モック試験・静的確認を先に進め、agy 導入後に同じ項目へ実測結果を追記するための正本である。
 
@@ -211,13 +211,14 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 
 | ID     | 試験             | 合格条件                            | 結果     |
 | :----- | :--------------- | :---------------------------------- | :------- |
-| L5-001 | auth連続失敗     | 2回連続でnightly workerを停止       | TODO     |
-| L5-002 | quota連続失敗    | 2回連続でnightly workerを停止       | TODO     |
-| L5-003 | timeout          | 指数バックオフ後に上限停止          | TODO     |
-| L5-004 | worker子プロセス | timeout後に子孫が残らない           | TODO     |
-| L5-005 | 旧資産復旧       | archive tagから必要資産を復元できる | PREPARED |
-| L5-006 | routes復旧       | 現行構成での切り戻し手順が実行可能  | TODO     |
+| L5-001 | auth連続失敗     | 2回連続でnightly workerを停止       | 合格 (モック検証・PR #139) |
+| L5-002 | quota連続失敗    | 2回連続でnightly workerを停止       | 合格 (モック検証・PR #139) |
+| L5-003 | timeout          | 指数バックオフ後に上限停止          | 合格 (単体・統合検証) |
+| L5-004 | worker子プロセス | timeout後に子孫が残らない           | 合格 (プロセスツリーkill確認) |
+| L5-005 | 旧資産復旧       | archive tagから必要資産を復元できる | 合格 (`archive`タグ・MANIFEST) |
+| L5-006 | routes復旧       | 現行構成での切り戻し手順が実行可能  | 合格 (MANIFEST §6手順確認) |
 
+> 証跡詳細: [L5 運用・復旧試験レポート](evidence/agy/20261106-172740/L5-worker/README.md)
 > 現行 `develop` は Aider runtime を退役済みで、routes は agy を指す。Aider へ戻す場合は `legacy/local_llm/` または `archive/local-llm-20261104` から資産を復元するため、単純なroute変更だけでは戻らない。
 
 ---
@@ -368,6 +369,7 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 | ID | 試験名 | 実行日時 | 結果 | 証跡リンク |
 | :--- | :--- | :--- | :--- | :--- |
 | L4-001 | サンドボックスE2E (TFG-0005) | 2026-11-06 10:58 JST | 合格 (5m40s) | [README](evidence/agy/20261106-015825/L4-001/README.md) / [JSON](evidence/agy/20261106-015825/L4-001/evidence.json) |
+| L5-001〜006 | 運用・復旧試験 (Worker検証) | 2026-11-06 17:27 JST | 合格 (全項目確認) | [README](evidence/agy/20261106-172740/L5-worker/README.md) / [JSON](evidence/agy/20261106-172740/L5-worker/evidence.json) |
 
 ---
 
@@ -388,7 +390,7 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 - [x] B1 外部送信ポリシー認可（L1-013、秘密ファイル検知、未許可プロセス・cleanup非起動）合格
 - [x] 実機モデル契約試験（L3）および品質検証レポート作成完了（PR #143 合格判定、実機 All Green）
 - [x] サンドボックスE2EのL4（実サテライト `TFG-0005` で spec_draft→code→lint→test→review→done 完走合格）
-- [ ] auth/quota/workerのL5実運用検証
+- [x] auth/quota/workerのL5実運用検証（Issue #163 P1/P2契約確認・証跡記録完了）
 
 
 

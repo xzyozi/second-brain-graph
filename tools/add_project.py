@@ -16,6 +16,8 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from tools.workspace.metadata_store import SUPPORTED_LANGUAGES
+
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -454,12 +456,19 @@ def register_project(
     github_repo: Optional[str] = None,
     setup_labels: bool = True,
     push: bool = True,
+    language: str = "python",
+    test_command: str = "",
     root_dir: str = ".",
 ) -> Dict[str, Any]:
     """Register a new satellite project into Second Brain OS."""
     if not key or not key.strip():
         raise ValueError("Project key must not be empty.")
     key = key.strip().upper()
+    norm_lang = (language or "python").strip().lower()
+    if norm_lang not in SUPPORTED_LANGUAGES:
+        raise ValueError(
+            f"Unsupported language '{language}'. Supported: {', '.join(SUPPORTED_LANGUAGES)}"
+        )
 
     # Normalize Git URL and extract repo name
     normalized_url = normalize_git_url(repo_url)
@@ -522,6 +531,9 @@ def register_project(
     proj_data["description"] = description or proj_data.get(
         "description", f"{name} satellite project"
     )
+    proj_data["language"] = norm_lang
+    if test_command:
+        proj_data["test_command"] = test_command.strip()
     if resolved_github_repo:
         proj_data["github_repo"] = resolved_github_repo
 
@@ -551,12 +563,24 @@ def register_project(
     # 7. Ensure satellite has issue auto-tagging workflow (.github/workflows/issue-auto-tag.yml)
     setup_satellite_workflow(sat_path)
 
-    # 8. Ensure satellite .gitignore has .venv/ and .aider*
+    # 8. Ensure satellite .gitignore has language-specific generated entries
     if os.path.exists(sat_path):
         try:
-            from tools.run_task import ensure_satellite_gitignore
+            gi_path = os.path.join(sat_path, ".gitignore")
+            if os.path.exists(gi_path):
+                with open(gi_path, "r", encoding="utf-8") as f:
+                    gi_content = f.read()
+                from tools.doctor import _missing_gitignore_for_lang
 
-            ensure_satellite_gitignore(sat_path)
+                needed = _missing_gitignore_for_lang(gi_content, language=norm_lang)
+                if needed:
+                    with open(gi_path, "a", encoding="utf-8") as f:
+                        f.write(
+                            f"\n# Autonomous worker ignores ({norm_lang})\n"
+                            + "\n".join(needed)
+                            + "\n"
+                        )
+                    logger.info(f"Updated satellite .gitignore with {needed}")
         except Exception as e:
             logger.debug(f"Could not update satellite .gitignore: {e}")
 
@@ -653,6 +677,18 @@ def main() -> None:
         help="Setup standard stage and theme labels on the satellite GitHub repository via gh CLI (default: True)",
     )
     parser.add_argument(
+        "--language",
+        "-l",
+        default="python",
+        choices=list(SUPPORTED_LANGUAGES),
+        help=f"Satellite programming language (default: python, choices: {', '.join(SUPPORTED_LANGUAGES)})",
+    )
+    parser.add_argument(
+        "--test-cmd",
+        default="",
+        help="Custom test command (e.g. 'npm test', 'cargo test')",
+    )
+    parser.add_argument(
         "--push",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -674,6 +710,8 @@ def main() -> None:
             github_repo=args.github_repo,
             setup_labels=args.setup_labels,
             push=args.push,
+            language=args.language,
+            test_command=args.test_cmd,
             root_dir=".",
         )
         print(

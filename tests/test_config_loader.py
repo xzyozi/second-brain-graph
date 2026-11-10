@@ -8,7 +8,7 @@
 import pytest
 from pydantic import ValidationError
 
-from tools.config_loader import (
+from tools.workspace.config_loader import (
     AgyExternalSendConfig,
     BackendExecutionConfig,
     ProfileConfig,
@@ -162,7 +162,7 @@ def test_get_backend_execution_config_routes_are_consistent() -> None:
 # ---------------------------------------------------------------------------
 def test_load_model_config_loads_yaml() -> None:
     """models.yaml が正常にロードされ、Pydantic モデルとして妥当であることを確認する。"""
-    from tools.config_loader import load_model_config
+    from tools.workspace.config_loader import load_model_config
 
     config = load_model_config()
     assert config.aider is None
@@ -174,7 +174,7 @@ def test_load_model_config_loads_yaml() -> None:
 
 def test_load_prompt_config_loads_yaml() -> None:
     """prompt.yaml が正常にロードされ、各ロールのプロンプトが取得できることを確認する。"""
-    from tools.config_loader import load_prompt_config
+    from tools.workspace.config_loader import load_prompt_config
 
     prompt_config = load_prompt_config()
     assert len(prompt_config.planner.spec_draft_system.strip()) > 0
@@ -189,7 +189,7 @@ def test_load_prompt_config_loads_yaml() -> None:
 
 def test_get_config_returns_unified_app_config() -> None:
     """get_config() が models, prompt を含む統合 AppConfig を返すことを確認する。"""
-    from tools.config_loader import AppConfig, get_config
+    from tools.workspace.config_loader import AppConfig, get_config
 
     app_config = get_config()
     assert isinstance(app_config, AppConfig)

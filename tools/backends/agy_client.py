@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from tools.agy_policy import authorize_agy_execution
+from tools.backends.agy_policy import authorize_agy_execution
 
 logger = logging.getLogger("agy_client")
 
