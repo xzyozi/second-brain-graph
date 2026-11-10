@@ -24,8 +24,6 @@ def test_run_agy_edit_success_returns_true(
     mock_cleanup.assert_called_once_with("/tmp/satellite", ["src/a.py"])
 
 
-
-
 @patch("tools.backends.agy_runner.prepare_guard")
 @patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
 @patch("tools.backends.agy_runner.run_agy_in_workdir", return_value="done")

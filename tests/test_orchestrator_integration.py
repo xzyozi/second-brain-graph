@@ -50,8 +50,12 @@ def _force_test_routes(monkeypatch: pytest.MonkeyPatch) -> Any:
         }
         return cfg.model_copy(update={"routes": agy_routes})
 
-    monkeypatch.setattr("tools.backends.backend_coordinator.get_backend_execution_config", mock_get_config)
-    monkeypatch.setattr("tools.workspace.config_loader.get_backend_execution_config", mock_get_config)
+    monkeypatch.setattr(
+        "tools.backends.backend_coordinator.get_backend_execution_config", mock_get_config
+    )
+    monkeypatch.setattr(
+        "tools.workspace.config_loader.get_backend_execution_config", mock_get_config
+    )
     get_coordinator.cache_clear()
     yield
     get_coordinator.cache_clear()
@@ -523,7 +527,9 @@ def test_nodes_normalize_exceptions_to_failed_system() -> None:
     )
 
     # Test RuntimeError
-    with patch("tools.core.orchestrator_graph.run_cmd", side_effect=RuntimeError("Subprocess failed")):
+    with patch(
+        "tools.core.orchestrator_graph.run_cmd", side_effect=RuntimeError("Subprocess failed")
+    ):
         lint_res = lint_node(state.copy())
         assert lint_res["status"] == "FAILED_SYSTEM"
         assert lint_res["error_category"] == "SYSTEM_ERROR"
@@ -710,7 +716,9 @@ def test_review_node_continues_on_reviewdog_failure() -> None:
         assert res["reviewdog_result"]["stderr"] == "reviewdog error"
 
 
-@patch("tools.backends.agy_runner.run_agy_edit", side_effect=CoderRunError("Coder execution timed out"))
+@patch(
+    "tools.backends.agy_runner.run_agy_edit", side_effect=CoderRunError("Coder execution timed out")
+)
 @patch("tools.backends.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []})
 def test_execute_issue_aider_timeout_flow_fully_isolated(
     mock_call_llm: MagicMock, mock_run_coder: MagicMock, tmp_path: Path
@@ -761,7 +769,9 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     with (
         patch.object(ProjectLockManager, "_acquire_lock", autospec=True) as mock_acquire,
         patch.object(ProjectLockManager, "_release_lock", autospec=True) as mock_release,
-        patch("tools.core.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")),
+        patch(
+            "tools.core.orchestrator_graph.run_cmd", return_value=MagicMock(returncode=0, stdout="")
+        ),
         patch(
             "tools.backends.jev_adapter.verify_plan_conformance",
             return_value=(True, 1.0, "JEV conformance passed"),
