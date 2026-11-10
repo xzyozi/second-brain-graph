@@ -4,13 +4,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.agy_client import AgyExitError, AgyNotFoundError, AgyTimeoutError
-from tools.agy_policy import AgyPolicyDeniedError
-from tools.agy_runner import AgyRunError, run_agy_edit
+from tools.backends.agy_client import AgyExitError, AgyNotFoundError, AgyTimeoutError
+from tools.backends.agy_policy import AgyPolicyDeniedError
+from tools.backends.agy_runner import AgyRunError, run_agy_edit
 
 
-@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
-@patch("tools.agy_runner.run_agy_in_workdir", return_value="done")
+@patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
+@patch("tools.backends.agy_runner.run_agy_in_workdir", return_value="done")
 def test_run_agy_edit_success_returns_true(
     mock_run_agy_in_workdir: MagicMock, mock_cleanup: MagicMock
 ) -> None:
@@ -24,15 +24,37 @@ def test_run_agy_edit_success_returns_true(
     mock_cleanup.assert_called_once_with("/tmp/satellite", ["src/a.py"])
 
 
-def test_run_agy_edit_requires_cwd() -> None:
+@patch("tools.backends.agy_runner.prepare_guard")
+@patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
+@patch("tools.backends.agy_runner.run_agy_in_workdir", return_value="done")
+def test_run_agy_edit_prepares_guard_before_execution(
+    mock_run_agy_in_workdir: MagicMock,
+    mock_cleanup: MagicMock,
+    mock_prepare_guard: MagicMock,
+) -> None:
+    """agy編集前に秘密情報検知を含む共通guardを準備する。"""
+    assert run_agy_edit(
+        "instruction",
+        ["src/a.py"],
+        "/tmp/satellite",
+        allowed_new_file_globs=["tests/**"],
+    )
+
+    mock_prepare_guard.assert_called_once_with(
+        "/tmp/satellite",
+        ["src/a.py"],
+        allowed_new_file_globs=["tests/**"],
+    )
+    mock_run_agy_in_workdir.assert_called_once()
+    mock_cleanup.assert_called_once()
     """cwd が None の場合、AgyRunError を送出することを検証する。"""
     with pytest.raises(AgyRunError, match="non-empty cwd"):
         run_agy_edit("instruction", ["src/a.py"], None)
 
 
-@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
+@patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
 @patch(
-    "tools.agy_runner.run_agy_in_workdir",
+    "tools.backends.agy_runner.run_agy_in_workdir",
     side_effect=AgyTimeoutError("agy execution timed out after 900 seconds"),
 )
 def test_run_agy_edit_timeout_raises_agy_run_error_with_timed_out(
@@ -49,9 +71,9 @@ def test_run_agy_edit_timeout_raises_agy_run_error_with_timed_out(
     mock_cleanup.assert_called_once()
 
 
-@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
+@patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
 @patch(
-    "tools.agy_runner.run_agy_in_workdir",
+    "tools.backends.agy_runner.run_agy_in_workdir",
     side_effect=AgyExitError("agy process failed with returncode 2", returncode=2),
 )
 def test_run_agy_edit_nonzero_exit_raises_agy_run_error(
@@ -64,9 +86,9 @@ def test_run_agy_edit_nonzero_exit_raises_agy_run_error(
     mock_cleanup.assert_called_once()
 
 
-@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
+@patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=[])
 @patch(
-    "tools.agy_runner.run_agy_in_workdir",
+    "tools.backends.agy_runner.run_agy_in_workdir",
     side_effect=AgyNotFoundError("agy not found"),
 )
 def test_run_agy_edit_not_found_raises_agy_run_error(
@@ -77,8 +99,8 @@ def test_run_agy_edit_not_found_raises_agy_run_error(
         run_agy_edit("instruction", [], "/tmp/satellite")
 
 
-@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=["ghost.py"])
-@patch("tools.agy_runner.run_agy_in_workdir", return_value="done")
+@patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts", return_value=["ghost.py"])
+@patch("tools.backends.agy_runner.run_agy_in_workdir", return_value="done")
 def test_run_agy_edit_cleanup_runs_on_success(
     mock_run_agy_in_workdir: MagicMock, mock_cleanup: MagicMock
 ) -> None:
@@ -91,14 +113,14 @@ def test_run_agy_edit_cleanup_runs_on_success(
 
 def test_agy_run_error_is_coder_run_error_subclass() -> None:
     """code_node の except CoderRunError が AgyRunError を捕捉できることを確認する。"""
-    from tools.agy_runner import CoderRunError
+    from tools.backends.agy_runner import CoderRunError
 
     assert issubclass(AgyRunError, CoderRunError)
 
 
-@patch("tools.agy_runner.cleanup_unauthorized_aider_artifacts")
+@patch("tools.backends.agy_runner.cleanup_unauthorized_aider_artifacts")
 @patch(
-    "tools.agy_runner.run_agy_in_workdir",
+    "tools.backends.agy_runner.run_agy_in_workdir",
     side_effect=AgyPolicyDeniedError("AGY_POLICY_DENIED: project_key=BLOCKED"),
 )
 def test_run_agy_edit_policy_denied_bypasses_cleanup(
