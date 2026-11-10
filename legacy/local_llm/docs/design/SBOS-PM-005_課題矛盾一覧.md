@@ -1,11 +1,11 @@
 # 課題・矛盾点一覧 (Problem Management) Rev.2.22
 
-文書番号: SBOS-PM-005  
+文書番号: SBOS-PM-005
 版数: Rev.2.22（PM-059 Issue 仕様の母艦一元化・0〜8章標準スキーマ策定と CI 運用指針 解決反映）
-改訂日: 2026年9月27日  
-作成日: 2026年6月25日  
-対象読者: 全開発・運用メンバー  
-関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-DD-004, SBOS-DD-005, SBOS-DD-006, SBOS-DD-007, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
+改訂日: 2026年9月27日
+作成日: 2026年6月25日
+対象読者: 全開発・運用メンバー
+関連文書: SBOS-BD-002, SBOS-DD-003, SBOS-DD-004, SBOS-DD-005, SBOS-DD-006, SBOS-DD-007, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001
 
 ---
 
@@ -20,7 +20,7 @@
 - **2026/08/08 (Rev.2.16)**: 詳細設計書のSSOT原則に基づく再構成（SBOS-DD-005, 006, 007 の新設、DD-003 のスリム化、ORCH-001 の削除）および `run_task.py` のロック保護と作業ブランチ prefix の動的適用を反映。
 - **2026/07/30 (Rev.2.15)**: 課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) に対する3つの改善推奨ポイントを適用し、ステータスを解決済みに更新。
 - **2026/07/30 (Rev.2.14)**: 新規課題 PM-050 (LLMバックエンドの混在: Ollama vs llama-server) を追加登録。
-- **2026/07/30 (Rev.2.13)**: PM-041〜PM-049の設計反映作業を完了し、ステータスを解決済みに更新（`state.json` の正本化、ロック等例外固定ルールの導入、Git復旧安全化など）。SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001  
+- **2026/07/30 (Rev.2.13)**: PM-041〜PM-049の設計反映作業を完了し、ステータスを解決済みに更新（`state.json` の正本化、ロック等例外固定ルールの導入、Git復旧安全化など）。SBOS-DD-003, SBOS-ORCH-001, SBOS-ENV-001, SBOS-OP-001, SBOS-MULTI-001
 - **2026/07/29 (Rev.2.12)**: PM-036〜PM-038の対応完了、PM-039〜040は継続課題として整理
 
 ---

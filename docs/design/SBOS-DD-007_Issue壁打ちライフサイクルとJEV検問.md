@@ -186,8 +186,3 @@ Issue の状態を以下の 4 つの `stage:*` ラベルで厳格に分離管理
 | Rev.1.1 | 2026-10-02 | xzyozi               | PM-060 追記: docs/issues/<TASK_ID>.md 自動同期・自己修復ライフサイクルの新設。3.9節/3.10節の確定タスク・Target Files・進捗管理の責務分離（SSOT）と仕様整合性の明確化、YAML Frontmatter および改訂履歴の追記（ドキュメント規約準拠） |
 | Rev.1.2 | 2026-11-04 | xzyozi               | Epic #116 (agy移行) との関係、JEVスクリーニング据え置き方針を追記 (3.5節)                                                                                                                                                          |
 | Rev.1.3 | 2026-11-06 | xzyozi               | Issue #70 実装完了確認: `issue_spec_manager.py`、`promote_issue.py`、`periodic_review_runner.py`、`orchestrator_graph.py` の動作検証・テスト全件合格(23件)および関連Issueを反映                                                     |
-
-
-
-
-

@@ -73,4 +73,3 @@
 ### 6.2 パス解決と存在検証
 * **パス解決 (`resolve_gguf_path`)**: `config/models.json` 内の `model_path` または `draft_model_path` の相対パス・絶対パスをプロジェクトルート基準で一元的に解決する。
 * **存在検証 (`validate_gguf_exists`)**: `managed_llama_server()` のプロセス起動前にモデルファイルおよびドラフトモデルファイルの存在を判定する。存在しない場合は `GgufFileNotFoundError` を送出し、モデルファイルの配置手順を案内するログを出力して安全に早期失敗させる。
-

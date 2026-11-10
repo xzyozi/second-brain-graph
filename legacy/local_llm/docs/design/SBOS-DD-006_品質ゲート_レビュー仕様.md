@@ -34,19 +34,19 @@
 ## 2. 品質 Adapter (`lint_node` / `run_pytest_node`)
 
 ### 2.1 Ruff 実行仕様
-* **実行内容**: 
-  1. `ruff format` 
-  2. `ruff check --fix --unsafe-fixes --ignore E501` 
+* **実行内容**:
+  1. `ruff format`
+  2. `ruff check --fix --unsafe-fixes --ignore E501`
   3. 最終チェックとして `ruff check --ignore E501` を実行する。
-* **副作用・失敗契約**: 
+* **副作用・失敗契約**:
   * lintは単なる検査専用ではなく、対象ファイルを直接自動修正する（`--unsafe-fixes`）。
   * 最終チェックが非ゼロ終了となった場合、`LINT_ERROR` として扱い、`lint_round` を加算する。累積失敗が `max_round`（3回）に達した時点（3回目の失敗）で `FAILED_B7` にエスカレーションされる。
 
 ### 2.2 pytest 実行仕様
-* **実行内容**: 
+* **実行内容**:
   * 関連テスト、または `tests/test_*.py` を `python -m pytest --json-report` で実行する。
   * `ui` や `gui` を含む名前のフォールバックテストは実行対象から除外する。
-* **副作用・失敗契約**: 
+* **副作用・失敗契約**:
   * JSONレポートは `.report.json` に一時保存され、処理終了時に `finally` ブロックで確実に削除される。
   * テストが失敗した場合、`TEST_ERROR` として `test_round` を加算し、累積失敗が `max_round`（3回）に達した時点（3回目の失敗）で `FAILED_B7` にエスカレーションされる。
 
@@ -58,7 +58,7 @@
 
 ### 3.1 LLM レビュー仕様
 * **実行内容**: `review_node` は `implementation_plan` と現在の Git diff を Reviewer LLM に渡し、判定（`LGTM` または `changes_requested`）およびコメント配列を要求する。
-* **コメントの構造化**: 
+* **コメントの構造化**:
   * LLMからのコメントは `file`、`line`、`message`、`severity` を補完して構造化される。
   * `changes_requested` と判定されたにもかかわらずコメントが空の場合は、フェイルセーフとして `LGTM` に自動補正される。
 * **フィードバックの反映**:

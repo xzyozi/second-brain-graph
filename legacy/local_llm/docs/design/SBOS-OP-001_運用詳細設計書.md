@@ -66,7 +66,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    - ④ `test_node` (pytest 実行、失敗時はエラーログを蓄積し `code_node` へ復帰)
    - ⑤ `review_node` (LiteLLM / Reviewer 監査 ＋ Reviewdog アノテーション表示)
    - ⑥ `done_node` (LGTMは完了ではなく遷移条件。PR作成を行い、成功時は `state.json` を `COMPLETED` に、失敗時は `PR_FAILED` に更新。`execution_history.json` へ成果記録、ロック解放)
-   
+
    > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
 
 ---

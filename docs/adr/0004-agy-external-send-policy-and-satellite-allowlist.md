@@ -65,4 +65,3 @@ B1では、既存運用を壊さずにポリシーを導入し、allowlistへ切
 2. `allowed_project_keys` に対象サテライトの `project_key` を追加する。
 3. `reject_secret_files: true` を設定し、秘密ファイル混入時の送信を防止する。
 4. 設定は `lru_cache` されているため、新しいPythonプロセスで実行を開始する。
-
