@@ -1,6 +1,8 @@
 # Aider edit_format 多角的実証ベンチマーク仕様書 (`tools/benchmark_aider_formats.py`)
 
-- **対象コンポーネント**: `tools/benchmark_aider_formats.py`, `tools/aider_runner.py`
+> **【退役済み・履歴資料】** 本書はAider時代のベンチマーク仕様です。対象スクリプトは `legacy/local_llm/tools/` へ退避済みで、現行の実行経路（agy）では再現できません。移行前の比較根拠として参照用に保持しています。現行の仕様は SBOS-DD-004 を参照してください。
+
+- **対象コンポーネント**: `legacy/local_llm/tools/benchmark_aider_formats.py`, `legacy/local_llm/tools/aider_runner.py`（旧 `tools/` 配下から退避）
 - **関連文書**: [`SBOS-DD-004_Aider統合仕様`](../design/SBOS-DD-004_Aider統合仕様.md)、[`coder_test_and_github_ci_pr_fixer.md`](coder_test_and_github_ci_pr_fixer.md)
 
 ---

@@ -152,7 +152,7 @@ cd ~/second-brain
 # 1. uv による Python 仮想環境の初期化と新OSSスタックの導入
 uv venv
 source .venv/bin/activate  # Windows (PowerShell) の場合: .venv\Scripts\Activate.ps1
-uv pip install langgraph litellm aider-chat ruff pytest pytest-json-report
+uv pip install langgraph litellm ruff pytest pytest-json-report
 
 # 2. Reviewdog のインストール
 # Linux / macOS の場合:
@@ -191,10 +191,10 @@ ls -l tools/templates/
 cd ~/second-brain
 source .venv/bin/activate
 
-# 1. LangGraph / LiteLLM / Aider コンポーネントインポートテスト
+# 1. LangGraph / LiteLLM / agy コンポーネントインポートテスト
 python -c "import langgraph; import litellm; print('✓ LangGraph & LiteLLM loaded successfully')"
-python -c "from tools.llm_client import call_llm; print('✓ llm_client.py initialized')"
-python -c "from tools.aider_runner import run_aider; print('✓ aider_runner.py loaded')"
+python -c "from tools.backends.llm_client import call_llm; print('✓ llm_client.py initialized')"
+python -c "from tools.backends.agy_runner import run_agy_edit; print('✓ agy_runner.py loaded')"
 
 # 2. スコアリングとブロッカー検知スクリプトのドライラン
 python tools/score-issues.py
