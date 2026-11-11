@@ -53,14 +53,21 @@ from tools.workspace.metadata_store import (
     validate_project_consistency,
     write_event,
 )
+from tools.workspace.target_files import (
+    InvalidTargetFilesError,
+    extract_target_files_from_issue_text,
+    require_valid_target_files,
+)
 
 __all__ = [
     "ISSUE_ID_PATTERN",
     "ErrorCategory",
     "ErrorCategoryLiteral",
+    "InvalidTargetFilesError",
     "ProjectLockManager",
     "StatusLiteral",
     "TaskStatus",
+    "extract_target_files_from_issue_text",
     "get_runtime_cache_dir",
     "record_execution_history",
     "resolve_project_context",
@@ -275,27 +282,6 @@ def ensure_satellite_environment(cwd: Optional[str]) -> str:
         logger.debug(f"Failed to check/install ruff: {e}")
 
     return str(python_bin)
-
-
-def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
-    """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
-    target_files: List[str] = []
-    lines = issue_text.splitlines()
-    in_target_section = False
-    for line in lines:
-        stripped = line.strip()
-        if any(h in stripped.lower() for h in ["編集対象ファイル", "target files", "target_files"]):
-            in_target_section = True
-            continue
-        elif in_target_section and (stripped.startswith("## ") or stripped.startswith("# ")):
-            in_target_section = False
-
-        if in_target_section:
-            matches = re.findall(r"[\w/.-]+\.py", stripped)
-            for m in matches:
-                if m not in target_files:
-                    target_files.append(m)
-    return target_files
 
 
 def is_within_directory(candidate: Path, root: Path) -> bool:
@@ -2777,7 +2763,20 @@ def execute_issue(
             if issue_detail_file and issue_detail_file.exists():
                 logger.info(f"Loaded issue detail specification from {issue_detail_file}")
                 instruction_text = issue_detail_file.read_text(encoding="utf-8")
-                md_targets = extract_target_files_from_issue_text(instruction_text)
+                try:
+                    md_targets = require_valid_target_files(instruction_text)
+                except InvalidTargetFilesError as invalid_error:
+                    # 不正パスは黙って捨てず、code_node 開始前に安全停止する (#186)
+                    logger.error(f"{invalid_error} (issue: {issue_id})")
+                    _fail_system(
+                        project_key,
+                        issue_id,
+                        str(invalid_error),
+                        cwd=cwd,
+                        metadata_dir=metadata_dir,
+                        history_file=history_file,
+                    )
+                    return
                 if md_targets:
                     resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
                     logger.info(
