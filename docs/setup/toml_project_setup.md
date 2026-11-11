@@ -20,7 +20,6 @@ requires-python = ">=3.10, <3.14"
 dependencies = [
     "langgraph>=0.1.0",
     "litellm>=1.30.0",
-    "aider-chat>=0.30.0",
     "pydantic>=2.0.0",
     "pytest-json-report>=1.5.0",
 ]

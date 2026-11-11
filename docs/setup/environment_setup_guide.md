@@ -35,19 +35,15 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 uv sync
 ```
 
-### 3.3 Aider CLI および LLM 連携設定
+### 3.3 agy CLI（Antigravity CLI）の準備
 
-Aider CLI 連携において、Ollama やカスタムローカル LLM モデル使用時にブラウザでモデル警告ページ（`https://aider.chat/docs/llms/warnings.html`）が自動起動するのを抑止するため、以下の設定が本プロジェクトの実行ラッパー (`tools/aider_runner.py`) に標準で組み込まれています。
+現行のコード編集およびLLM処理（planner / coder / reviewer / failure analyst）は、`config/models.yaml` の routes により **agy** へルーティングされます。agy CLIの導入・認証は、本プロジェクトの `uv sync` では行われないため、別途準備してください。
 
-- **CLI フラグ**: `--no-show-model-warnings`
-- **環境変数**: `AIDER_SHOW_MODEL_WARNINGS=false`
+- **実行ファイルの解決**: 環境変数 `SBOS_AGY_EXECUTABLE`、`PATH` 上の `agy` / `agy.exe`、既知の配置先の順に探索します（`tools/backends/agy_client.py`）。
+- **認証**: 非対話（ヘッドレス）実行が可能な状態まで、事前に認証を完了してください。認証情報はリポジトリに保存しません。
+- **外部送信**: agyはクラウド側のモデルを使うため、ソースコード・diff・Issue本文が外部へ送信されうる設定です。許可範囲は `config/models.yaml` の `backend_execution.agy_external_send` で制御します（SBOS-DD-005、ADR 0004）。
 
-手動で Aider を起動する際にも、上記オプションを付与して警告ページの起動を防止してください。
-
-```bash
-# 例: 警告表示を抑止した Aider 手動起動
-uv run aider --model ollama/gemma4-12b-it-Q4_K_M:latest --no-show-model-warnings
-```
+> **補足**: Aider CLIは現行runtimeでは使用しません。旧実装・手順は `legacy/local_llm/` とタグ `archive/local-llm-20261104` に保存されており、必要な場合のみ別作業として復元します。
 
 ---
 

@@ -1,5 +1,7 @@
 # Coderモデル動作検証仕様・実績および GitHub CI PR Fixer 設計書
 
+> **【Aider時代の検証記録】** §2 のCoder検証結果は、ローカルLLM（Ornith）とAiderの組み合わせで実施した当時の実績です。現行のコード編集エンジンはagyであり、Aiderはruntimeから退役済みです（旧資産は `legacy/local_llm/`）。移行後の検証は `docs/test/SBOS-TEST-001_agy移行確認試験書.md` を参照してください。§3 の `github_ci_pr_fixer` 設計は、Aiderに依存しない将来構想として別途扱います。
+
 - **作成日**: 2026-09-15
 - **対象モデル**: `Ornith-1.5-9B-Q5_K_M.gguf` (`ornith-1.5-9b:latest`)
 - **関連要件**: Issue #17 (自律コーダーエージェント必要要件) / `github-pr-ci-fixer` スキル

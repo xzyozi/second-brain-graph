@@ -177,8 +177,8 @@ sequenceDiagram
     CLI->>Git: 作業ブランチ準備
     CLI->>Plan: 実装計画を生成
     Plan-->>CLI: impl_plan
-    CLI->>Aider: 指示と対象ファイルで編集
-    Aider-->>CLI: 編集完了
+    CLI->>Agy: 指示と対象ファイルで編集
+    Agy-->>CLI: 編集完了
     CLI->>Quality: Ruff format / fix / check
     Quality-->>CLI: lint_passed
     CLI->>Quality: pytest JSON report
@@ -331,7 +331,7 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
 | LLM の実行先       | intent は route を経由し、未定義 intent は拒否する。                                                                            |
 | コード編集         | agyが衛星ワークツリーを編集し、edit_guardが境界外変更を戻す。**サテライトの内容が外部送信される。**                             | 衛星ワークツリー、外部サービス |
 | `call_llm()` / agy | 空の一時ディレクトリでagyを起動し、サニタイズ済みpromptを送信する。                                                             | 一時ディレクトリ、外部サービス |
-| Stage 前検証       | 既存 staged 変更を拒否し、`target_files` に含まれない stage 変更を拒否する（※Aider 後に追加された変更済み Python も検証対象）。 |
+| Stage 前検証       | 既存 staged 変更を拒否し、`target_files` に含まれない stage 変更を拒否する（※agy が追加・変更した Python も検証対象）。 |
 | レビューの差分     | Git diff が取得できない場合は review を失敗させる。                                                                             |
 | Reviewdog          | 補助的な表示であり、失敗しても品質判定は継続する。                                                                              |
 | 状態保存           | state と履歴は個別ロック・一時ファイル置換で保護する。                                                                          |
@@ -398,7 +398,6 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
 | テスト                                                                         | 対応する Interface・契約                                                                                                                           |
 | :----------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tests/test_orchestrator_agy_integration.py`                                   | Issue/プロジェクト検証、文脈解決、timeout、状態遷移、Ruff・pytest、レビュー/RDJSON/Reviewdog、PR branch prefix、履歴、CLI、resume を統合検証する。 |
-| `tests/test_agy_runner.py`                                                     | Git diff、初回 commit 前 fallback、Aider 引数・timeout・非ゼロ終了、一時ファイル削除、`/v1` 除去を検証する。                                       |
 | `tests/test_backend_coordinator.py`                                            | intent route、Ollama/llama-server Adapter、GPU リース、未定義 intent、Ollama 到達不能時の llama-server 起動を検証する。                            |
 | `tests/test_llm_client.py`                                                     | role 設定、OpenAI SDK へのパラメータ伝達、intent 補完を検証する。                                                                                  |
 | `tests/test_run_task.py`                                                       | ロック保護下でのクリーンアップ順、resume 時の skip、dry-run の非実行性を検証する。                                                                 |

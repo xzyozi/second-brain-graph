@@ -40,13 +40,15 @@
 | :--- | :--- | :--- | :--- | :--- |
 | **LLM Orchestrator** | `langgraph` | `>=0.1.0` | **MIT License** | LangChain公式。商用利用可 |
 | **LLM Gateway** | `litellm` | `>=1.30.0` | **MIT License** | マルチモデルラッパー。商用利用可 |
-| **Code Agent** | `aider-chat` | `>=0.30.0` | **Apache License 2.0** | Aiderエンジン。商用利用可 |
+| **Code Agent** | `agy`（Antigravity CLI） | - | 提供元の利用規約 | 現行のコード編集・LLMバックエンド。Python依存ではなく外部CLIのため、利用規約と外部送信範囲を個別に確認する |
 | **Data Validation** | `pydantic` | `>=2.0.0` | **MIT License** | データ構造検証。商用利用可 |
 | **Development** | `pytest`, `ruff`, `mypy` | 最新安定版 | **MIT / Apache 2.0** | 開発・テスト用ツール |
 | **External Tool** | `Ollama` | `>=0.3.0` | **MIT License** | ローカルLLM実行基盤 |
 | **External Tool** | `Reviewdog` | 最新版 | **MIT License** | レビューアノテーションエンジン |
 | **Local LLM Model** | `Gemma 4 12B IT` | - | **Gemma License** | 汎用・計画・監査モデル（利用規約準拠） |
 | **Local LLM Model** | `Gemma 4 Py Coder` | - | **Gemma License** | Pythonコード特化モデル（利用規約準拠） |
+
+> **退役資産について**: `aider-chat`（Apache License 2.0）は現行の依存から削除済みです。旧実装は `legacy/local_llm/` に保存されており、復元する場合はライセンスを再確認してください。ローカルLLMモデル（Gemma 4系）は旧ローカルLLM経路で使用していたモデルであり、現行routesはすべてagyを指すため使用しません。Ollamaは、JEV（`qwen2.5:0.5b`）用の実行基盤としてのみ残っています。
 
 ---
 
