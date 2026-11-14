@@ -729,7 +729,7 @@ def test_format_and_parse_task_id() -> None:
     with pytest.raises(ValueError):
         format_task_id("TFG", 0)
     with pytest.raises(ValueError):
-        format_task_id("TFG", True)  # type: ignore[arg-type]
+        format_task_id("TFG", True)
 
 
 def test_resolve_target_spec_without_legacy_files(tmp_path: Path) -> None:
