@@ -356,7 +356,7 @@ def main(args: list[str] | None = None) -> int:
     if opts.verbose:
         logger.setLevel(logging.DEBUG)
 
-    root_dir = Path(__file__).resolve().parents[1]
+    root_dir = Path(__file__).resolve().parents[2]
     registry = load_project_registry(root_dir)
     projects = registry.get("projects", {})
 
