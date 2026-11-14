@@ -629,61 +629,6 @@ def reset_task_state(
     return removed
 
 
-def mark_task_completed_in_tasks_md(
-    cwd: Optional[str],
-    issue_id: str,
-    project_key: Optional[str] = None,
-    project_root: Optional[Path] = None,
-) -> bool:
-    """サテライト (docs/tasks.md) および母艦 (metadata/projects/<KEY>/tasks.md) の
-    該当タスク行を完了状態 (- [x] ... completed:YYYY-MM-DD) に更新する (Issue #80)。
-    """
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    updated = False
-
-    target_paths: List[Path] = []
-    if cwd:
-        sat_tasks = Path(cwd) / "docs" / "tasks.md"
-        if sat_tasks.exists():
-            target_paths.append(sat_tasks)
-
-    if project_key and project_root:
-        meta_tasks = project_root / "metadata" / "projects" / project_key / "tasks.md"
-        if meta_tasks.exists():
-            target_paths.append(meta_tasks)
-
-    for tpath in target_paths:
-        try:
-            content = tpath.read_text(encoding="utf-8")
-            new_lines: List[str] = []
-            modified = False
-            for line in content.splitlines():
-                # 該当 Issue ID の未完了行 (- [ ] [ID] または - [/] [ID])
-                if f"[{issue_id}]" in line and (
-                    line.strip().startswith("- [ ]") or line.strip().startswith("- [/]")
-                ):
-                    # - [ ] または - [/] を - [x] に置換
-                    new_line = re.sub(r"^(\s*-\s*)\[[ /]?\]", r"\1[x]", line)
-                    if "completed:" not in new_line:
-                        if "-->" in new_line:
-                            new_line = re.sub(r"(-->|\Z)", f"completed:{today} \\1", new_line)
-                        else:
-                            new_line = f"{new_line} <!-- completed:{today} -->"
-                    new_lines.append(new_line)
-                    modified = True
-                    updated = True
-                else:
-                    new_lines.append(line)
-
-            if modified:
-                tpath.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-                logger.info(f"Marked task '{issue_id}' as completed in {tpath}")
-        except Exception as e:
-            logger.warning(f"Failed to update tasks.md at {tpath} for {issue_id}: {e}")
-
-    return updated
-
-
 def record_execution_history(
     state: Dict[str, Any],
     final_status: str,
@@ -931,26 +876,7 @@ def resolve_project_context(
                 except Exception as ex:
                     logger.warning(f"Failed to read project.json at {pjson_path}: {ex}")
 
-        # tasks.md からの target_files 探索（未設定時）: サテライト docs/tasks.md 優先、フォールバックで母艦 meta_dir/tasks.md
-        if not raw_target_files:
-            tasks_candidates = [cwd_path / "docs" / "tasks.md"]
-            if meta_dir:
-                tasks_candidates.append(project_root / meta_dir / "tasks.md")
-            for tpath in tasks_candidates:
-                if tpath.exists():
-                    try:
-                        text = tpath.read_text(encoding="utf-8")
-                        # 拡張子に合わせたマッチング (.py, .ts, .tsx, .js, .jsx, .rs)
-                        matches = re.findall(r"[\w/.-]+\.(?:py|tsx?|jsx?|rs)", text)
-                        for m in matches:
-                            if m not in raw_target_files:
-                                raw_target_files.append(m)
-                        if raw_target_files:
-                            break
-                    except Exception as ex:
-                        logger.warning(f"Failed to parse tasks.md at {tpath}: {ex}")
-
-        # 上記メタデータから未検出の場合、衛星ディレクトリ内の実在するソースファイルを言語別自動検出 (Issue #168)
+        # メタデータから未検出の場合、衛星ディレクトリ内の実在するソースファイルを言語別自動検出 (Issue #168)
         if not raw_target_files:
             ignore_dirs = {
                 ".venv",
@@ -1145,112 +1071,22 @@ def resolve_task_id_for_issue(
     project_key: str,
     issue_number: int,
     project_root: Optional[Path] = None,
-    *,
-    allow_legacy_files: bool = True,
 ) -> Optional[str]:
-    """project_key と GitHub Issue 番号から対応する task_id（例: TFG-0005）を解決する.
-
-    GitHub Issues SSOT 方針に基づき、正本規則 ``{PROJECT_KEY}-{issue_number:04d}`` で
-    決定論的に解決する。移行期間中（allow_legacy_files=True）は既存の tasks.md や
-    docs/issues/*.md が存在する場合のみレガシー記述を優先参照する。
-    """
+    """project_key と GitHub Issue 番号から対応する task_id（例: TFG-0005）を決定論的に解決する."""
+    _ = project_root  # 互換性維持のためのプレースホルダ
     try:
-        canonical = format_task_id(project_key, issue_number)
+        return format_task_id(project_key, issue_number)
     except ValueError:
         return None
-
-    if not allow_legacy_files:
-        return canonical
-
-    if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent.parent
-
-    projects = load_project_registry(project_root)
-    pdata = projects.get(project_key, {})
-    dir_rel = pdata.get("dir", f"projects/{pdata.get('name', '')}")
-    sat_dir = project_root / dir_rel
-
-    # 1. docs/tasks.md を探索: [KEY-XXXX] ... issue:#<NUM>（移行期間互換）
-    tasks_md = sat_dir / "docs" / "tasks.md"
-    if tasks_md.exists():
-        try:
-            content = tasks_md.read_text(encoding="utf-8")
-            pattern = (
-                rf"\[({re.escape(project_key)}-\d{{4}}(?:-[A-Z])?)\]"
-                rf".*?(?:issue:#{issue_number}\b|#{issue_number}\b)"
-            )
-            m = re.search(pattern, content)
-            if m:
-                return m.group(1)
-        except Exception as e:
-            logger.debug(f"tasks.md 解析エラー: {e}")
-
-    # 2. docs/issues/*.md のフロントマター探索（移行期間互換）
-    issues_dir = sat_dir / "docs" / "issues"
-    if issues_dir.exists():
-        for md_file in issues_dir.glob("*.md"):
-            try:
-                text = md_file.read_text(encoding="utf-8")
-                if re.search(rf"^issue(?:_number)?:\s*#?{issue_number}\b", text, re.MULTILINE):
-                    m_task = re.search(r"^task_id:\s*([A-Za-z0-9_]+-\d+)", text, re.MULTILINE)
-                    if m_task:
-                        return m_task.group(1)
-                    if ISSUE_ID_PATTERN.match(md_file.stem):
-                        return md_file.stem
-            except Exception:
-                pass
-
-    # 3. 決定論的タスク ID ({PROJECT_KEY}-{issue_number:04d})
-    return canonical
 
 
 def resolve_issue_number_for_task(
     task_id: str,
     project_root: Optional[Path] = None,
-    *,
-    allow_legacy_files: bool = True,
 ) -> Optional[int]:
-    """task_id (例: TFG-0005) から対応する GitHub Issue 番号を解決する."""
+    """task_id (例: TFG-0005) から対応する GitHub Issue 番号を決定論的に解決する."""
+    _ = project_root  # 互換性維持のためのプレースホルダ
     parsed = parse_task_id(task_id)
-
-    if not allow_legacy_files:
-        return parsed[1] if parsed else None
-
-    if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent.parent
-
-    project_key = task_id.split("-")[0]
-    projects = load_project_registry(project_root)
-    pdata = projects.get(project_key, {})
-    dir_rel = pdata.get("dir", f"projects/{pdata.get('name', '')}")
-    sat_dir = project_root / dir_rel
-
-    # 1. docs/issues/{task_id}.md（移行期間互換）
-    spec_md = sat_dir / "docs" / "issues" / f"{task_id}.md"
-    if spec_md.exists():
-        try:
-            text = spec_md.read_text(encoding="utf-8")
-            m = re.search(r"^issue(?:_number)?:\s*#?(\d+)\b", text, re.MULTILINE)
-            if m:
-                return int(m.group(1))
-        except Exception:
-            pass
-
-    # 2. docs/tasks.md（移行期間互換）
-    tasks_md = sat_dir / "docs" / "tasks.md"
-    if tasks_md.exists():
-        try:
-            text = tasks_md.read_text(encoding="utf-8")
-            pattern = rf"\[{re.escape(task_id)}\].*?(?:issue:#(\d+)|#(\d+))"
-            m = re.search(pattern, text)
-            if m:
-                num_str = m.group(1) or m.group(2)
-                if num_str:
-                    return int(num_str)
-        except Exception:
-            pass
-
-    # 3. 決定論的解決: task_id の数値部分 (例: TFG-0005 -> 5)
     return parsed[1] if parsed else None
 
 
@@ -1259,8 +1095,6 @@ def resolve_target_spec(
     project_hint: Optional[str] = None,
     cwd: Optional[Path] = None,
     project_root: Optional[Path] = None,
-    *,
-    allow_legacy_files: bool = True,
 ) -> Dict[str, Any]:
     """任意の形式の指定 (URL, task_id, 数値) と CWD / project_hint から
     project_key, task_id, issue_number, github_repo を高精度に解決する。
@@ -1278,12 +1112,7 @@ def resolve_target_spec(
         if not resolved_key and project_hint:
             resolved_key = resolve_project_key_from_repo_or_name(project_hint, project_root)
         task_id = (
-            resolve_task_id_for_issue(
-                resolved_key,
-                issue_num,
-                project_root,
-                allow_legacy_files=allow_legacy_files,
-            )
+            resolve_task_id_for_issue(resolved_key, issue_num, project_root)
             if resolved_key
             else None
         )
@@ -1300,9 +1129,7 @@ def resolve_target_spec(
     if ISSUE_ID_PATTERN.match(target) or re.match(r"^[A-Za-z0-9_]+-\d+", target):
         parsed = parse_task_id(target)
         task_pkey = parsed[0] if parsed else target.split("-")[0].upper()
-        task_issue_num: Optional[int] = resolve_issue_number_for_task(
-            target, project_root, allow_legacy_files=allow_legacy_files
-        )
+        task_issue_num: Optional[int] = resolve_issue_number_for_task(target, project_root)
         projects = load_project_registry(project_root)
         pdata = projects.get(task_pkey, {})
         return {
@@ -1325,14 +1152,7 @@ def resolve_target_spec(
             num_pkey = resolve_project_from_cwd(cwd, project_root)
 
         num_task_id = (
-            resolve_task_id_for_issue(
-                num_pkey,
-                num_issue,
-                project_root,
-                allow_legacy_files=allow_legacy_files,
-            )
-            if num_pkey
-            else None
+            resolve_task_id_for_issue(num_pkey, num_issue, project_root) if num_pkey else None
         )
         projects = load_project_registry(project_root)
         pdata = projects.get(num_pkey, {}) if num_pkey else {}

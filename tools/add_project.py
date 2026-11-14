@@ -1,7 +1,7 @@
 """CLI Tool for adding a new satellite project to Second Brain OS.
 
-SBOS-MULTI-001 Rev.3.0 compliant (Host Purification & Satellite Docs Ownership).
-Initializes metadata files (project.json, tasks.md, issues/) directly inside the satellite's
+SBOS-MULTI-001 Rev.3.0 compliant (Host Purification & GitHub Issues SSOT).
+Initializes metadata file (project.json) directly inside the satellite's
 docs/ directory (projects/<name>/docs/) and registers the project into metadata/.project-registry.json.
 The host repository's metadata/ directory remains pure and unpolluted.
 """
@@ -20,77 +20,6 @@ from tools.workspace.metadata_store import SUPPORTED_LANGUAGES
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def load_master_issue_template(root_dir: str = ".", key: str = "KEY") -> str:
-    """母艦の metadata/templates/issue_template.md を読み込み、プロジェクトキーを置換して返す.
-    存在しない場合は標準の0〜8章テンプレートにフォールバックする。
-    """
-    master_path = os.path.join(root_dir, "metadata", "templates", "issue_template.md")
-    if os.path.exists(master_path):
-        try:
-            with open(master_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            return content.replace("{key}", key)
-        except Exception as e:
-            logger.warning(f"Failed to read master template from {master_path}: {e}")
-
-    # フォールバック用標準テンプレート (0〜8章完全準拠)
-    return f"""# [{key}-XXXX] タスクタイトル
-
-## 0. メタ情報 (Scope & Impact)
-- **影響範囲**: サンドボックス限定 / 本番影響あり（要レビュー） のいずれかを明記
-- **既存コードへの依存**: なし（新規ファイルのみ） / あり（既存関数を変更）
-- **関連Issue**: なし / #XXXX の後続タスク
-
-## 1. 概要・背景
-（タスクの背景や目的、解決すべき課題を記述します。オーケストレーターがPR本文サマリーとしても抽出します）
-
-## 2. 仕様および要求事項 (修正方針の検討)
-<!-- ※起票時は修正方針の選択肢（案1, 案2）を提示します。合意された方針が tasks.md へのタスク登録の input となります -->
-<!-- ※運用方針: 基本は「案 1 (推奨)」を採用します。不都合や別方針の希望がある場合のみ案2の選択または再壁打ちを行います -->
-- [ ] **案 1 (推奨)**: [最小限・安全な改修アプローチ。理由: 互換性が高く影響が最小]
-- [ ] **案 2**: [代替アプローチ。理由: より堅牢だが影響範囲や前提条件に注意が必要]
-
-## 3. 段階的実装手順 (Step-by-step Execution)
-- **Phase 1 (Core Implementation)**: まず本体モジュール・主要ロジック・例外クラスのみを最小変更で優先実装すること。
-- **Phase 2 (Test Implementation & Refinement)**: 本体実装完了後、テストコード・検証スクリプトを作成・修正し、動作確認を行うこと。
-
-## 4. 編集対象ファイル (Target Files)
-- `path/to/file.py`（新規作成 / 既存編集）
-- `tests/path/to/test_file.py`
-
-## 5. ドメイン知識・技術上の落とし穴 (Domain Knowledge & Technical Pitfalls)
-- 使用ライブラリ・仕様
-- 典型的な落とし穴 (Pitfalls)
-- 推奨実装パターン (Recommended Patterns)
-- **検証用データ・環境の準備方針**:
-  - テスト用フィクスチャや実機環境（踏み台接続、環境変数等）の前提条件を明記。
-
-## 6. 設計制約・アンチパターンの禁止 (Architecture Constraints & Forbidden Actions)
-安定した品質を維持するため、以下のアーキテクチャ原則を厳守すること：
-- **単一責任と一方向のデータフロー**: 関数やクラス間で「相互呼び出し（循環依存・無限再帰）」となる設計を絶対に行わないこと。
-- **ハック的なフロー制御の禁止**: ループや再帰の停止条件として不自然なフラグ変数や場当たり的な実装を用いないこと。
-- **堅牢な解析ロジック**: 外部データやファイル構造のパース処理において、脆弱なハードコーディングを行わないこと。
-- **既存の破壊禁止**: 無関係な設定ファイルや既存の公開 API シグネチャを破壊しないこと。
-
-## 7. 対象外 (Non-Goals)
-- 本Issueでは〇〇の実装は行わない（別Issueで対応予定）
-
-## 8. 完了定義 (Definition of Done)
-- [ ] すべての要求仕様（セクション2）が実装され、責務が適切に分離されたクリーンな設計になっていること。
-- [ ] 動作確認・検証手順（テストまたはスクリプト実行）を実施し、正常終了すること。
-- [ ] 意図しない既存機能の破壊や、不要なコード（YAGNI違反）が含まれていないこと。
-
-### 【CI・自動検査に関する運用指針】
-- **CI / 静的解析が未整備のプロジェクト**:
-  - 自動検査ツール（Ruff等）の実行は強制せず、ローカルでの動作確認コマンドや手動検証スクリプトの正常終了をもって完了とする。
-- **CI / 静的解析が整備済みのプロジェクト**:
-  - プロジェクト側の CI 設定（GitHub Actions / `pyproject.toml` 等）に準拠し、以下の項目を完了条件として適用する：
-    - - [ ] 単体テスト / 回帰テストがすべて通過すること（`pytest` 等）。
-    - - [ ] プロジェクト規定の静的解析（Linter / 型検査）エラーが 0 件であること。
-    - - [ ] GitHub Actions CI チェックが All Green であること。
-"""
 
 
 ISSUE_AUTO_TAG_WORKFLOW = """name: Auto Label Issues
@@ -132,7 +61,7 @@ jobs:
 
 STANDARD_STAGE_LABELS = [
     ("stage:ideation", "cfd3d7", "構想・壁打ち中（実装対象外）"),
-    ("stage:ready", "0e8a16", "仕様確定・着手可能（tasks.md対象）"),
+    ("stage:ready", "0e8a16", "仕様確定・着手可能（自律開発対象）"),
     ("stage:in-progress", "fbca04", "エージェント実装・作業中"),
     ("stage:done", "1d76db", "完了・マージ済み"),
     ("theme:security", "d93f0b", "セキュリティ脆弱性・安全対策"),
@@ -541,29 +470,10 @@ def register_project(
         json.dump(proj_data, f, indent=2, ensure_ascii=False)
     logger.info(f"Updated satellite project config at {proj_json_path}")
 
-    # 5. Create satellite docs/tasks.md if not present
-    tasks_md_path = os.path.join(docs_path, "tasks.md")
-    if not os.path.exists(tasks_md_path):
-        with open(tasks_md_path, "w", encoding="utf-8") as f:
-            f.write("# Tasks\n\n")
-        logger.info(f"Initialized tasks.md at {tasks_md_path}")
-    else:
-        logger.info(f"Satellite tasks.md already exists at {tasks_md_path}")
-
-    # 6. Create satellite docs/issues/ and _template.md
-    issues_dir = os.path.join(docs_path, "issues")
-    os.makedirs(issues_dir, exist_ok=True)
-    template_path = os.path.join(issues_dir, "_template.md")
-    if not os.path.exists(template_path):
-        template_content = load_master_issue_template(root_dir=root_dir, key=key)
-        with open(template_path, "w", encoding="utf-8") as f:
-            f.write(template_content)
-        logger.info(f"Initialized issue template at {template_path}")
-
-    # 7. Ensure satellite has issue auto-tagging workflow (.github/workflows/issue-auto-tag.yml)
+    # 5. Ensure satellite has issue auto-tagging workflow (.github/workflows/issue-auto-tag.yml)
     setup_satellite_workflow(sat_path)
 
-    # 8. Ensure satellite .gitignore has language-specific generated entries
+    # 6. Ensure satellite .gitignore has language-specific generated entries
     if os.path.exists(sat_path):
         try:
             gi_path = os.path.join(sat_path, ".gitignore")

@@ -26,7 +26,6 @@ _LEGACY_MODULE_MAP: dict[str, str] = {
     "llm_client": "tools.backends.llm_client",
     "jev_adapter": "tools.backends.jev_adapter",
     # lifecycle
-    "issue_spec_manager": "tools.lifecycle.issue_spec_manager",
     "periodic_review_runner": "tools.lifecycle.periodic_review_runner",
     "close_stale_issues": "tools.lifecycle.close_stale_issues",
     # workspace

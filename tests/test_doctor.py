@@ -6,12 +6,12 @@ from unittest.mock import patch
 
 from tools.doctor import (
     CheckResult,
+    check_github_issues_access,
     check_gitignore,
-    check_issue_specs,
+    check_legacy_local_files,
     check_project_json,
     check_registry,
     check_satellite_dir,
-    check_tasks_md,
     check_venv,
     diagnose_project,
     main,
@@ -118,27 +118,32 @@ def test_check_project_json(tmp_path: Path) -> None:
     assert "allowed_new_file_globs は文字列の配列である必要があります" in res_globs_invalid.message
 
 
-def test_check_tasks_md(tmp_path: Path) -> None:
-    """docs/tasks.md の存在および --fix による作成を検証"""
+def test_check_legacy_local_files(tmp_path: Path) -> None:
+    """レガシーファイル (docs/tasks.md, docs/issues/) が不在なら OK、残存時は非推奨 WARN となることを検証"""
     sat_dir = tmp_path
     sat_docs = sat_dir / "docs"
     sat_docs.mkdir(parents=True, exist_ok=True)
 
-    # 1. 存在しない場合
-    res_missing = check_tasks_md(sat_dir, "TP", fix=False)
-    assert res_missing.status == "FAIL"
-    assert res_missing.fixable is True
+    # 1. 不在の場合 -> OK（エラーにならない）
+    res_clean = check_legacy_local_files(sat_dir)
+    assert res_clean.status == "OK"
+    assert "SSOT" in res_clean.message
 
-    # 2. fix=True で作成
-    res_fixed = check_tasks_md(sat_dir, "TP", fix=True)
-    assert res_fixed.status == "FIXED"
-    assert (sat_docs / "tasks.md").exists()
+    # 2. docs/tasks.md が残存している場合 -> WARN
+    tasks_file = sat_docs / "tasks.md"
+    tasks_file.write_text("- [ ] [TP-0001] タスク1\n", encoding="utf-8")
+    res_tasks_warn = check_legacy_local_files(sat_dir)
+    assert res_tasks_warn.status == "WARN"
+    assert "docs/tasks.md" in res_tasks_warn.message
 
-    # 3. 存在する場合
-    (sat_docs / "tasks.md").write_text("- [ ] [TP-0001] タスク1\n", encoding="utf-8")
-    res_ok = check_tasks_md(sat_dir, "TP", fix=False)
-    assert res_ok.status == "OK"
-    assert "1 件" in res_ok.message
+    # 3. docs/issues/ も残存している場合 -> 両方 WARN 通知
+    issues_dir = sat_docs / "issues"
+    issues_dir.mkdir(parents=True, exist_ok=True)
+    (issues_dir / "TP-0001.md").write_text("# Spec 1", encoding="utf-8")
+    res_both_warn = check_legacy_local_files(sat_dir)
+    assert res_both_warn.status == "WARN"
+    assert "docs/tasks.md" in res_both_warn.message
+    assert "docs/issues/" in res_both_warn.message
 
 
 def test_check_gitignore(tmp_path: Path) -> None:
@@ -175,31 +180,27 @@ def test_check_gitignore_missing_file_is_not_reported_as_fixed(tmp_path: Path) -
     assert not (tmp_path / ".gitignore").exists()
 
 
-def test_check_issue_specs(tmp_path: Path) -> None:
-    """未完了タスクに対する仕様書 docs/issues/*.md の存在チェックを検証"""
-    sat_dir = tmp_path
-    sat_docs = sat_dir / "docs"
-    sat_docs.mkdir(parents=True, exist_ok=True)
-    issues_dir = sat_docs / "issues"
-    issues_dir.mkdir(parents=True, exist_ok=True)
+def test_check_github_issues_access() -> None:
+    """GitHub CLI / GitHub Issues (SSOT) 疎通チェックを検証"""
+    from unittest.mock import MagicMock
 
-    tasks_file = sat_docs / "tasks.md"
-    tasks_file.write_text(
-        "- [ ] [TP-0001] タスク1 <!-- stage:ready -->\n- [ ] [TP-0002] タスク2 <!-- stage:ready -->\n",
-        encoding="utf-8",
-    )
+    # 1. github_repo 未設定 -> WARN
+    res_no_repo = check_github_issues_access(None)
+    assert res_no_repo.status == "WARN"
 
-    # 1. 仕様書がない場合
-    res_missing = check_issue_specs(sat_dir, "TP")
-    assert res_missing.status == "WARN"
-    assert "TP-0001" in res_missing.message
+    # 2. gh 未インストール -> WARN
+    with patch("shutil.which", return_value=None):
+        res_no_gh = check_github_issues_access("owner/repo")
+        assert res_no_gh.status == "WARN"
 
-    # 2. 仕様書を作成した場合
-    (issues_dir / "TP-0001.md").write_text("# Spec 1", encoding="utf-8")
-    (issues_dir / "TP-0002.md").write_text("# Spec 2", encoding="utf-8")
-    res_ok = check_issue_specs(sat_dir, "TP")
-    assert res_ok.status == "OK"
-    assert "2 件" in res_ok.message
+    # 3. gh issue list 成功 -> OK
+    with (
+        patch("shutil.which", return_value="gh"),
+        patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="[]", stderr="")),
+    ):
+        res_ok = check_github_issues_access("owner/repo")
+        assert res_ok.status == "OK"
+        assert "owner/repo" in res_ok.message
 
 
 def test_print_doctor_report() -> None:
@@ -291,9 +292,8 @@ def test_diagnose_project_full(tmp_path: Path) -> None:
     sat_docs = sat_dir / "docs"
     sat_docs.mkdir(parents=True, exist_ok=True)
     (sat_docs / "project.json").write_text('{"key": "TP"}', encoding="utf-8")
-    (sat_docs / "tasks.md").write_text("# Tasks\n", encoding="utf-8")
 
-    # gh コマンドをモック
+    # gh コマンドをモック（tasks.md や docs/issues が存在しなくてもエラーにならないこと）
     with (
         patch("shutil.which", return_value=None),
         patch("subprocess.run") as mock_run,
@@ -305,7 +305,13 @@ def test_diagnose_project_full(tmp_path: Path) -> None:
         assert "Registry Entry" in names
         assert "Satellite Directory" in names
         assert "Satellite project.json" in names
-        assert "Tasks Backlog" in names
+        assert "Legacy Local Files" in names
+        assert "GitHub Issues Access" in names
+        assert all(
+            r.status != "FAIL"
+            for r in results
+            if r.name in ("Legacy Local Files", "GitHub Issues Access")
+        )
 
 
 def test_check_gitignore_covers_all_generated_artifacts(tmp_path: Path) -> None:
