@@ -9,14 +9,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from tools.workspace.github_issues import fetch_remote_issue as _shared_fetch_remote_issue
 
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("issue_spec_manager")
@@ -133,31 +133,8 @@ def get_task_id_from_tasks_md(tasks_path: Path, issue_num: int) -> str | None:
 def fetch_remote_issue(
     repo: str, issue_num: int, fields: list[str] | None = None
 ) -> dict[str, Any] | None:
-    """GitHub CLI で Issue の詳細を取得する."""
-    if fields is None:
-        fields = ["number", "title", "body", "labels", "state"]
-    cmd = [
-        "gh",
-        "issue",
-        "view",
-        str(issue_num),
-        "--repo",
-        repo,
-        "--json",
-        ",".join(fields),
-    ]
-    try:
-        res = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            encoding="utf-8",
-        )
-        return json.loads(res.stdout)
-    except Exception as e:
-        logger.warning(f"Issue #{issue_num} の取得に失敗しました ({repo}): {e}")
-        return None
+    """GitHub CLI で Issue の詳細を取得する（github_issues に集約）."""
+    return _shared_fetch_remote_issue(repo, issue_num, fields=fields)
 
 
 # 互換用エイリアス

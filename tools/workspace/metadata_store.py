@@ -114,6 +114,28 @@ def validate_issue_id(issue_id: str) -> bool:
     return bool(ISSUE_ID_PATTERN.match(issue_id))
 
 
+def format_task_id(project_key: str, issue_number: int) -> str:
+    """project_key と GitHub Issue 番号から決定論的なタスク ID ({PROJECT_KEY}-{NUM:04d}) を生成する."""
+    key = (project_key or "").strip().upper()
+    if not key or not re.match(r"^[A-Z0-9_]+$", key):
+        raise ValueError(f"Invalid project_key for task_id formatting: {project_key!r}")
+    if isinstance(issue_number, bool) or not isinstance(issue_number, int) or issue_number <= 0:
+        raise ValueError(f"Invalid issue_number for task_id formatting: {issue_number!r}")
+    return f"{key}-{issue_number:04d}"
+
+
+def parse_task_id(task_id: str) -> Optional[Tuple[str, int]]:
+    """タスク ID (例: TFG-0005, TFG-0005-A) から (project_key, issue_number) を抽出する."""
+    cleaned = (task_id or "").strip()
+    m = re.match(r"^([A-Za-z0-9_]+)-0*(\d+)(?:-[A-Z])?$", cleaned)
+    if not m:
+        return None
+    issue_num = int(m.group(2))
+    if issue_num <= 0:
+        return None
+    return m.group(1).upper(), issue_num
+
+
 def get_runtime_cache_dir(
     project_key: str,
     project_root: Optional[Path] = None,
@@ -1111,9 +1133,26 @@ def resolve_project_from_cwd(
 
 
 def resolve_task_id_for_issue(
-    project_key: str, issue_number: int, project_root: Optional[Path] = None
+    project_key: str,
+    issue_number: int,
+    project_root: Optional[Path] = None,
+    *,
+    allow_legacy_files: bool = True,
 ) -> Optional[str]:
-    """project_key と GitHub Issue 番号からサテライト内の対応する task_id（例: TFG-0005）を逆引きする。"""
+    """project_key と GitHub Issue 番号から対応する task_id（例: TFG-0005）を解決する.
+
+    GitHub Issues SSOT 方針に基づき、正本規則 ``{PROJECT_KEY}-{issue_number:04d}`` で
+    決定論的に解決する。移行期間中（allow_legacy_files=True）は既存の tasks.md や
+    docs/issues/*.md が存在する場合のみレガシー記述を優先参照する。
+    """
+    try:
+        canonical = format_task_id(project_key, issue_number)
+    except ValueError:
+        return None
+
+    if not allow_legacy_files:
+        return canonical
+
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
 
@@ -1122,19 +1161,22 @@ def resolve_task_id_for_issue(
     dir_rel = pdata.get("dir", f"projects/{pdata.get('name', '')}")
     sat_dir = project_root / dir_rel
 
-    # 1. docs/tasks.md を探索: [KEY-XXXX] ... issue:#<NUM>
+    # 1. docs/tasks.md を探索: [KEY-XXXX] ... issue:#<NUM>（移行期間互換）
     tasks_md = sat_dir / "docs" / "tasks.md"
     if tasks_md.exists():
         try:
             content = tasks_md.read_text(encoding="utf-8")
-            pattern = rf"\[({project_key}-\d{{4}}(?:-[A-Z])?)\].*?(?:issue:#{issue_number}\b|#{issue_number}\b)"
+            pattern = (
+                rf"\[({re.escape(project_key)}-\d{{4}}(?:-[A-Z])?)\]"
+                rf".*?(?:issue:#{issue_number}\b|#{issue_number}\b)"
+            )
             m = re.search(pattern, content)
             if m:
                 return m.group(1)
         except Exception as e:
             logger.debug(f"tasks.md 解析エラー: {e}")
 
-    # 2. docs/issues/*.md のフロントマター探索
+    # 2. docs/issues/*.md のフロントマター探索（移行期間互換）
     issues_dir = sat_dir / "docs" / "issues"
     if issues_dir.exists():
         for md_file in issues_dir.glob("*.md"):
@@ -1149,15 +1191,22 @@ def resolve_task_id_for_issue(
             except Exception:
                 pass
 
-    # 3. ゼロ埋め4桁の候補
-    candidate = f"{project_key}-{issue_number:04d}"
-    return candidate
+    # 3. 決定論的タスク ID ({PROJECT_KEY}-{issue_number:04d})
+    return canonical
 
 
 def resolve_issue_number_for_task(
-    task_id: str, project_root: Optional[Path] = None
+    task_id: str,
+    project_root: Optional[Path] = None,
+    *,
+    allow_legacy_files: bool = True,
 ) -> Optional[int]:
-    """task_id (例: TFG-0005) から対応する GitHub Issue 番号を逆引きする。"""
+    """task_id (例: TFG-0005) から対応する GitHub Issue 番号を解決する."""
+    parsed = parse_task_id(task_id)
+
+    if not allow_legacy_files:
+        return parsed[1] if parsed else None
+
     if project_root is None:
         project_root = Path(__file__).resolve().parent.parent.parent
 
@@ -1167,7 +1216,7 @@ def resolve_issue_number_for_task(
     dir_rel = pdata.get("dir", f"projects/{pdata.get('name', '')}")
     sat_dir = project_root / dir_rel
 
-    # 1. docs/issues/{task_id}.md
+    # 1. docs/issues/{task_id}.md（移行期間互換）
     spec_md = sat_dir / "docs" / "issues" / f"{task_id}.md"
     if spec_md.exists():
         try:
@@ -1178,7 +1227,7 @@ def resolve_issue_number_for_task(
         except Exception:
             pass
 
-    # 2. docs/tasks.md
+    # 2. docs/tasks.md（移行期間互換）
     tasks_md = sat_dir / "docs" / "tasks.md"
     if tasks_md.exists():
         try:
@@ -1192,12 +1241,8 @@ def resolve_issue_number_for_task(
         except Exception:
             pass
 
-    # 3. フォールバック: task_id の末尾数値 (例: TFG-0005 -> 5)
-    m_num = re.search(r"-0*(\d+)(?:-[A-Z])?$", task_id)
-    if m_num:
-        return int(m_num.group(1))
-
-    return None
+    # 3. 決定論的解決: task_id の数値部分 (例: TFG-0005 -> 5)
+    return parsed[1] if parsed else None
 
 
 def resolve_target_spec(
@@ -1205,6 +1250,8 @@ def resolve_target_spec(
     project_hint: Optional[str] = None,
     cwd: Optional[Path] = None,
     project_root: Optional[Path] = None,
+    *,
+    allow_legacy_files: bool = True,
 ) -> Dict[str, Any]:
     """任意の形式の指定 (URL, task_id, 数値) と CWD / project_hint から
     project_key, task_id, issue_number, github_repo を高精度に解決する。
@@ -1222,7 +1269,12 @@ def resolve_target_spec(
         if not resolved_key and project_hint:
             resolved_key = resolve_project_key_from_repo_or_name(project_hint, project_root)
         task_id = (
-            resolve_task_id_for_issue(resolved_key, issue_num, project_root)
+            resolve_task_id_for_issue(
+                resolved_key,
+                issue_num,
+                project_root,
+                allow_legacy_files=allow_legacy_files,
+            )
             if resolved_key
             else None
         )
@@ -1237,8 +1289,11 @@ def resolve_target_spec(
 
     # 2. タスクID形式 (例: TFG-0005) の判定
     if ISSUE_ID_PATTERN.match(target) or re.match(r"^[A-Za-z0-9_]+-\d+", target):
-        task_pkey = target.split("-")[0]
-        task_issue_num: Optional[int] = resolve_issue_number_for_task(target, project_root)
+        parsed = parse_task_id(target)
+        task_pkey = parsed[0] if parsed else target.split("-")[0].upper()
+        task_issue_num: Optional[int] = resolve_issue_number_for_task(
+            target, project_root, allow_legacy_files=allow_legacy_files
+        )
         projects = load_project_registry(project_root)
         pdata = projects.get(task_pkey, {})
         return {
@@ -1261,7 +1316,14 @@ def resolve_target_spec(
             num_pkey = resolve_project_from_cwd(cwd, project_root)
 
         num_task_id = (
-            resolve_task_id_for_issue(num_pkey, num_issue, project_root) if num_pkey else None
+            resolve_task_id_for_issue(
+                num_pkey,
+                num_issue,
+                project_root,
+                allow_legacy_files=allow_legacy_files,
+            )
+            if num_pkey
+            else None
         )
         projects = load_project_registry(project_root)
         pdata = projects.get(num_pkey, {}) if num_pkey else {}

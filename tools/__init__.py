@@ -30,6 +30,7 @@ _LEGACY_MODULE_MAP: dict[str, str] = {
     "periodic_review_runner": "tools.lifecycle.periodic_review_runner",
     "close_stale_issues": "tools.lifecycle.close_stale_issues",
     # workspace
+    "github_issues": "tools.workspace.github_issues",
     "metadata_store": "tools.workspace.metadata_store",
     "config_loader": "tools.workspace.config_loader",
     "git_utils": "tools.workspace.git_utils",
