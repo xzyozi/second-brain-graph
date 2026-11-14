@@ -181,3 +181,25 @@ def test_sync_spec_for_task(tmp_path: Path) -> None:
         body="",
     )
     assert res is None
+
+
+def test_fetch_remote_issue_uses_shared_fixture() -> None:
+    """issue_spec_manager.fetch_remote_issue が共通 github_issues フィクスチャ経由で動作すること。"""
+    from tools.github_issues import use_issue_fixture
+    from tools.issue_spec_manager import fetch_remote_issue
+
+    with use_issue_fixture(
+        [
+            {
+                "number": 191,
+                "title": "SSOT Step 1",
+                "body": "Body content",
+                "labels": [{"name": "stage:ready"}],
+                "state": "OPEN",
+            }
+        ]
+    ):
+        data = fetch_remote_issue("xzyozi/second-brain-graph", 191)
+        assert data is not None
+        assert data["number"] == 191
+        assert data["title"] == "SSOT Step 1"

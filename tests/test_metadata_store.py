@@ -708,3 +708,83 @@ def test_validate_project_consistency_multilang_validation(tmp_path: Path) -> No
         validate_project_consistency(
             "BAD-0001", "BAD", metadata_dir=meta_dir, project_root=tmp_path
         )
+
+
+def test_format_and_parse_task_id() -> None:
+    """Issue #191: 決定論的タスク ID 変換 format_task_id / parse_task_id を検証する。"""
+    import pytest
+
+    from tools.metadata_store import format_task_id, parse_task_id
+
+    assert format_task_id("tfg", 5) == "TFG-0005"
+    assert format_task_id("SBOS", 191) == "SBOS-0191"
+
+    assert parse_task_id("TFG-0005") == ("TFG", 5)
+    assert parse_task_id("tfg-0042-A") == ("TFG", 42)
+    assert parse_task_id("TFG-0000") is None
+    assert parse_task_id("invalid") is None
+
+    with pytest.raises(ValueError):
+        format_task_id("", 5)
+    with pytest.raises(ValueError):
+        format_task_id("TFG", 0)
+    with pytest.raises(ValueError):
+        format_task_id("TFG", True)
+
+
+def test_resolve_target_spec_without_legacy_files(tmp_path: Path) -> None:
+    """Issue #191: tasks.md や docs/issues が存在しなくても決定論的に ID 解決できること。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    metadata_dir.mkdir(parents=True)
+    reg_file = metadata_dir / ".project-registry.json"
+    reg_file.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "test_file_grep",
+                        "github_repo": "xzyozi/test_file_grep",
+                        "dir": "projects/test_file_grep",
+                        "meta": "metadata/projects/TFG",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    sat_dir = project_root / "projects" / "test_file_grep"
+    sat_dir.mkdir(parents=True)
+
+    # レガシーファイルが存在していても allow_legacy_files=False なら決定論的解決を強制できる
+    sat_docs = sat_dir / "docs"
+    sat_docs.mkdir(parents=True)
+    (sat_docs / "tasks.md").write_text(
+        "- [ ] [TFG-0999] 旧連番タスク (issue:#5)\n",
+        encoding="utf-8",
+    )
+
+    from tools.metadata_store import (
+        resolve_issue_number_for_task,
+        resolve_target_spec,
+        resolve_task_id_for_issue,
+    )
+
+    assert resolve_task_id_for_issue("TFG", 5, project_root) == "TFG-0999"
+    assert resolve_task_id_for_issue("TFG", 5, project_root, allow_legacy_files=False) == "TFG-0005"
+    assert resolve_issue_number_for_task("TFG-0999", project_root) == 5
+    assert resolve_issue_number_for_task("TFG-0005", project_root, allow_legacy_files=False) == 5
+
+    res = resolve_target_spec(
+        "https://github.com/xzyozi/test_file_grep/issues/5",
+        project_root=project_root,
+        allow_legacy_files=False,
+    )
+    assert res["task_id"] == "TFG-0005"
+    assert res["issue_number"] == 5
+
+    # tasks.md が全くない状態でも通常解決が決定論的に成功する
+    (sat_docs / "tasks.md").unlink()
+    res_clean = resolve_target_spec("7", cwd=sat_dir, project_root=project_root)
+    assert res_clean["task_id"] == "TFG-0007"
+    assert res_clean["issue_number"] == 7
