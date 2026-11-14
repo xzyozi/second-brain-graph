@@ -96,7 +96,7 @@ JEVを除くLLM使用箇所は、`intent → routes → profile → agy backend`
 
 👉 **[SBOS-DD-007_永続化_排他制御仕様.md](SBOS-DD-007_永続化_排他制御仕様.md)**
 
-`resolve_project_context()` は順に `project.json.target_files`、`tasks.md` 内の Python パス、衛星内の Python ファイル探索から候補を得る。Issue 詳細ファイルに Target Files がある場合はそれを優先し、実在しない Python パスはファイル名の近似で衛星内ファイルへ補正する。衛星は `.git` が存在するディレクトリでなければ無効とする。
+`resolve_project_context()` は順に `project.json.target_files`、衛星内のソースファイル自動探索（`src` / `tests` 等）から候補を得る。GitHub Issue 本文の Target Files セクションがある場合はそれを優先し、実在しないファイルパスはファイル名の近似で衛星内ファイルへ補正する。衛星は `.git` が存在するディレクトリでなければ無効とする。
 
 ## 5. 実行ライフサイクル
 

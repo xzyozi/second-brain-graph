@@ -47,12 +47,13 @@ def test_register_project_success(tmp_path: pytest.TempPathFactory) -> None:
     host_meta_dir = os.path.join(root_dir, "metadata", "projects", "MOB")
     assert not os.path.exists(host_meta_dir)
 
-    # Satellite docs/ assets MUST exist
+    # Satellite docs/project.json MUST exist, while legacy tasks.md and docs/issues/ MUST NOT be created
     assert os.path.exists(sat_dir)
     assert os.path.exists(docs_dir)
     assert os.path.exists(proj_json)
-    assert os.path.exists(tasks_md)
-    assert os.path.exists(template_md)
+    assert not os.path.exists(tasks_md)
+    assert not os.path.exists(template_md)
+    assert not os.path.exists(os.path.join(docs_dir, "issues"))
     assert os.path.exists(reg_json)
 
     # Satellite auto-tag workflow MUST exist
@@ -119,43 +120,20 @@ def test_register_project_invalid_key_raises() -> None:
         register_project(key="", name="Invalid Project")
 
 
-def test_register_project_loads_master_issue_template(tmp_path: pytest.TempPathFactory) -> None:
+def test_register_project_does_not_create_legacy_files(tmp_path: pytest.TempPathFactory) -> None:
+    """GitHub Issues SSOT 移行後、新規プロジェクト初期化時に tasks.md や docs/issues/_template.md を生成しないこと。"""
     root_dir = str(tmp_path)
-    # 1. Test fallback when master template not in root_dir
     register_project(
-        key="FALL",
-        name="Fallback App",
-        directory="projects/fallback",
+        key="SSOT",
+        name="SSOT App",
+        directory="projects/ssot_app",
         root_dir=root_dir,
     )
-    fallback_tpl = os.path.join(root_dir, "projects", "fallback", "docs", "issues", "_template.md")
-    assert os.path.exists(fallback_tpl)
-    with open(fallback_tpl, "r", encoding="utf-8") as f:
-        content = f.read()
-    assert "# [FALL-XXXX]" in content
-    assert "## 0. メタ情報 (Scope & Impact)" in content
-    assert "## 4. 編集対象ファイル (Target Files)" in content
-    assert "## 8. 完了定義 (Definition of Done)" in content
-    assert "CI・自動検査に関する運用指針" in content
-
-    # 2. Test master template loading when present
-    tpl_dir = os.path.join(root_dir, "metadata", "templates")
-    os.makedirs(tpl_dir, exist_ok=True)
-    master_file = os.path.join(tpl_dir, "issue_template.md")
-    with open(master_file, "w", encoding="utf-8") as f:
-        f.write("# [{key}-9999] Custom Master Template\n\n## Custom Section\n")
-
-    register_project(
-        key="CUST",
-        name="Custom App",
-        directory="projects/custom",
-        root_dir=root_dir,
-    )
-    custom_tpl = os.path.join(root_dir, "projects", "custom", "docs", "issues", "_template.md")
-    with open(custom_tpl, "r", encoding="utf-8") as f:
-        content2 = f.read()
-    assert "# [CUST-9999] Custom Master Template" in content2
-    assert "## Custom Section" in content2
+    docs_dir = os.path.join(root_dir, "projects", "ssot_app", "docs")
+    assert os.path.exists(os.path.join(docs_dir, "project.json"))
+    assert not os.path.exists(os.path.join(docs_dir, "tasks.md"))
+    assert not os.path.exists(os.path.join(docs_dir, "issues"))
+    assert not os.path.exists(os.path.join(docs_dir, "issues", "_template.md"))
 
 
 def test_detect_git_default_branch() -> None:

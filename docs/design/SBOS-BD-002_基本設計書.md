@@ -89,7 +89,7 @@
 ## 4. 母艦×衛星 Git 隔離モデルとの整合
 
 1. **`.gitignore` による完全遮断:** 母艦の `.gitignore` により、衛星内の差分および Git 履歴は母艦 Git から完全に隔離する。中央台帳は `metadata/.project-registry.json` に配置する。
-2. **メタデータの母艦管理:** `project.json`、`tasks.md`、Issue、`state.json`、ロックは `metadata/projects/<PROJECT_KEY>/` に置き、衛星ソースツリーを汚染しない。
+2. **メタデータ管理と GitHub Issues SSOT:** 実行状態 (`state.json`)・ロックは `metadata/projects/<PROJECT_KEY>/`、プロジェクト設定 (`project.json`) はサテライト `docs/` に配置し、タスク・Issue仕様の正本は GitHub Issues へ一元化して衛星ソースツリーを汚染しない。
 3. **コード編集エンジンのコミット制御:** agyにはcommit / pushをさせず、コード編集だけを許可する。stage、commit、push、PR作成は `done_node` が担当する。
 4. **人間承認を残す PR 運用:** 成功時に作業ブランチから PR を作成する。運用者は成果物を確認し、マージ可否を判断する。PR 失敗時には差分・ブランチを保持し停止する。
 

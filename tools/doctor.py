@@ -2,8 +2,8 @@
 """
 tools/doctor.py - プロジェクト受入態勢診断＆一発修復ツール (Issue #83)
 
-サテライトプロジェクトの受入態勢（レジストリ、project.json、tasks.md、.venv、.gitignore、
-Issue仕様書、GitHub標準ラベル）を一括診断し、--fix で不足している構成要素を自動生成・修復します。
+サテライトプロジェクトの受入態勢（レジストリ、project.json、レガシーファイル有無、.venv、.gitignore、
+GitHub Issues 疎通、GitHub標準ラベル）を一括診断し、--fix で不足している構成要素を自動生成・修復します。
 
 使用例:
   uv run python tools/doctor.py TFG
@@ -15,7 +15,6 @@ Issue仕様書、GitHub標準ラベル）を一括診断し、--fix で不足し
 import argparse
 import json
 import logging
-import re
 import shutil
 import subprocess
 import sys
@@ -202,46 +201,31 @@ def check_project_json(
         )
 
 
-def check_tasks_md(
-    sat_dir: Path,
-    project_key: str,
-    fix: bool = False,
-) -> CheckResult:
-    """3. サテライト docs/tasks.md の存在チェック"""
-    tasks_file = sat_dir / "docs" / "tasks.md"
-    if not tasks_file.exists():
-        if fix:
-            tasks_file.parent.mkdir(parents=True, exist_ok=True)
-            tasks_file.write_text(
-                f"# Tasks for {project_key}\n\n<!-- タスク一覧 -->\n", encoding="utf-8"
-            )
-            return CheckResult(
-                name="Tasks Backlog",
-                status="FIXED",
-                message="docs/tasks.md を新規作成しました。",
-            )
-        return CheckResult(
-            name="Tasks Backlog",
-            status="FAIL",
-            message="docs/tasks.md が存在しません (修復可能: --fix)",
-            fixable=True,
-        )
+def check_legacy_local_files(sat_dir: Path) -> CheckResult:
+    """3. 非推奨となったレガシーローカルファイル (docs/tasks.md, docs/issues/) の残存チェック"""
+    legacy_items: List[str] = []
+    if (sat_dir / "docs" / "tasks.md").exists():
+        legacy_items.append("docs/tasks.md")
+    issues_dir = sat_dir / "docs" / "issues"
+    if issues_dir.exists() and any(issues_dir.iterdir()):
+        legacy_items.append("docs/issues/")
 
-    try:
-        content = tasks_file.read_text(encoding="utf-8")
-        task_count = len(re.findall(rf"\[{project_key}-\d{{4}}", content))
+    if legacy_items:
         return CheckResult(
-            name="Tasks Backlog",
-            status="OK",
-            message=f"docs/tasks.md 存在 (登録タスク数: {task_count} 件)",
-        )
-    except Exception as e:
-        return CheckResult(
-            name="Tasks Backlog",
+            name="Legacy Local Files",
             status="WARN",
-            message=f"docs/tasks.md の解析中にエラーが発生しました: {e}",
+            message=(
+                f"非推奨のレガシーファイルが残存しています: {', '.join(legacy_items)} "
+                "(GitHub Issues SSOT 移行後は削除可能です)"
+            ),
             fixable=False,
         )
+
+    return CheckResult(
+        name="Legacy Local Files",
+        status="OK",
+        message="GitHub Issues SSOT 準拠 (レガシー tasks.md / docs/issues なし)",
+    )
 
 
 def check_environment(sat_dir: Path, language: str = "python", fix: bool = False) -> CheckResult:
@@ -512,54 +496,59 @@ def check_gitignore(sat_dir: Path, language: str = "python", fix: bool = False) 
     )
 
 
-def check_issue_specs(sat_dir: Path, project_key: str) -> CheckResult:
-    """6. 未完了タスクに対応する仕様書 (docs/issues/*.md) の整合性チェック"""
-    tasks_file = sat_dir / "docs" / "tasks.md"
-    if not tasks_file.exists():
+def check_github_issues_access(github_repo: Optional[str]) -> CheckResult:
+    """6. GitHub CLI / GitHub Issues (SSOT) 疎通チェック"""
+    if not github_repo:
         return CheckResult(
-            name="Issue Specifications",
-            status="OK",
-            message="tasks.md が存在しないためスキップ",
-        )
-
-    content = tasks_file.read_text(encoding="utf-8")
-    ready_tasks = re.findall(
-        rf"-\s*\[\s*\]\s*\[({project_key}-\d{{4}}(?:-[A-Z])?)\].*?stage:ready",
-        content,
-    )
-    if not ready_tasks:
-        ready_tasks = re.findall(
-            rf"-\s*\[\s*\]\s*\[({project_key}-\d{{4}}(?:-[A-Z])?)\]",
-            content,
-        )
-
-    if not ready_tasks:
-        return CheckResult(
-            name="Issue Specifications",
-            status="OK",
-            message="未完了タスクなし (または仕様書チェック対象なし)",
-        )
-
-    issues_dir = sat_dir / "docs" / "issues"
-    missing_specs = []
-    for tid in ready_tasks:
-        spec_path = issues_dir / f"{tid}.md"
-        if not spec_path.exists():
-            missing_specs.append(tid)
-
-    if missing_specs:
-        return CheckResult(
-            name="Issue Specifications",
+            name="GitHub Issues Access",
             status="WARN",
-            message=f"仕様書が未作成のタスクがあります: {', '.join(missing_specs[:5])}{'...' if len(missing_specs) > 5 else ''}",
-            fixable=False,
+            message="github_repo が未設定のため GitHub Issues 疎通確認をスキップしました。",
         )
 
-    return CheckResult(
-        name="Issue Specifications",
-        status="OK",
-        message=f"未完了タスク {len(ready_tasks)} 件の仕様書 (docs/issues/*.md) が全て存在",
-    )
+    if not shutil.which("gh"):
+        return CheckResult(
+            name="GitHub Issues Access",
+            status="WARN",
+            message="GitHub CLI (gh) がインストールされていないため疎通確認をスキップしました。",
+        )
+
+    try:
+        proc = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                github_repo,
+                "--state",
+                "all",
+                "--limit",
+                "1",
+                "--json",
+                "number",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return CheckResult(
+                name="GitHub Issues Access",
+                status="WARN",
+                message=f"GitHub Issues 疎通失敗 ({github_repo}): {proc.stderr.strip()[:100]}",
+            )
+        return CheckResult(
+            name="GitHub Issues Access",
+            status="OK",
+            message=f"GitHub Issues (SSOT) 疎通正常: {github_repo}",
+        )
+    except Exception as e:
+        return CheckResult(
+            name="GitHub Issues Access",
+            status="WARN",
+            message=f"GitHub Issues 疎通確認中にエラー: {e}",
+        )
 
 
 def check_github_labels(github_repo: Optional[str], fix: bool = False) -> CheckResult:
@@ -706,8 +695,8 @@ def diagnose_project(
     elif "language" in pdata:
         satellite_lang = pdata["language"]
 
-    # 3. docs/tasks.md チェック
-    results.append(check_tasks_md(sat_dir, project_key, fix=fix))
+    # 3. レガシーローカルファイル (docs/tasks.md / docs/issues) チェック
+    results.append(check_legacy_local_files(sat_dir))
 
     # 4. 実行環境チェック (言語別ディスパッチ)
     results.append(check_environment(sat_dir, language=satellite_lang, fix=fix))
@@ -715,8 +704,8 @@ def diagnose_project(
     # .gitignore チェック (言語別ディスパッチ)
     results.append(check_gitignore(sat_dir, language=satellite_lang, fix=fix))
 
-    # 5. Issue 仕様書チェック
-    results.append(check_issue_specs(sat_dir, project_key))
+    # 5. GitHub Issues (SSOT) 疎通チェック
+    results.append(check_github_issues_access(github_repo))
 
     # 6. GitHub ラベルチェック
     results.append(check_github_labels(github_repo, fix=fix))

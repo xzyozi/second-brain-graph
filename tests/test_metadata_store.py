@@ -14,7 +14,6 @@ from tools.metadata_store import (
     ProjectLockManager,
     TaskStatus,
     get_runtime_cache_dir,
-    mark_task_completed_in_tasks_md,
     record_execution_history,
     reset_task_state,
     resolve_project_context,
@@ -484,40 +483,6 @@ def test_reset_task_state(tmp_path: Path) -> None:
     assert reset_task_state("PROJ", "TASK-9999", state_file=non_existent) is False
 
 
-def test_mark_task_completed_in_tasks_md(tmp_path: Path) -> None:
-    """Issue #80: mark_task_completed_in_tasks_md が該当タスクを安全に完了チェックに更新することを検証する。"""
-    sat_docs = tmp_path / "docs"
-    sat_docs.mkdir(parents=True)
-    tasks_file = sat_docs / "tasks.md"
-
-    initial_content = (
-        "# Tasks\n\n"
-        "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->\n"
-        "- [ ] [CW-0038] 除外アプリ判定 <!-- priority:medium issue:#109 stage:ready -->\n"
-        "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->\n"
-    )
-    tasks_file.write_text(initial_content, encoding="utf-8")
-
-    # CW-0038 を完了に更新
-    updated = mark_task_completed_in_tasks_md(str(tmp_path), "CW-0038")
-    assert updated is True
-
-    new_content = tasks_file.read_text(encoding="utf-8")
-    lines = new_content.splitlines()
-
-    # CW-0001 は変更なし
-    assert (
-        lines[2] == "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->"
-    )
-    # CW-0038 は - [x] になり completed: が付与
-    assert lines[3].startswith("- [x] [CW-0038] 除外アプリ判定")
-    assert "completed:" in lines[3]
-    # CW-0039 は未完了のまま
-    assert (
-        lines[4] == "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->"
-    )
-
-
 def test_parse_github_issue_url() -> None:
     """GitHub Issue URL のパース処理を検証する。"""
     from tools.metadata_store import parse_github_issue_url
@@ -552,12 +517,7 @@ def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
     reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
 
     sat_dir = project_root / "projects" / "test_file_grep"
-    sat_docs = sat_dir / "docs"
-    sat_docs.mkdir(parents=True, exist_ok=True)
-
-    # tasks.md に TFG-0005 (issue:#5) を配置
-    tasks_content = "# Tasks\n- [ ] [TFG-0005] パス検証関数を追加 (issue:#5)\n"
-    (sat_docs / "tasks.md").write_text(tasks_content, encoding="utf-8")
+    sat_dir.mkdir(parents=True, exist_ok=True)
 
     from tools.metadata_store import resolve_target_spec
 
@@ -733,7 +693,7 @@ def test_format_and_parse_task_id() -> None:
 
 
 def test_resolve_target_spec_without_legacy_files(tmp_path: Path) -> None:
-    """Issue #191: tasks.md や docs/issues が存在しなくても決定論的に ID 解決できること。"""
+    """Issue #191 / #194: tasks.md や docs/issues の有無に関わらず決定論的に ID 解決できること。"""
     project_root = tmp_path
     metadata_dir = project_root / "metadata"
     metadata_dir.mkdir(parents=True)
@@ -756,7 +716,7 @@ def test_resolve_target_spec_without_legacy_files(tmp_path: Path) -> None:
     sat_dir = project_root / "projects" / "test_file_grep"
     sat_dir.mkdir(parents=True)
 
-    # レガシーファイルが存在していても allow_legacy_files=False なら決定論的解決を強制できる
+    # レガシーファイルが存在していても無視され、常に決定論的規則で解決される
     sat_docs = sat_dir / "docs"
     sat_docs.mkdir(parents=True)
     (sat_docs / "tasks.md").write_text(
@@ -770,20 +730,17 @@ def test_resolve_target_spec_without_legacy_files(tmp_path: Path) -> None:
         resolve_task_id_for_issue,
     )
 
-    assert resolve_task_id_for_issue("TFG", 5, project_root) == "TFG-0999"
-    assert resolve_task_id_for_issue("TFG", 5, project_root, allow_legacy_files=False) == "TFG-0005"
-    assert resolve_issue_number_for_task("TFG-0999", project_root) == 5
-    assert resolve_issue_number_for_task("TFG-0005", project_root, allow_legacy_files=False) == 5
+    assert resolve_task_id_for_issue("TFG", 5, project_root) == "TFG-0005"
+    assert resolve_issue_number_for_task("TFG-0005", project_root) == 5
 
     res = resolve_target_spec(
         "https://github.com/xzyozi/test_file_grep/issues/5",
         project_root=project_root,
-        allow_legacy_files=False,
     )
     assert res["task_id"] == "TFG-0005"
     assert res["issue_number"] == 5
 
-    # tasks.md が全くない状態でも通常解決が決定論的に成功する
+    # tasks.md が全くない状態でも決定論的に成功する
     (sat_docs / "tasks.md").unlink()
     res_clean = resolve_target_spec("7", cwd=sat_dir, project_root=project_root)
     assert res_clean["task_id"] == "TFG-0007"
