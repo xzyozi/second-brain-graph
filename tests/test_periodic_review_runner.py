@@ -97,7 +97,11 @@ def test_execute_satellite_review_omits_sync_tasks_md_flag(
 def test_main_status_only_does_not_create_local_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """main の --status-only 実行で tasks.md / docs/issues が作成されないことを検証する."""
+    """main の --status-only 実行で root_dir 解決および tasks.md / docs/issues 非生成を検証する."""
+    import json
+
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True)
     reg_data = {
         "projects": {
             "TEST": {
@@ -107,10 +111,11 @@ def test_main_status_only_does_not_create_local_files(
             }
         }
     }
+    (meta_dir / ".project-registry.json").write_text(json.dumps(reg_data), encoding="utf-8")
+
     sat_dir = tmp_path / "mock_sat"
     sat_dir.mkdir(parents=True)
 
-    monkeypatch.setattr(periodic_review_runner, "load_project_registry", lambda root: reg_data)
     monkeypatch.setattr(
         periodic_review_runner,
         "fetch_remote_issues",
@@ -124,7 +129,7 @@ def test_main_status_only_does_not_create_local_files(
         ],
     )
 
-    # root_dir を tmp_path に向ける
+    # root_dir を tmp_path に向ける (parents[2] == tmp_path になること)
     monkeypatch.setattr(
         Path,
         "resolve",
