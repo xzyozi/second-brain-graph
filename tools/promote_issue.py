@@ -1,7 +1,7 @@
 """promote_issue.py - Issue 壁打ち完了・stage:ready 昇格ツール.
 
 起票された stage:ideation の Issue に対し、選定された修正方針（案1/案2）を確定タスクへ展開し、
-非採用案を Non-Goals に退避した上で stage:ready に昇格させ、サテライトの tasks.md に同期する。
+非採用案を Non-Goals に退避した上で GitHub Issue を更新し stage:ready に昇格させる。
 """
 
 import argparse
@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from tools.lifecycle.issue_spec_manager import fetch_remote_issue, sync_spec_for_task
+from tools.workspace.github_issues import fetch_remote_issue
 from tools.workspace.metadata_store import resolve_target_spec
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -67,7 +67,7 @@ def resolve_project_info(
 
 
 def fetch_issue(repo: str, issue_num: int) -> Dict[str, Any]:
-    """GitHub CLI で Issue 情報を取得する（issue_spec_manager に処理を集約）."""
+    """GitHub CLI で Issue 情報を取得する（github_issues に処理を集約）."""
     data = fetch_remote_issue(repo, issue_num, fields=["number", "title", "body", "labels"])
     if data is None:
         raise RuntimeError(f"Issue #{issue_num} の取得に失敗しました ({repo})")
@@ -194,7 +194,7 @@ def generate_promoted_body(
     # 1. 起票ステータス更新
     body_updated = re.sub(
         r"-\s*\*\*起票ステータス\*\*:\s*.*",
-        "- **起票ステータス**: `stage:ready` (方針確定・tasks.md 登録完了)",
+        "- **起票ステータス**: `stage:ready` (方針確定済み)",
         body,
     )
 
@@ -245,67 +245,13 @@ def generate_promoted_body(
 
     # 5. フッターの更新
     footer_pattern = re.compile(r"---*\s*\n\*※ 本 Issue は.*?\*\s*$", re.DOTALL)
-    new_footer = f"---\n*※ 本 Issue は壁打ちにより案{selected_approach}が採用され、tasks.md に登録されて stage:ready に昇格しました。*"
+    new_footer = f"---\n*※ 本 Issue は壁打ちにより案{selected_approach}が採用され、stage:ready に昇格しました。*"
     if footer_pattern.search(body_updated):
         body_updated = footer_pattern.sub(new_footer, body_updated)
     else:
         body_updated = body_updated.rstrip() + f"\n\n{new_footer}\n"
 
     return body_updated
-
-
-def sync_to_tasks_md(
-    tasks_path: Path, project_key: str, issue_num: int, title: str, priority: str
-) -> bool:
-    """サテライトの tasks.md に新しいタスク行を追記する."""
-    if not tasks_path.exists():
-        tasks_path.parent.mkdir(parents=True, exist_ok=True)
-        tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
-
-    content = tasks_path.read_text(encoding="utf-8")
-    issue_tag = f"issue:#{issue_num}"
-
-    # 既存登録チェック & 昇格
-    if issue_tag in content:
-        lines = content.splitlines()
-        updated_lines: list[str] = []
-        promoted = False
-        for line in lines:
-            if issue_tag in line:
-                if "stage:ideation" in line:
-                    line = line.replace("stage:ideation", "stage:ready")
-                    promoted = True
-                elif "stage:ready" not in line:
-                    line = re.sub(r"(-->|\Z)", "stage:ready \\1", line)
-                    promoted = True
-            updated_lines.append(line)
-
-        if promoted:
-            updated_content = "\n".join(updated_lines) + "\n"
-            tasks_path.write_text(updated_content, encoding="utf-8")
-            logger.info(f"tasks.md の既存タスクを stage:ready に昇格しました: Issue #{issue_num}")
-            return True
-
-        logger.info(
-            f"tasks.md には既に Issue #{issue_num} が登録されており、既に stage:ready です。"
-        )
-        return False
-
-    # 最大タスク番号の検出
-    existing_nums = [int(m.group(1)) for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)]
-    next_num = max(existing_nums, default=0) + 1
-    task_id = f"{project_key}-{next_num:04d}"
-
-    new_line = f"- [ ] [{task_id}] {title} <!-- priority:{priority} {issue_tag} stage:ready -->\n"
-
-    if content.endswith("\n"):
-        updated_content = content + new_line
-    else:
-        updated_content = content + "\n" + new_line
-
-    tasks_path.write_text(updated_content, encoding="utf-8")
-    logger.info(f"tasks.md に追加しました (stage:ready): [{task_id}] {title}")
-    return True
 
 
 def promote_issue(
@@ -318,7 +264,7 @@ def promote_issue(
     dry_run: bool = False,
 ) -> bool:
     """Issue を stage:ready へ昇格するメイン関数."""
-    project_key, project_dir, repo = resolve_project_info(root_dir, target_project)
+    _project_key, _project_dir, repo = resolve_project_info(root_dir, target_project)
     if not repo:
         logger.error(f"対象リポジトリを解決できませんでした: {target_project}")
         return False
@@ -365,7 +311,6 @@ def promote_issue(
         concrete_tasks=concrete_tasks,
         target_files=target_files,
     )
-    priority, theme = extract_priority_and_theme(body, labels)
 
     if dry_run:
         print("=" * 60)
@@ -373,17 +318,9 @@ def promote_issue(
         print("=" * 60)
         print(new_body)
         print("=" * 60)
-        logger.info(f"[DRY-RUN] tasks.md 追記プレビュー: priority={priority}, theme={theme}")
-        if project_dir and project_key:
-            sync_spec_for_task(
-                project_dir=project_dir,
-                issue_num=issue_num,
-                title=title,
-                body=new_body,
-                task_id=f"{project_key}-XXXX",
-                overwrite=True,
-                dry_run=True,
-            )
+        logger.info(
+            f"[DRY-RUN] GitHub Issue #{issue_num} を stage:ready に昇格予定 (repo={repo}, title={title})"
+        )
         return True
 
     # 1. GitHub Issue の更新
@@ -417,24 +354,6 @@ def promote_issue(
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
-
-    # 2. サテライトの tasks.md への同期および docs/issues/<TASK_ID>.md の生成・更新
-    if project_dir and project_key:
-        tasks_path = project_dir / "docs" / "tasks.md"
-        sync_to_tasks_md(tasks_path, project_key, issue_num, title, priority)
-        spec_path = sync_spec_for_task(
-            project_dir=project_dir,
-            issue_num=issue_num,
-            title=title,
-            body=new_body,
-            overwrite=True,
-        )
-        if spec_path:
-            logger.info(f"仕様書を自動同期しました: docs/issues/{spec_path.name}")
-    else:
-        logger.warning(
-            "サテライトディレクトリまたはプロジェクトキーが解決できなかったため、tasks.md 同期および仕様書生成をスキップしました。"
-        )
 
     return True
 

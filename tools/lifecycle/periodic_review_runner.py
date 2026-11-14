@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""periodic_review_runner: サテライト定周期巡回＆ステータス同期＆インクリメンタル自律レビューツール.
+"""periodic_review_runner: サテライト定周期巡回＆GitHub Issues状態評価＆インクリメンタル自律レビューツール.
 
 【責務と設計原則】
-1. 差分の有無に関わらず、GitHub Issues の最新ステータス（Open/Closed/Labels）をサテライトの docs/tasks.md に同期。
+1. GitHub Issues (SSOT) の最新ステータス（Open/Closed/Labels）を取得・評価（ローカル tasks.md 同期は行わない）。
 2. 前回のレビュー完了コミットからの差分（git diff）を検知。
-3. コード変更がある場合のみ、差分ファイルを対象に run_review.py を実行し、Issue 起票と tasks.md 追記を自動実行。
+3. コード変更がある場合のみ、差分ファイルを対象に run_review.py を実行し、GitHub Issue 起票を自動実行。
 4. 最新コミットハッシュを記録・更新。
 """
 
@@ -14,13 +14,13 @@ import argparse
 import datetime
 import json
 import logging
-import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from tools.lifecycle.issue_spec_manager import self_heal_missing_specs
+from tools.workspace.github_issues import extract_stage_label
+from tools.workspace.github_issues import fetch_remote_issues as _fetch_remote_issues_ssot
 
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("periodic_reviewer")
@@ -47,7 +47,7 @@ CODE_EXTENSIONS = {
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """CLI 引数をパースする."""
     parser = argparse.ArgumentParser(
-        description="サテライト定周期巡回＆ステータス同期＆インクリメンタル自律レビューツール"
+        description="サテライト定周期巡回＆GitHub Issues状態評価＆インクリメンタル自律レビューツール"
     )
     parser.add_argument(
         "--target",
@@ -68,7 +68,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--status-only",
         action="store_true",
-        help="コード差分レビューは行わず、GitHub Issue と tasks.md のステータス同期のみを実行する",
+        help="コード差分レビューは行わず、GitHub Issues のステータス取得・評価のみを実行する",
     )
     parser.add_argument(
         "--timeout",
@@ -79,7 +79,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="実際の Issue 起票や tasks.md 書き換えを行わずプレビューする",
+        help="実際の Issue 起票やレビュー状態キャッシュの更新を行わずプレビューする",
     )
     parser.add_argument(
         "--verbose",
@@ -172,164 +172,47 @@ def detect_code_diff_files(repo_dir: Path, last_commit: str, current_head: str) 
 
 def fetch_remote_issues(repo: str) -> list[dict[str, Any]]:
     """GitHub から全 Issue（Open/Closed）を取得する."""
-    try:
-        res = subprocess.run(
-            [
-                "gh",
-                "issue",
-                "list",
-                "--repo",
-                repo,
-                "--state",
-                "all",
-                "--limit",
-                "200",
-                "--json",
-                "number,title,state,labels,body",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            encoding="utf-8",
-        )
-        return json.loads(res.stdout)
-    except Exception as e:
-        logger.warning(f"GitHub Issues 取得失敗 ({repo}): {e}")
-        return []
+    return _fetch_remote_issues_ssot(
+        repo,
+        state="all",
+        limit=200,
+        fields=["number", "title", "state", "labels", "body"],
+    )
 
 
-def sync_issue_statuses_to_tasks_md(
-    tasks_path: Path,
-    repo: str,
-    project_key: str,
-    dry_run: bool = False,
-    sync_specs: bool = True,
-) -> tuple[int, int]:
-    """GitHub Issues の最新ステータスを tasks.md に同期する (更新件数, 新規追記件数).
-
-    - Issue が CLOSED の場合: [ ] または [/] を [x] (完了) に更新
-    - Issue が OPEN で stage:ready の場合: stage タグを更新
-    - tasks.md に未登録の既存 Issue があれば、バックログとして自動追記
-    """
-    if not tasks_path.exists():
-        tasks_path.parent.mkdir(parents=True, exist_ok=True)
-        tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
-
+def evaluate_remote_issue_statuses(repo: str) -> dict[str, int]:
+    """GitHub Issues (SSOT) の最新ステータス・stage ラベルを集計して評価する."""
     issues = fetch_remote_issues(repo)
-    if not issues:
-        return 0, 0
-
-    issue_map = {iss["number"]: iss for iss in issues}
-    content = tasks_path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-
-    updated_count = 0
-    seen_issue_nums: set[int] = set()
-    new_lines: list[str] = []
-
-    today = datetime.date.today().isoformat()
-
-    for line in lines:
-        m = re.search(r"issue:#(\d+)", line)
-        if not m:
-            new_lines.append(line)
-            continue
-
-        issue_num = int(m.group(1))
-        seen_issue_nums.add(issue_num)
-        gh_issue = issue_map.get(issue_num)
-
-        if not gh_issue:
-            new_lines.append(line)
-            continue
-
-        state = gh_issue.get("state", "OPEN")
-        label_names = [lbl["name"] for lbl in gh_issue.get("labels", [])]
-
-        new_line = line
-        # 1. CLOSED 判定
+    summary: dict[str, int] = {
+        "total": len(issues),
+        "open": 0,
+        "closed": 0,
+        "stage:ideation": 0,
+        "stage:ready": 0,
+        "stage:in-progress": 0,
+        "stage:done": 0,
+        "other_stage": 0,
+    }
+    for issue in issues:
+        state = str(issue.get("state") or "OPEN").upper()
         if state == "CLOSED":
-            if line.startswith("- [ ]") or line.startswith("- [/]"):
-                new_line = "- [x]" + line[5:]
-                if "completed:" not in new_line:
-                    new_line = re.sub(r"(-->|\Z)", f"completed:{today} \\1", new_line)
-                updated_count += 1
-                logger.info(f"tasks.md 完了反映: Issue #{issue_num} -> [x]")
-
-        # 2. OPEN かつ stage:ready 判定
-        elif state == "OPEN":
-            if "stage:ready" in label_names and "stage:ideation" in new_line:
-                new_line = new_line.replace("stage:ideation", "stage:ready")
-                updated_count += 1
-                logger.info(f"tasks.md ステータス昇格反映: Issue #{issue_num} -> stage:ready")
-            elif "stage:in-progress" in label_names and line.startswith("- [ ]"):
-                new_line = "- [/]" + line[5:]
-                updated_count += 1
-                logger.info(f"tasks.md 進行中反映: Issue #{issue_num} -> [/]")
-
-        new_lines.append(new_line)
-
-    # 3. 未登録の既存 Issue を tasks.md にバックログとして追記
-    existing_nums = [int(m.group(1)) for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)]
-    next_task_num = max(existing_nums, default=0) + 1
-    added_count = 0
-
-    # Issue 番号の昇順で追記
-    for iss in sorted(issues, key=lambda x: x["number"]):
-        num = iss["number"]
-        if num in seen_issue_nums:
-            continue
-
-        label_names = [lbl["name"] for lbl in iss.get("labels", [])]
-        if "stage:ready" not in label_names:
-            logger.info(f"tasks.md 同期対象外（stage:ready未付与）: Issue #{num}")
-            continue
-
-        # 新規追記
-        task_id = f"{project_key}-{next_task_num:04d}"
-        next_task_num += 1
-
-        state = iss.get("state", "OPEN")
-        box = "[x]" if state == "CLOSED" else "[ ]"
-        stage_tag = "stage:ready"
-        theme_tag = next((lbl for lbl in label_names if lbl.startswith("theme:")), "theme:security")
-        priority = "high" if "priority:high" in label_names else "medium"
-
-        meta_parts = [f"priority:{priority}", f"issue:#{num}", theme_tag, stage_tag]
-        if state == "CLOSED":
-            meta_parts.append(f"completed:{today}")
+            summary["closed"] += 1
         else:
-            meta_parts.append(f"added:{today}")
+            summary["open"] += 1
 
-        entry_line = f"- {box} [{task_id}] {iss['title']} <!-- {' '.join(meta_parts)} -->"
-        new_lines.append(entry_line)
-        added_count += 1
-        logger.info(f"tasks.md 過去Issue自動同期: [{task_id}] #{num} {iss['title']}")
+        stage = extract_stage_label(issue)
+        if stage in summary:
+            summary[stage] += 1
+        elif stage:
+            summary["other_stage"] += 1
 
-    if (updated_count > 0 or added_count > 0) and not dry_run:
-        updated_content = "\n".join(new_lines)
-        if not updated_content.endswith("\n"):
-            updated_content += "\n"
-        tasks_path.write_text(updated_content, encoding="utf-8")
-        logger.info(
-            f"tasks.md を更新しました ({tasks_path.name}): 更新 {updated_count} 件, 新規追加 {added_count} 件"
-        )
-    elif dry_run and (updated_count > 0 or added_count > 0):
-        logger.info(
-            f"[DRY-RUN] tasks.md 更新予定: 更新 {updated_count} 件, 新規追加 {added_count} 件"
-        )
-
-    # 4. 欠落している docs/issues/<TASK_ID>.md 仕様書の自動自己修復
-    if sync_specs:
-        sat_dir = tasks_path.parent.parent
-        self_heal_missing_specs(
-            project_dir=sat_dir,
-            repo=repo,
-            issues=issues,
-            dry_run=dry_run,
-        )
-
-    return updated_count, added_count
+    logger.info(
+        f"[{repo}] GitHub Issues 状態評価 (SSOT): total={summary['total']}, "
+        f"open={summary['open']}, closed={summary['closed']}, "
+        f"ready={summary['stage:ready']}, in_progress={summary['stage:in-progress']}, "
+        f"ideation={summary['stage:ideation']}, done={summary['stage:done']}"
+    )
+    return summary
 
 
 def execute_satellite_review(
@@ -340,7 +223,7 @@ def execute_satellite_review(
     timeout: int,
     dry_run: bool,
 ) -> bool:
-    """run_review.py を呼び出して自律レビューと tasks.md 同期を実行する."""
+    """run_review.py を呼び出して自律レビューと GitHub Issue 起票を実行する."""
     reviewer_script = (
         root_dir
         / ".gemini"
@@ -357,7 +240,6 @@ def execute_satellite_review(
         target_name,
         "--theme",
         theme,
-        "--sync-tasks-md",
         "--timeout",
         str(timeout),
     ]
@@ -402,11 +284,9 @@ def process_satellite(
 
     logger.info(f"\n{'=' * 50}\nサテライト処理開始: {sat_name} (KEY: {proj_key})\n{'=' * 50}")
 
-    tasks_path = sat_dir / "docs" / "tasks.md"
-
-    # Step 1: Issue ステータスの同期（コード差分の有無に関わらず実行）
+    # Step 1: GitHub Issues 状態の取得・評価（コード差分の有無に関わらず実行、ローカルファイル書き込みなし）
     if repo:
-        sync_issue_statuses_to_tasks_md(tasks_path, repo, proj_key, dry_run=dry_run)
+        evaluate_remote_issue_statuses(repo)
 
     if status_only:
         logger.info(f"[{sat_name}] --status-only 指定のため、レビュー処理はスキップします。")

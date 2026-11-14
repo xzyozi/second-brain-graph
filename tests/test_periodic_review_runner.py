@@ -25,110 +25,79 @@ def test_detect_code_diff_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result == ["config.json", "src/app.py", "src/utils.ts"]
 
 
-def test_sync_issue_statuses_to_tasks_md_closed_and_ready(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """GitHub Issue のクローズおよび昇格が tasks.md に反映されることを検証する."""
-    tasks_path = tmp_path / "docs" / "tasks.md"
-    tasks_path.parent.mkdir(parents=True)
-    initial_content = (
-        "# Tasks\n\n"
-        "- [ ] [TEST-0001] Task 1 <!-- priority:high issue:#101 stage:ideation -->\n"
-        "- [ ] [TEST-0002] Task 2 <!-- priority:medium issue:#102 stage:ideation -->\n"
-    )
-    tasks_path.write_text(initial_content, encoding="utf-8")
-
-    mock_issues = [
-        {"number": 101, "title": "Task 1", "state": "CLOSED", "labels": []},
-        {"number": 102, "title": "Task 2", "state": "OPEN", "labels": [{"name": "stage:ready"}]},
-    ]
-    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
-
-    updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
-        tasks_path, "mock/repo", "TEST", dry_run=False
-    )
-    assert updated == 2
-    assert added == 0
-
-    content = tasks_path.read_text(encoding="utf-8")
-    # Issue 101 はクローズされて [x] に更新
-    assert "- [x] [TEST-0001] Task 1" in content
-    assert "completed:" in content
-    # Issue 102 は stage:ready に昇格
-    assert "- [ ] [TEST-0002] Task 2 <!-- priority:medium issue:#102 stage:ready -->" in content
-
-
-def test_sync_issue_statuses_to_tasks_md_in_progress(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """stage:in-progress ラベル時に [/] へ更新されることを検証する。"""
-    tasks_path = tmp_path / "docs" / "tasks.md"
-    tasks_path.parent.mkdir(parents=True)
-    tasks_path.write_text(
-        "# Tasks\n\n- [ ] [TEST-0001] Task 1 <!-- priority:high issue:#101 stage:ready -->\n",
-        encoding="utf-8",
-    )
-
+def test_evaluate_remote_issue_statuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GitHub Issues の状態・stage ラベル集計が正しく動作することを検証する."""
     mock_issues = [
         {
             "number": 101,
             "title": "Task 1",
+            "state": "CLOSED",
+            "labels": [{"name": "stage:done"}],
+        },
+        {
+            "number": 102,
+            "title": "Task 2",
+            "state": "OPEN",
+            "labels": [{"name": "stage:ready"}],
+        },
+        {
+            "number": 103,
+            "title": "Task 3",
             "state": "OPEN",
             "labels": [{"name": "stage:in-progress"}],
         },
+        {
+            "number": 104,
+            "title": "Task 4",
+            "state": "OPEN",
+            "labels": [{"name": "stage:ideation"}],
+        },
     ]
     monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
 
-    updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
-        tasks_path, "mock/repo", "TEST", dry_run=False
-    )
-    assert updated == 1
-    assert added == 0
+    summary = periodic_review_runner.evaluate_remote_issue_statuses("mock/repo")
+    assert summary["total"] == 4
+    assert summary["open"] == 3
+    assert summary["closed"] == 1
+    assert summary["stage:ready"] == 1
+    assert summary["stage:in-progress"] == 1
+    assert summary["stage:ideation"] == 1
+    assert summary["stage:done"] == 1
 
-    content = tasks_path.read_text(encoding="utf-8")
-    assert "- [/] [TEST-0001] Task 1" in content
 
-
-def test_sync_issue_statuses_to_tasks_md_import_new_issues(
+def test_execute_satellite_review_omits_sync_tasks_md_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """tasks.md に未登録の Issue が自動インポートされることを検証する."""
-    tasks_path = tmp_path / "docs" / "tasks.md"
-    tasks_path.parent.mkdir(parents=True)
-    tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
+    """execute_satellite_review が run_review.py へ --sync-tasks-md を渡さないことを検証する."""
+    import subprocess
 
-    mock_issues = [
-        {
-            "number": 105,
-            "title": "New Issue A",
-            "state": "OPEN",
-            "labels": [{"name": "stage:ready"}, {"name": "theme:security"}],
-        },
-        {
-            "number": 106,
-            "title": "New Issue B",
-            "state": "CLOSED",
-            "labels": [{"name": "theme:edge_cases"}, {"name": "stage:ideation"}],
-        },
-    ]
-    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: mock_issues)
+    captured_cmds: list[list[str]] = []
 
-    updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
-        tasks_path, "mock/repo", "TEST", dry_run=False
+    def mock_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
+    ok = periodic_review_runner.execute_satellite_review(
+        root_dir=tmp_path,
+        target_name="mock_sat",
+        theme="security",
+        files=["src/app.py"],
+        timeout=120,
+        dry_run=True,
     )
-    assert updated == 0
-    assert added == 1
-
-    content = tasks_path.read_text(encoding="utf-8")
-    assert (
-        "- [ ] [TEST-0001] New Issue A <!-- priority:medium issue:#105 theme:security stage:ready"
-        in content
-    )
-    assert "New Issue B" not in content
+    assert ok is True
+    assert len(captured_cmds) == 1
+    assert "--sync-tasks-md" not in captured_cmds[0]
+    assert "--target" in captured_cmds[0]
+    assert "--files" in captured_cmds[0]
 
 
-def test_main_status_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """main の --status-only 実行検証."""
+def test_main_status_only_does_not_create_local_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """main の --status-only 実行で tasks.md / docs/issues が作成されないことを検証する."""
     reg_data = {
         "projects": {
             "TEST": {
@@ -140,57 +109,33 @@ def test_main_status_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     }
     sat_dir = tmp_path / "mock_sat"
     sat_dir.mkdir(parents=True)
-    tasks_path = sat_dir / "docs" / "tasks.md"
-    tasks_path.parent.mkdir(parents=True)
-    tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
 
     monkeypatch.setattr(periodic_review_runner, "load_project_registry", lambda root: reg_data)
-    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: [])
+    monkeypatch.setattr(
+        periodic_review_runner,
+        "fetch_remote_issues",
+        lambda repo: [
+            {
+                "number": 101,
+                "title": "Ready Task",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}],
+            }
+        ],
+    )
 
     # root_dir を tmp_path に向ける
     monkeypatch.setattr(
         Path,
         "resolve",
-        lambda p: tmp_path / "tools" / "dummy.py" if "periodic_review_runner.py" in str(p) else p,
+        lambda p: (
+            tmp_path / "tools" / "lifecycle" / "dummy.py"
+            if "periodic_review_runner.py" in str(p)
+            else p
+        ),
     )
 
-    exit_code = periodic_review_runner.main(["--status-only", "--dry-run"])
+    exit_code = periodic_review_runner.main(["--status-only"])
     assert exit_code == 0
-
-
-def test_sync_issue_statuses_self_heals_missing_specs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    sat_dir = tmp_path / "projects" / "test_proj"
-    docs_dir = sat_dir / "docs"
-    docs_dir.mkdir(parents=True)
-    tasks_path = docs_dir / "tasks.md"
-    tasks_path.write_text(
-        "- [ ] [TP-0001] タスク1 <!-- priority:high issue:#101 stage:ready -->\n",
-        encoding="utf-8",
-    )
-
-    issues = [
-        {
-            "number": 101,
-            "title": "タスク1",
-            "state": "OPEN",
-            "labels": [{"name": "stage:ready"}],
-            "body": "## 1. 概要\nタスク1の詳細仕様",
-        }
-    ]
-    monkeypatch.setattr(periodic_review_runner, "fetch_remote_issues", lambda repo: issues)
-
-    updated, added = periodic_review_runner.sync_issue_statuses_to_tasks_md(
-        tasks_path=tasks_path,
-        repo="xzyozi/test_proj",
-        project_key="TP",
-        dry_run=False,
-        sync_specs=True,
-    )
-
-    spec_file = docs_dir / "issues" / "TP-0001.md"
-    assert spec_file.exists()
-    content = spec_file.read_text(encoding="utf-8")
-    assert "# [TP-0001] タスク1" in content
-    assert "タスク1の詳細仕様" in content
+    assert not (sat_dir / "docs" / "tasks.md").exists()
+    assert not (sat_dir / "docs" / "issues").exists()
