@@ -10,6 +10,7 @@ import pytest
 
 from tools.workspace.github_issues import (
     FIXTURE_ENV_VAR,
+    extract_issue_scoring_metadata,
     extract_label_names,
     extract_stage_label,
     fetch_remote_issue,
@@ -192,3 +193,33 @@ def test_fetch_remote_via_gh_cli() -> None:
         cmd = mock_run.call_args[0][0]
         assert "--label" in cmd
         assert "stage:ready" in cmd
+
+
+def test_extract_issue_scoring_metadata() -> None:
+    issue = {
+        "number": 5,
+        "state": "OPEN",
+        "createdAt": "2026-10-01T12:34:56Z",
+        "labels": [{"name": "stage:ready"}, {"name": "priority:high"}, {"name": "estimate:4h"}],
+        "body": "Depends on: #1, TFG-0002\n<!-- blockedby:TFG-0003 -->\n",
+    }
+    meta = extract_issue_scoring_metadata(issue, project_key="TFG")
+    assert meta["priority"] == "high"
+    assert meta["estimate"] == "4h"
+    assert meta["added"] == "2026-10-01"
+    assert meta["stage"] == "stage:ready"
+    assert meta["completed"] is False
+    assert meta["on_hold"] is False
+    assert meta["blockedby"] == ["TFG-0003", "TFG-0001", "TFG-0002"]
+
+    closed_issue = {
+        "number": 6,
+        "state": "CLOSED",
+        "labels": [{"name": "on-hold"}],
+        "body": "<!-- priority:low added:2026-09-15 -->",
+    }
+    meta2 = extract_issue_scoring_metadata(closed_issue, project_key="TFG")
+    assert meta2["priority"] == "low"
+    assert meta2["added"] == "2026-09-15"
+    assert meta2["completed"] is True
+    assert meta2["on_hold"] is True

@@ -860,9 +860,16 @@ def resolve_project_context(
 
         rel_dir = proj_info.get("dir")
         meta_dir = proj_info.get("meta")
+        github_repo = proj_info.get("github_repo", "")
 
         if not rel_dir:
-            return {"cwd": None, "target_files": [], "base_branch": "develop", "valid": False}
+            return {
+                "cwd": None,
+                "target_files": [],
+                "base_branch": "develop",
+                "github_repo": github_repo,
+                "valid": False,
+            }
 
         cwd_path = project_root / rel_dir
         cwd = str(cwd_path)
@@ -1007,6 +1014,7 @@ def resolve_project_context(
             "test_command": test_command,
             "test_runner": test_runner,
             "watch_ci": watch_ci,
+            "github_repo": github_repo,
             "valid": True,
         }
     except Exception as e:
@@ -1020,6 +1028,7 @@ def resolve_project_context(
             "language": "python",
             "test_command": "",
             "test_runner": "",
+            "github_repo": "",
             "valid": False,
         }
 

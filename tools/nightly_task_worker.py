@@ -2,7 +2,7 @@
 """tools/nightly_task_worker.py - 自律夜間バッチ（Nightly Task Worker）スクリプト.
 
 外部 TOML 設定ファイル (config/nightly_worker.toml) を読み込み、
-サテライトの tasks.md から stage:ready の未着手タスクを優先度順にスキャンし、
+GitHub Issues から stage:ready の未着手タスクを優先度順にスキャンし、
 設定された上限件数（デフォルト: 1件）のみを安全に自律実装パイプライン (run_task.py) へ投入します。
 
 OSスケジューラ（Windowsタスクスケジューラやcron）に依存せず、
@@ -29,6 +29,13 @@ from typing import Any
 
 import tomllib
 
+from tools.workspace.github_issues import (
+    extract_issue_scoring_metadata,
+    extract_label_names,
+    fetch_remote_issues,
+)
+from tools.workspace.metadata_store import format_task_id
+
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("nightly_worker")
 handler = logging.StreamHandler(sys.stderr)
@@ -52,7 +59,7 @@ class CandidateTask:
     score: float
     stage: str
     issue_num: int | None
-    line_raw: str
+    line_raw: str = ""
 
 
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
@@ -141,80 +148,80 @@ def load_project_registry(root_dir: Path) -> dict[str, Any]:
         return {}
 
 
-def parse_tasks_md_candidates(
-    tasks_path: Path,
+def collect_issue_candidates(
+    repo: str,
     project_key: str,
     project_name: str,
     satellite_dir: Path,
     require_label: str = "stage:ready",
     skip_blocked: bool = True,
+    today: datetime.date | None = None,
 ) -> list[CandidateTask]:
-    """サテライトの tasks.md から自律実装候補タスクを抽出する."""
-    if not tasks_path.is_file():
+    """GitHub Issues から自律実装候補タスクを収集する."""
+    if not repo:
+        logger.warning(
+            f"github_repo が未設定のため候補収集をスキップします (project={project_key})"
+        )
         return []
 
-    content = tasks_path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-
-    task_pattern = re.compile(
-        r"^-\s+\[(?P<status>[ x/])\]\s+\[(?P<id>[A-Z0-9_-]+)\]\s+(?P<title>.*?)(?:\s+<!--(?P<comment>.*?)-->)?$"
+    raw_issues = fetch_remote_issues(
+        repo,
+        state="all",
+        project_key=project_key,
+        normalize=True,
     )
+    if not raw_issues:
+        return []
 
-    candidates: list[CandidateTask] = []
+    ref_today = today or datetime.date.today()
     priority_weights = {"critical": 100.0, "high": 75.0, "medium": 50.0, "low": 25.0}
 
-    for line in lines:
-        match = task_pattern.match(line.strip())
-        if not match:
+    parsed_entries: list[tuple[dict[str, Any], dict[str, Any], str, int]] = []
+    completed_map: dict[str, bool] = {}
+
+    for iss in raw_issues:
+        raw_num = iss.get("number")
+        if isinstance(raw_num, bool) or not isinstance(raw_num, int) or raw_num <= 0:
+            continue
+        task_id = str(iss.get("task_id") or format_task_id(project_key, raw_num))
+        meta = extract_issue_scoring_metadata(iss, project_key=project_key)
+        completed_map[task_id] = bool(meta["completed"])
+        parsed_entries.append((iss, meta, task_id, raw_num))
+
+    candidates: list[CandidateTask] = []
+    req_lbl_norm = require_label.strip().lower() if require_label else ""
+
+    for iss, meta, task_id, issue_num in parsed_entries:
+        if meta["completed"] or meta["on_hold"]:
             continue
 
-        status = match.group("status")
-        # 未着手 [ ] のみ対象 ([x] 完了や [/] 進行中は除外)
-        if status != " ":
+        label_names_lower = {lbl.strip().lower() for lbl in extract_label_names(iss)}
+        if "stage:in-progress" in label_names_lower:
             continue
 
-        task_id = match.group("id")
-        title = match.group("title").strip()
-        comment = match.group("comment") or ""
+        stage = str(meta.get("stage") or "stage:ideation")
+        if req_lbl_norm:
+            stage_norm = stage.lower()
+            if req_lbl_norm not in label_names_lower and stage_norm != req_lbl_norm:
+                continue
 
-        # コメントメタデータをパース (例: priority:high issue:#109 theme:security stage:ready added:2026-09-29)
-        meta: dict[str, str] = {}
-        for token in comment.strip().split():
-            if ":" in token:
-                k, v = token.split(":", 1)
-                meta[k.strip().lower()] = v.strip()
+        if skip_blocked and meta["blockedby"]:
+            uncompleted = [b for b in meta["blockedby"] if not completed_map.get(b, False)]
+            if uncompleted:
+                continue
 
-        stage = meta.get("stage", "ideation")
-        # require_label のチェック (stage:ready のみ対象)
-        if (
-            require_label
-            and stage != require_label.replace("stage:", "")
-            and stage != require_label
-        ):
-            continue
-
-        # ブロッカーチェック
-        if skip_blocked and "blockedby" in meta:
-            # 他タスク依存がある場合は安全側に倒してスキップ
-            continue
-
-        priority = meta.get("priority", "medium").lower()
+        priority = str(meta.get("priority") or "medium").lower()
         score = priority_weights.get(priority, 50.0)
 
-        # 登録日による微小加算 (古いものほど優先度微増)
-        if "added" in meta:
+        added_str = meta.get("added")
+        if isinstance(added_str, str) and added_str:
             try:
-                added_date = datetime.date.fromisoformat(meta["added"])
-                days_old = (datetime.date.today() - added_date).days
-                score += min(days_old * 0.5, 10.0)
-            except Exception:
+                added_date = datetime.date.fromisoformat(added_str)
+                days_old = (ref_today - added_date).days
+                if days_old > 0:
+                    score += min(days_old * 0.5, 10.0)
+            except ValueError:
                 pass
-
-        issue_num: int | None = None
-        if "issue" in meta:
-            clean_issue = meta["issue"].replace("#", "")
-            if clean_issue.isdigit():
-                issue_num = int(clean_issue)
 
         candidates.append(
             CandidateTask(
@@ -222,12 +229,12 @@ def parse_tasks_md_candidates(
                 project_key=project_key,
                 project_name=project_name,
                 satellite_dir=satellite_dir,
-                title=title,
+                title=str(iss.get("title") or "").strip(),
                 priority=priority,
                 score=score,
-                stage=stage,
+                stage=stage.removeprefix("stage:"),
                 issue_num=issue_num,
-                line_raw=line,
+                line_raw=str(iss.get("url") or f"#{issue_num}"),
             )
         )
 
@@ -511,16 +518,16 @@ def run_batch_cycle(
     require_label = task_sel_cfg.get("require_label", "stage:ready")
     skip_blocked = task_sel_cfg.get("skip_blocked", True)
 
-    # 5. 全対象サテライトから候補タスクを収集
+    # 5. 全対象サテライトから候補タスクを収集 (GitHub Issues SSOT)
     all_candidates: list[CandidateTask] = []
     for proj_key, proj_info in selected_projects.items():
         sat_name = proj_info.get("name", "")
         sat_rel_dir = proj_info.get("dir", "")
         sat_dir = root_dir / sat_rel_dir
-        tasks_path = sat_dir / "docs" / "tasks.md"
+        github_repo = str(proj_info.get("github_repo") or "").strip()
 
-        candidates = parse_tasks_md_candidates(
-            tasks_path=tasks_path,
+        candidates = collect_issue_candidates(
+            repo=github_repo,
             project_key=proj_key,
             project_name=sat_name,
             satellite_dir=sat_dir,

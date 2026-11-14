@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -33,7 +34,16 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 FIXTURE_ENV_VAR = "SBOS_GITHUB_ISSUES_FIXTURE"
-DEFAULT_ISSUE_FIELDS: tuple[str, ...] = ("number", "title", "body", "labels", "state", "url")
+DEFAULT_ISSUE_FIELDS: tuple[str, ...] = (
+    "number",
+    "title",
+    "body",
+    "labels",
+    "state",
+    "url",
+    "createdAt",
+    "updatedAt",
+)
 
 FixturePayload = list[dict[str, Any]] | dict[str, list[dict[str, Any]]] | None
 _IN_MEMORY_FIXTURE: FixturePayload = None
@@ -161,6 +171,141 @@ def normalize_issue_record(
         normalized["task_id"] = raw.get("task_id")
 
     return normalized
+
+
+_PRIORITY_VALUES = frozenset({"critical", "urgent", "high", "medium", "low"})
+
+
+def _normalize_blocker_ref(token: str, project_key: str | None) -> str | None:
+    """ブロッカー指定トークン (#123, 123, TFG-0001) を正規化する."""
+    cleaned = token.strip().strip(",.;:)>")
+    if not cleaned:
+        return None
+    if re.fullmatch(r"#?\d+", cleaned):
+        num = int(cleaned.lstrip("#"))
+        if num > 0 and project_key:
+            try:
+                return format_task_id(project_key, num)
+            except ValueError:
+                return f"#{num}"
+        return f"#{num}" if num > 0 else None
+    if re.fullmatch(r"[A-Za-z0-9_]+-\d+(?:-[A-Za-z])?", cleaned):
+        parts = cleaned.split("-")
+        parts[0] = parts[0].upper()
+        if len(parts) == 2 and parts[1].isdigit():
+            return f"{parts[0]}-{int(parts[1]):04d}"
+        return "-".join(parts)
+    return cleaned
+
+
+def extract_issue_scoring_metadata(
+    issue: dict[str, Any],
+    project_key: str | None = None,
+) -> dict[str, Any]:
+    """GitHub Issue のラベル・本文・作成日時から優先度評価メタデータを抽出する."""
+    label_names = extract_label_names(issue)
+    body = str(issue.get("body") or "")
+
+    # 1. priority (ラベル優先 -> 本文コメント/記述 -> デフォルト medium)
+    priority = "medium"
+    found_priority = False
+    for lbl in label_names:
+        low = lbl.strip().lower()
+        if low.startswith("priority:"):
+            val = low.split(":", 1)[1].strip()
+            if val in _PRIORITY_VALUES:
+                priority = val
+                found_priority = True
+                break
+        elif low in _PRIORITY_VALUES:
+            priority = low
+            found_priority = True
+            break
+
+    if not found_priority:
+        m_prio = re.search(
+            r"(?:priority|優先度)\s*[:：]\s*(critical|urgent|high|medium|low)\b",
+            body,
+            re.IGNORECASE,
+        )
+        if m_prio:
+            priority = m_prio.group(1).lower()
+
+    # 2. estimate (ラベル優先 -> 本文コメント)
+    estimate: str | None = None
+    for lbl in label_names:
+        low = lbl.strip().lower()
+        if low.startswith("estimate:"):
+            est_val = lbl.split(":", 1)[1].strip()
+            if est_val:
+                estimate = est_val
+                break
+    if estimate is None:
+        m_est = re.search(r"\bestimate\s*:\s*([A-Za-z0-9_.]+)", body, re.IGNORECASE)
+        if m_est:
+            estimate = m_est.group(1).strip()
+
+    # 3. added (本文コメント -> createdAt/created_at 先頭 YYYY-MM-DD)
+    added: str | None = None
+    m_added = re.search(r"\badded\s*:\s*(\d{4}-\d{2}-\d{2})\b", body, re.IGNORECASE)
+    if m_added:
+        added = m_added.group(1)
+    else:
+        created_raw = str(issue.get("createdAt") or issue.get("created_at") or "").strip()
+        m_created = re.match(r"^(\d{4}-\d{2}-\d{2})", created_raw)
+        if m_created:
+            added = m_created.group(1)
+
+    # 4. blockedby (blockedby:... コメントおよび Depends on / Blocked by 行)
+    blockedby: list[str] = []
+    seen_blockers: set[str] = set()
+
+    def _add_blocker(tok: str) -> None:
+        norm = _normalize_blocker_ref(tok, project_key)
+        if norm and norm not in seen_blockers:
+            seen_blockers.add(norm)
+            blockedby.append(norm)
+
+    for m_blk in re.finditer(r"\bblockedby\s*:\s*([^\s>]+)", body, re.IGNORECASE):
+        raw_list = m_blk.group(1).replace("-->", "")
+        for part in raw_list.split(","):
+            _add_blocker(part)
+
+    for line in body.splitlines():
+        m_dep = re.match(
+            r"^\s*(?:Depends\s+on|Blocked\s+by|依存)\s*[:：]\s*(.+)$",
+            line,
+            re.IGNORECASE,
+        )
+        if not m_dep:
+            continue
+        dep_text = m_dep.group(1)
+        for m_ref in re.finditer(r"([A-Za-z0-9_]+-\d+(?:-[A-Za-z])?|#\d+)", dep_text):
+            _add_blocker(m_ref.group(1))
+
+    # 5. stage / completed
+    stage = extract_stage_label(issue)
+    if stage is None:
+        m_stage = re.search(r"\bstage\s*:\s*([A-Za-z0-9:_-]+)", body, re.IGNORECASE)
+        if m_stage:
+            raw_stage = m_stage.group(1).strip().lower()
+            stage = raw_stage if raw_stage.startswith("stage:") else f"stage:{raw_stage}"
+        elif re.search(r"\bstage\s*:\s*draft\b", body, re.IGNORECASE):
+            stage = "draft"
+
+    state_str = str(issue.get("state") or "OPEN").upper()
+    completed = state_str == "CLOSED" or (stage is not None and stage.lower() == "stage:done")
+    on_hold = any(lbl.strip().lower() == "on-hold" for lbl in label_names)
+
+    return {
+        "priority": priority,
+        "estimate": estimate,
+        "added": added,
+        "blockedby": blockedby,
+        "stage": stage,
+        "completed": completed,
+        "on_hold": on_hold,
+    }
 
 
 def _finalize_issue(

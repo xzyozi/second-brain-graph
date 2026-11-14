@@ -507,12 +507,6 @@ def test_run_task_main_resolves_url_and_cwd(tmp_path: Path) -> None:
     }
     (metadata_dir / ".project-registry.json").write_text(json.dumps(reg_data), encoding="utf-8")
 
-    sat_docs = sat_dir / "docs"
-    sat_docs.mkdir(parents=True, exist_ok=True)
-    (sat_docs / "tasks.md").write_text(
-        "- [ ] [TFG-0005] パス検証関数を追加 (issue:#5)\n", encoding="utf-8"
-    )
-
     test_args = ["run_task.py", "https://github.com/xzyozi/test_file_grep/issues/5"]
 
     with (
