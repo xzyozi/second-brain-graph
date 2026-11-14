@@ -4,7 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -742,7 +742,6 @@ def test_execute_issue_aider_timeout_flow_fully_isolated(
     # Setup project registry & metadata
     meta_tfg = metadata_dir / "projects" / "TFG"
     meta_tfg.mkdir(parents=True, exist_ok=True)
-    (meta_tfg / "tasks.md").write_text("- [ ] [TFG-0004] office_parser.py test", encoding="utf-8")
     (meta_tfg / "project.json").write_text(
         json.dumps(
             {"key": "TFG", "base_branch": "develop", "target_files": ["src/grep/office_parser.py"]}
@@ -1181,17 +1180,20 @@ def test_escalate_node_writes_failure_report_outside_worktree(tmp_path: Path) ->
 
 
 def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
-    """execute_issue が metadata/projects/<PROJECT_KEY>/issues/<ISSUE_ID>.md を優先ロードすることを検証する。"""
+    """execute_issue が GitHub Issues SSOT (フィクスチャ) から仕様・Target Files を取得し build_pr_content へ引き継ぐことを検証する。"""
+    from tools.core.orchestrator_graph import build_pr_content
+    from tools.workspace.github_issues import use_issue_fixture
+
     project_root = tmp_path
     metadata_dir = project_root / "metadata"
     meta_tfg = metadata_dir / "projects" / "TFG"
-    issues_dir = meta_tfg / "issues"
-    issues_dir.mkdir(parents=True, exist_ok=True)
+    meta_tfg.mkdir(parents=True, exist_ok=True)
 
     sat_dir = project_root / "projects" / "tfg_sat"
     (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
     (sat_dir / "src").mkdir(parents=True, exist_ok=True)
     (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
+    (sat_dir / "src" / "other.py").write_text("# other", encoding="utf-8")
 
     (meta_tfg / "project.json").write_text(
         json.dumps({"key": "TFG", "base_branch": "main"}), encoding="utf-8"
@@ -1205,6 +1207,7 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
                 "projects": {
                     "TFG": {
                         "name": "tfg_sat",
+                        "github_repo": "xzyozi/tfg_sat",
                         "dir": "projects/tfg_sat",
                         "meta": "metadata/projects/TFG",
                     }
@@ -1214,14 +1217,11 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    issue_md = issues_dir / "TFG-0005.md"
-    issue_md.write_text(
-        "# TFG-0005 Special Specification\nDetail specification content", encoding="utf-8"
-    )
+    issue_body = "## 1. 概要\nDetail specification content\n\n## Target Files\n- `src/dummy.py`"
 
-    captured_initial_state = {}
+    captured_initial_state: GraphState = {}
 
-    def mock_invoke(state: Dict[str, Any], **_kwargs: Any) -> Dict[str, Any]:
+    def mock_invoke(state: GraphState, **_kwargs: Any) -> GraphState:
         nonlocal captured_initial_state
         captured_initial_state = state
         state["status"] = "COMPLETED"
@@ -1233,7 +1233,20 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
     mock_workflow = MagicMock()
     mock_workflow.compile.return_value = mock_app
 
+    fixture = {
+        "xzyozi/tfg_sat": [
+            {
+                "number": 5,
+                "title": "Special Specification",
+                "body": issue_body,
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}],
+            }
+        ]
+    }
+
     with (
+        use_issue_fixture(fixture),
         patch("tools.core.orchestrator_graph.StateGraph", return_value=mock_workflow),
         patch(
             "tools.core.orchestrator_graph.run_cmd",
@@ -1242,10 +1255,78 @@ def test_issue_detail_file_loading_in_execute_issue(tmp_path: Path) -> None:
     ):
         execute_issue("TFG-0005", "TFG", metadata_dir=metadata_dir, project_root=project_root)
 
-    assert (
-        captured_initial_state.get("instruction")
-        == "# TFG-0005 Special Specification\nDetail specification content"
+    assert captured_initial_state.get("issue_number") == 5
+    assert captured_initial_state.get("issue_title") == "Special Specification"
+    assert captured_initial_state.get("target_files") == ["src/dummy.py"]
+    assert captured_initial_state.get("instruction") == (
+        f"# [TFG-0005] Special Specification\n\n{issue_body}"
     )
+
+    pr_title, pr_body = build_pr_content(captured_initial_state)
+    assert pr_title == "feat: [TFG-0005] Special Specification"
+    assert "Detail specification content" in pr_body
+    assert "Closes #5" in pr_body
+
+
+def test_execute_issue_rejects_invalid_target_files_from_github_issue(tmp_path: Path) -> None:
+    """GitHub Issue 本文の Target Files に不正パスが含まれる場合、実行開始前に FAILED_SYSTEM で停止すること。"""
+    from tools.workspace.github_issues import use_issue_fixture
+
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+
+    sat_dir = project_root / "projects" / "tfg_sat"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
+
+    (meta_tfg / "project.json").write_text(
+        json.dumps({"key": "TFG", "base_branch": "main"}), encoding="utf-8"
+    )
+    (metadata_dir / ".project-registry.json").write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "tfg_sat",
+                        "github_repo": "xzyozi/tfg_sat",
+                        "dir": "projects/tfg_sat",
+                        "meta": "metadata/projects/TFG",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fixture = {
+        "xzyozi/tfg_sat": [
+            {
+                "number": 8,
+                "title": "Unsafe Target",
+                "body": "## Target Files\n- `../outside.py`",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}],
+            }
+        ]
+    }
+
+    with (
+        use_issue_fixture(fixture),
+        patch("tools.core.orchestrator_graph.StateGraph") as mock_sg,
+        patch("tools.core.orchestrator_graph._fail_system") as mock_fail,
+        patch(
+            "tools.core.orchestrator_graph.run_cmd",
+            return_value=MagicMock(returncode=0, stdout="", stderr=""),
+        ),
+    ):
+        execute_issue("TFG-0008", "TFG", metadata_dir=metadata_dir, project_root=project_root)
+        mock_sg.return_value.compile.return_value.invoke.assert_not_called()
+        mock_fail.assert_called_once()
+        assert mock_fail.call_args.args[1] == "TFG-0008"
+        assert "../outside.py" in mock_fail.call_args.args[2]
 
 
 def test_lint_node_passes_ignore_e501_flag() -> None:
@@ -1860,7 +1941,7 @@ def test_ensure_satellite_environment_resolves_existing_venv(tmp_path: Path) -> 
 
 
 def test_done_node_already_satisfied_completion() -> None:
-    """Issue #80: 差分も新コミットもない既済タスクの場合、PR作成をスキップしてCOMPLETEDにし、ブランチ削除とtasks.md完了反映を行うことを検証する。"""
+    """Issue #80 / #192: 差分も新コミットもない既済タスクの場合、PR作成とtasks.md書込をスキップしてCOMPLETEDにし、ブランチ削除を行うことを検証する。"""
     from tools.core.orchestrator_graph import done_node
 
     state = GraphState(
@@ -1914,17 +1995,11 @@ def test_done_node_already_satisfied_completion() -> None:
     with (
         patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
         patch("tools.core.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
-        patch("tools.metadata_store.mark_task_completed_in_tasks_md") as mock_mark_tasks,
     ):
         res = done_node(state)
 
         assert res["status"] == "COMPLETED"
         assert res.get("already_satisfied") is True
-        mock_mark_tasks.assert_called_once()
-        call_args = mock_mark_tasks.call_args
-        assert call_args.args[0] == "/path/to/sat"
-        assert call_args.args[1] == "CW-0038"
-        assert call_args.kwargs.get("project_key") == "CW"
         # PR作成やpushは呼ばれず、ブランチ削除が実行されること
         assert not any("push" in c for c in cmd_history)
         assert not any("pr create" in c for c in cmd_history)

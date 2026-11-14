@@ -34,6 +34,7 @@ from tools.backends.agy_runner import CoderRunError
 from tools.backends.backend_coordinator import get_coordinator
 from tools.core.sanitizer import sanitize_text
 from tools.workspace.git_utils import GitDiffError, get_git_diff
+from tools.workspace.github_issues import fetch_remote_issue
 from tools.workspace.metadata_store import (
     GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
@@ -44,7 +45,9 @@ from tools.workspace.metadata_store import (
     StatusLiteral,
     TaskStatus,
     get_runtime_cache_dir,
+    load_project_registry,
     next_consecutive_b7,
+    parse_task_id,
     record_execution_history,
     resolve_project_context,
     safe_record_execution_history,
@@ -450,6 +453,10 @@ class GraphState(TypedDict, total=False):
     ci_poll_interval: Optional[float]
     pr_number: Optional[int]
     pr_url: Optional[str]
+    issue_number: Optional[int]
+    issue_title: Optional[str]
+    issue_body: Optional[str]
+    github_repo: Optional[str]
 
 
 def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
@@ -1568,48 +1575,78 @@ def review_node(state: GraphState) -> GraphState:
     return state
 
 
+def _resolve_issue_spec_record(
+    issue_id: str,
+    project_key: Optional[str],
+    github_repo: str = "",
+    project_root: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    """GitHub Issues SSOT (またはモックフィクスチャ) から Issue 詳細を取得する."""
+    parsed = parse_task_id(issue_id)
+    if not parsed:
+        return None
+    resolved_key = project_key or parsed[0]
+    issue_num = parsed[1]
+
+    repo = github_repo.strip()
+    if not repo:
+        try:
+            projects = load_project_registry(project_root)
+            repo = str(projects.get(resolved_key, {}).get("github_repo") or "").strip()
+        except Exception as exc:
+            logger.debug(f"Failed to resolve github_repo from registry: {exc}")
+
+    if not repo:
+        return None
+
+    return fetch_remote_issue(repo, issue_num, project_key=resolved_key, normalize=True)
+
+
 def build_pr_content(state: GraphState) -> tuple[str, str]:
-    """Issue メタデータおよび実行結果から PR タイトルとリッチな Markdown 本文を構築する (Issue #30, #31)."""
+    """GitHub Issue メタデータおよび実行結果から PR タイトルと本文を構築する."""
     issue_id = state.get("issue_id", "UNKNOWN")
-    metadata_dir = state.get("metadata_dir")
     project_key = state.get("project_key")
     target_files = state.get("target_files", [])
 
     title = f"feat: [{issue_id}] 自動実装完了"
     summary_text = f"Issue {issue_id} の自動実装および検証が完了しました。"
-    closes_issue = ""
+    parsed = parse_task_id(issue_id)
+    issue_number = state.get("issue_number") or (parsed[1] if parsed else None)
+    closes_issue = f"Closes #{issue_number}" if issue_number else ""
 
-    # issues/<ID>.md からタイトルと概要、関連Issueを抽出
-    if metadata_dir and project_key:
-        issue_md_path = Path(metadata_dir) / "projects" / project_key / "issues" / f"{issue_id}.md"
-        if issue_md_path.exists():
-            try:
-                content = issue_md_path.read_text(encoding="utf-8")
-                lines = content.splitlines()
-                for line in lines:
-                    if line.startswith("# ") and issue_id in line:
-                        clean_title = line.lstrip("# ").strip()
-                        title = f"feat: {clean_title}"
-                        break
+    issue_title = str(state.get("issue_title") or "").strip()
+    issue_body = str(state.get("issue_body") or "").strip()
 
-                # 概要セクションの抽出
-                if "## 1. 概要・背景" in content:
-                    parts = content.split("## 1. 概要・背景")
-                    if len(parts) > 1:
-                        next_section = parts[1].split("##")[0].strip()
-                        if next_section:
-                            summary_text = next_section
+    if not (issue_title and issue_body):
+        remote_issue = _resolve_issue_spec_record(
+            issue_id,
+            project_key,
+            github_repo=str(state.get("github_repo") or ""),
+        )
+        if remote_issue:
+            if not issue_title:
+                issue_title = str(remote_issue.get("title") or "").strip()
+            if not issue_body:
+                issue_body = str(remote_issue.get("body") or "").strip()
+            if not issue_number and isinstance(remote_issue.get("number"), int):
+                issue_number = remote_issue["number"]
+                closes_issue = f"Closes #{issue_number}"
 
-                # 関連Issue (例: #4, #12)
-                match = re.search(
-                    r"(?:関連Issue|Issue)[:\s]+(?:GitHub Issue\s*)?#?(\d+)",
-                    content,
-                    re.IGNORECASE,
-                )
-                if match:
-                    closes_issue = f"Closes #{match.group(1)}"
-            except Exception as e:
-                logger.warning(f"Failed to parse issue markdown for PR body: {e}")
+    if issue_title:
+        title = (
+            f"feat: {issue_title}"
+            if f"[{issue_id}]" in issue_title
+            else f"feat: [{issue_id}] {issue_title}"
+        )
+
+    if issue_body:
+        for heading in ("## 1. 概要・背景", "## 1. 概要", "## 概要"):
+            if heading in issue_body:
+                parts = issue_body.split(heading, 1)
+                next_section = parts[1].split("\n##", 1)[0].strip()
+                if next_section:
+                    summary_text = next_section
+                    break
 
     target_files_md = (
         "\n".join([f"- `{tf}`" for tf in target_files]) if target_files else "- (指定なし)"
@@ -1742,7 +1779,6 @@ def done_node(state: GraphState) -> GraphState:
                     f"All tests passed and implementation is verified as already satisfied on base branch '{base_branch}'. "
                     "Marking as COMPLETED."
                 )
-                from tools.workspace.metadata_store import mark_task_completed_in_tasks_md
 
                 # 作業ブランチの安全クリーンアップ
                 run_cmd(["git", "checkout", "-f", base_branch], cwd=cwd, timeout=60)
@@ -1751,15 +1787,6 @@ def done_node(state: GraphState) -> GraphState:
                 )
                 if chk_branch.returncode == 0:
                     run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=30)
-
-                # tasks.md の完了反映 (- [ ] -> - [x])
-                proj_root = Path(cwd).parent.parent if cwd else None
-                mark_task_completed_in_tasks_md(
-                    cwd,
-                    state["issue_id"],
-                    project_key=state.get("project_key"),
-                    project_root=proj_root,
-                )
 
                 state["status"] = "COMPLETED"
                 state["already_satisfied"] = True
@@ -2747,63 +2774,54 @@ def execute_issue(
 
             app = workflow.compile()
 
-            # Issue 詳細記述ファイルの探索および読み込み (1. サテライト docs/issues/ -> 2. 母艦 metadata/projects/<KEY>/issues/)
-            satellite_issue_file = Path(cwd) / "docs" / "issues" / f"{issue_id}.md" if cwd else None
-            meta_issue_file = (
-                metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
-                if metadata_dir
-                else None
+            # GitHub Issues SSOT (またはテストフィクスチャ) から Issue 詳細仕様を取得
+            github_repo = str(ctx.get("github_repo") or "").strip()
+            parsed_task = parse_task_id(issue_id)
+            issue_number = parsed_task[1] if parsed_task else None
+            issue_title = ""
+            issue_body = ""
+            instruction_text = f"Implement issue {issue_id}"
+
+            remote_issue = _resolve_issue_spec_record(
+                issue_id,
+                project_key,
+                github_repo=github_repo,
+                project_root=project_root,
             )
-            issue_detail_file = None
-            if satellite_issue_file and satellite_issue_file.exists():
-                issue_detail_file = satellite_issue_file
-            elif meta_issue_file and meta_issue_file.exists():
-                issue_detail_file = meta_issue_file
+            if remote_issue:
+                issue_title = str(remote_issue.get("title") or "").strip()
+                issue_body = str(remote_issue.get("body") or "").strip()
+                if isinstance(remote_issue.get("number"), int):
+                    issue_number = remote_issue["number"]
 
-            if issue_detail_file and issue_detail_file.exists():
-                logger.info(f"Loaded issue detail specification from {issue_detail_file}")
-                instruction_text = issue_detail_file.read_text(encoding="utf-8")
-                try:
-                    md_targets = require_valid_target_files(instruction_text)
-                except InvalidTargetFilesError as invalid_error:
-                    # 不正パスは黙って捨てず、code_node 開始前に安全停止する (#186)
-                    logger.error(f"{invalid_error} (issue: {issue_id})")
-                    _fail_system(
-                        project_key,
-                        issue_id,
-                        str(invalid_error),
-                        cwd=cwd,
-                        metadata_dir=metadata_dir,
-                        history_file=history_file,
-                    )
-                    return
-                if md_targets:
-                    resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
-                    logger.info(
-                        f"Dynamically resolved target_files from issue markdown: {resolved_targets}"
-                    )
-                    target_files = resolved_targets
-            else:
-                instruction_text = f"Implement issue {issue_id}"
-                satellite_tasks_md = Path(cwd) / "docs" / "tasks.md" if cwd else None
-                meta_tasks_md = (
-                    metadata_dir / "projects" / project_key / "tasks.md" if metadata_dir else None
-                )
-                tasks_md = None
-                if satellite_tasks_md and satellite_tasks_md.exists():
-                    tasks_md = satellite_tasks_md
-                elif meta_tasks_md and meta_tasks_md.exists():
-                    tasks_md = meta_tasks_md
+                if issue_body:
+                    if issue_body.lstrip().startswith("# ") or not issue_title:
+                        instruction_text = issue_body
+                    else:
+                        instruction_text = f"# [{issue_id}] {issue_title}\n\n{issue_body}"
 
-                if tasks_md and tasks_md.exists():
                     try:
-                        tasks_content = tasks_md.read_text(encoding="utf-8")
-                        for line in tasks_content.splitlines():
-                            if issue_id in line:
-                                instruction_text = f"Implement issue {issue_id}: {line.strip()}"
-                                break
-                    except Exception as te:
-                        logger.warning(f"Failed to parse tasks.md for fallback instruction: {te}")
+                        md_targets = require_valid_target_files(issue_body)
+                    except InvalidTargetFilesError as invalid_error:
+                        # 不正パスは黙って捨てず、code_node 開始前に安全停止する (#186)
+                        logger.error(f"{invalid_error} (issue: {issue_id})")
+                        _fail_system(
+                            project_key,
+                            issue_id,
+                            str(invalid_error),
+                            cwd=cwd,
+                            metadata_dir=metadata_dir,
+                            history_file=history_file,
+                        )
+                        return
+                    if md_targets:
+                        resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
+                        logger.info(
+                            f"Dynamically resolved target_files from GitHub Issue: {resolved_targets}"
+                        )
+                        target_files = resolved_targets
+                elif issue_title:
+                    instruction_text = f"# [{issue_id}] {issue_title}"
 
             initial_state = GraphState(
                 issue_id=issue_id,
@@ -2823,6 +2841,10 @@ def execute_issue(
                 cwd=cwd,
                 metadata_dir=str(metadata_dir),
                 base_branch=base_branch,
+                issue_number=issue_number,
+                issue_title=issue_title,
+                issue_body=issue_body,
+                github_repo=github_repo,
                 aider_message="",
                 impl_plan=None,
                 lint_result=None,
