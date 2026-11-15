@@ -92,17 +92,26 @@ def get_jev_pipeline(
 
     if _PIPELINE_INSTANCE is None:
         effective_model = model_name or os.environ.get("JEV_MODEL") or "qwen2.5:0.5b"
-        effective_url = (
-            ollama_base_url
-            or os.environ.get("OLLAMA_API_BASE")
-            or os.environ.get("OLLAMA_HOST")
-            or "http://localhost:11434"
+        explicit_url = (
+            ollama_base_url or os.environ.get("OLLAMA_API_BASE") or os.environ.get("OLLAMA_HOST")
         )
+        effective_url = explicit_url or "http://localhost:11434"
         try:
-            _PIPELINE_INSTANCE = JudgePipeline(
-                default_model=effective_model,
-                lightweight_model=effective_model,
-            )
+            pipeline_kwargs: dict[str, Any] = {
+                "default_model": effective_model,
+                "lightweight_model": effective_model,
+            }
+            if explicit_url:
+                from jev.zero_decode import ZeroDecodeClient
+
+                normalized = explicit_url.rstrip("/")
+                endpoint = (
+                    normalized
+                    if normalized.endswith("/v1/chat/completions")
+                    else f"{normalized}/v1/chat/completions"
+                )
+                pipeline_kwargs["client"] = ZeroDecodeClient(endpoint_url=endpoint)
+            _PIPELINE_INSTANCE = JudgePipeline(**pipeline_kwargs)
             logger.info(
                 f"Initialized JEV JudgePipeline (model={effective_model}, url={effective_url})"
             )

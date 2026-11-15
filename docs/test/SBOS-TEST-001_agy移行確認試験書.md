@@ -199,12 +199,12 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 
 | ID     | 試験              | 合格条件                                          | 結果 |
 | :----- | :---------------- | :------------------------------------------------ | :--- |
-| L4-001 | 小規模Issue完走   | `spec_draft → code → lint → test → review → done` | 合格 (`TFG-0005`, 5m40s) [証跡](evidence/agy/20261106-015825/L4-001/README.md) |
-| L4-002 | planner timeout   | retry後に正常復帰または安全停止                   | TODO |
-| L4-003 | reviewer JSON不正 | changes_requestedへ安全側遷移                     | TODO |
-| L4-004 | code編集外変更    | edit_guardが境界外変更を処理                      | TODO |
+| L4-001 | 小規模Issue完走   | `spec_draft → code → lint → test → review → done` | 合格 (`TFG-0005` [証跡](evidence/agy/20261106-015825/L4-001/README.md) / SSOT移行後 `TFG-0009` [証跡](evidence/agy/20261115-tfg-ssot-l4/README.md)) |
+| L4-002 | planner timeout   | retry後に正常復帰または安全停止                   | 合格 (`tests/test_orchestrator_l4_scenarios.py` 復帰・停止両系確認) [証跡](evidence/agy/20261115-tfg-ssot-l4/README.md) |
+| L4-003 | reviewer JSON不正 | changes_requestedへ安全側遷移                     | 合格 (`tests/test_orchestrator_l4_scenarios.py` 遷移・回復確認) [証跡](evidence/agy/20261115-tfg-ssot-l4/README.md) |
+| L4-004 | code編集外変更    | edit_guardが境界外変更を処理                      | 合格 (`tests/test_orchestrator_l4_scenarios.py` 復元・削除確認) [証跡](evidence/agy/20261115-tfg-ssot-l4/README.md) |
 | L4-005 | JEV               | Ollamaを起動した状態でJEV判定が動く               | 合格 (Plan/Review 判定通過) |
-| L4-006 | JEV unavailable   | fail-openでパイプラインが継続                     | TODO |
+| L4-006 | JEV unavailable   | fail-openでパイプラインが継続                     | 合格 (`tests/test_orchestrator_l4_scenarios.py` 接続不能fail-open確認) [証跡](evidence/agy/20261115-tfg-ssot-l4/README.md) |
 
 
 ### 3.6 L5 運用・復旧試験
@@ -284,7 +284,11 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 ### L4: サンドボックスE2E
 
 ```powershell
-uv run python tools/orchestrator_graph.py execute `
+# 自動 E2E シナリオ (L4-002 / L4-003 / L4-004 / L4-006)
+uv run pytest tests/test_orchestrator_l4_scenarios.py
+
+# 実サテライト E2E
+uv run python tools/core/orchestrator_graph.py execute `
   --issue-id <ISSUE_ID> `
   --project-key <PROJECT_KEY> `
   --fresh
@@ -369,6 +373,7 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 | ID | 試験名 | 実行日時 | 結果 | 証跡リンク |
 | :--- | :--- | :--- | :--- | :--- |
 | L4-001 | サンドボックスE2E (TFG-0005) | 2026-11-06 10:58 JST | 合格 (5m40s) | [README](evidence/agy/20261106-015825/L4-001/README.md) / [JSON](evidence/agy/20261106-015825/L4-001/evidence.json) |
+| L4-001〜006 | SSOT移行後検証 (TFG-0009) ＆ L4異常系 E2E | 2026-11-15 10:06 JST | 合格 (全項目確認) | [README](evidence/agy/20261115-tfg-ssot-l4/README.md) |
 | L5-001〜006 | 運用・復旧試験 (Worker検証) | 2026-11-06 17:27 JST | 合格 (全項目確認) | [README](evidence/agy/20261106-172740/L5-worker/README.md) / [JSON](evidence/agy/20261106-172740/L5-worker/evidence.json) |
 
 ---

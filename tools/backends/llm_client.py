@@ -23,6 +23,16 @@ ROLE_TO_INTENT_MAP = {
 }
 
 
+def _invalid_json_fallback(comment: str, raw_output: str) -> Dict[str, Any]:
+    """Expect-JSON 失敗時に review_node の空コメント誤補正を防ぐ安全側辞書を返す."""
+    return {
+        "verdict": "changes_requested",
+        "comment": comment,
+        "comments": [{"file": "N/A", "line": 1, "message": comment, "severity": "WARNING"}],
+        "raw": raw_output,
+    }
+
+
 def _parse_llm_output(raw_output: str, expect_json: bool) -> Dict[str, Any]:
     """LLM の生出力を、OpenAI 経路・agy 経路で共通のルールで解析する。
 
@@ -47,19 +57,11 @@ def _parse_llm_output(raw_output: str, expect_json: bool) -> Dict[str, Any]:
             parsed, _ = decoder.raw_decode(raw_output[start_idx:])
             if isinstance(parsed, dict):
                 return parsed
-            return {
-                "verdict": "changes_requested",
-                "comment": "JSONルートがオブジェクトではありません",
-                "raw": raw_output,
-            }
+            return _invalid_json_fallback("JSONルートがオブジェクトではありません", raw_output)
         except json.JSONDecodeError as e:
-            return {
-                "verdict": "changes_requested",
-                "comment": f"JSONパースエラー: {e}",
-                "raw": raw_output,
-            }
+            return _invalid_json_fallback(f"JSONパースエラー: {e}", raw_output)
 
-    return {"verdict": "changes_requested", "comment": "JSON抽出失敗", "raw": raw_output}
+    return _invalid_json_fallback("JSON抽出失敗", raw_output)
 
 
 def _do_agy_llm_call(
