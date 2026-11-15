@@ -2993,7 +2993,7 @@ def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path
 
         top_issue = top_items[0].get("issue_id")
         logger.info(
-            f"Suggested Command: python tools/orchestrator_graph.py execute --issue-id {top_issue}"
+            f"Suggested Command: python tools/core/orchestrator_graph.py execute --issue-id {top_issue}"
         )
     except Exception as e:
         logger.error(f"Failed to read priority cache: {e}")
