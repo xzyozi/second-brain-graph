@@ -24,6 +24,7 @@ logger = logging.getLogger("run_task")
 
 # プロジェクトルートを sys.path に追加
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ORCHESTRATOR_SCRIPT_REL = Path("tools") / "core" / "orchestrator_graph.py"
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools.core.orchestrator_graph import (  # noqa: E402
@@ -561,7 +562,7 @@ def main() -> None:
         logger.info("  - git clean -fd")
         orch_cmd = [
             sys.executable,
-            "tools/orchestrator_graph.py",
+            ORCHESTRATOR_SCRIPT_REL.as_posix(),
             "execute",
             "--issue-id",
             target_issue_id,
@@ -620,7 +621,7 @@ def main() -> None:
     # 4. オーケストレーターの実行
     exec_cmd = [
         sys.executable,
-        str(PROJECT_ROOT / "tools" / "orchestrator_graph.py"),
+        str(PROJECT_ROOT / ORCHESTRATOR_SCRIPT_REL),
         "execute",
         "--issue-id",
         target_issue_id,

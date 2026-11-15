@@ -578,3 +578,40 @@ def test_ensure_satellite_gitignore_does_not_create_missing_file(tmp_path: Path)
     ensure_satellite_gitignore(str(tmp_path))
 
     assert not (tmp_path / ".gitignore").exists()
+
+
+def test_run_task_orchestrator_entrypoint_exists_and_is_used(tmp_path: Path) -> None:
+    """run_task.py が起動対象にする orchestrator_graph.py が実リポジトリに存在し、--resume/通常実行で使われることを検証する。"""
+    from tools.run_task import ORCHESTRATOR_SCRIPT_REL, PROJECT_ROOT
+
+    entrypoint = PROJECT_ROOT / ORCHESTRATOR_SCRIPT_REL
+    assert entrypoint.is_file(), f"Missing orchestrator entrypoint: {entrypoint}"
+    assert ORCHESTRATOR_SCRIPT_REL.as_posix() == "tools/core/orchestrator_graph.py"
+
+    metadata_dir = tmp_path / "metadata"
+    meta_tfg = metadata_dir / "projects" / "TFG"
+    meta_tfg.mkdir(parents=True, exist_ok=True)
+    sat_dir = tmp_path / "projects" / "test_file_grep"
+    (sat_dir / ".git").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src").mkdir(parents=True, exist_ok=True)
+    (sat_dir / "src" / "dummy.py").write_text("# dummy", encoding="utf-8")
+    (meta_tfg / "project.json").write_text(
+        '{"key": "TFG", "base_branch": "develop"}', encoding="utf-8"
+    )
+    (metadata_dir / ".project-registry.json").write_text(
+        '{"projects": {"TFG": {"name": "test_file_grep", "dir": "projects/test_file_grep", "meta": "metadata/projects/TFG"}}}',
+        encoding="utf-8",
+    )
+
+    with (
+        patch("sys.argv", ["run_task.py", "TFG-0005", "--resume"]),
+        patch("tools.run_task.PROJECT_ROOT", tmp_path),
+        patch("subprocess.run") as mock_sub_run,
+    ):
+        mock_sub_run.return_value = MagicMock(returncode=0)
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+    exec_cmd = mock_sub_run.call_args.args[0]
+    assert Path(exec_cmd[1]) == tmp_path / "tools" / "core" / "orchestrator_graph.py"
