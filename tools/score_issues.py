@@ -1,18 +1,29 @@
 """Score Issues Batch Tool.
 
 Scans all satellite project metadata using metadata/.project-registry.json,
-filters out blocked issues (PM-039), calculates 4-axis scores (P, F, E, D),
-and saves the result to tools/.cache/priority-cache.json.
+fetches GitHub Issues via the shared SSOT fetcher, filters out blocked issues (PM-039),
+calculates 4-axis scores (P, F, E, D), and saves the result to tools/.cache/priority-cache.json.
 """
 
 import json
 import logging
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+from tools.workspace.github_issues import (
+    extract_issue_scoring_metadata,
+    fetch_remote_issues,
+)
+from tools.workspace.metadata_store import format_task_id
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(levelname)s] %(message)s",
+    stream=sys.stderr,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -42,54 +53,34 @@ def parse_metadata_comment(comment_str: str) -> Dict[str, str]:
     return meta
 
 
-def parse_tasks_md(tasks_path: str, project_key: str) -> List[Dict[str, Any]]:
-    """Parse a satellite's tasks.md file and return issue dictionaries."""
-    if not os.path.exists(tasks_path):
-        return []
+def parse_github_issue(raw_issue: Dict[str, Any], project_key: str) -> Optional[Dict[str, Any]]:
+    """Convert a GitHub Issue record into a scoring dictionary."""
+    raw_num = raw_issue.get("number")
+    if isinstance(raw_num, bool) or not isinstance(raw_num, int) or raw_num <= 0:
+        if isinstance(raw_num, str) and raw_num.isdigit() and int(raw_num) > 0:
+            issue_num = int(raw_num)
+        else:
+            return None
+    else:
+        issue_num = raw_num
 
-    issues: List[Dict[str, Any]] = []
-    task_pattern = re.compile(
-        r"^-\s+\[(?P<status>[ x/])\]\s+\[(?P<id>[A-Z0-9_-]+)\]\s+(?P<title>.*?)(?:\s+<!--(?P<comment>.*?)-->)?$"
-    )
+    task_id = raw_issue.get("task_id") or format_task_id(project_key, issue_num)
+    meta = extract_issue_scoring_metadata(raw_issue, project_key=project_key)
 
-    with open(tasks_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            match = task_pattern.match(line)
-            if not match:
-                continue
-
-            raw_status = match.group("status")
-            issue_id = match.group("id")
-            title = match.group("title").strip()
-            comment = match.group("comment") or ""
-
-            meta = parse_metadata_comment(comment)
-
-            is_completed = raw_status == "x"
-            is_in_progress = raw_status == "/"
-
-            blockedby_raw = meta.get("blockedby", "")
-            blockedby_list = (
-                [b.strip() for b in blockedby_raw.split(",") if b.strip()] if blockedby_raw else []
-            )
-
-            issues.append(
-                {
-                    "id": issue_id,
-                    "project_key": project_key,
-                    "title": title,
-                    "completed": is_completed,
-                    "in_progress": is_in_progress,
-                    "priority": meta.get("priority", "medium"),
-                    "added": meta.get("added"),
-                    "estimate": meta.get("estimate"),
-                    "blockedby": blockedby_list,
-                    "stage": meta.get("stage"),
-                }
-            )
-
-    return issues
+    return {
+        "id": task_id,
+        "issue_number": issue_num,
+        "project_key": project_key,
+        "title": str(raw_issue.get("title") or "").strip(),
+        "url": str(raw_issue.get("url") or ""),
+        "completed": bool(meta["completed"]),
+        "on_hold": bool(meta["on_hold"]),
+        "priority": meta["priority"],
+        "added": meta["added"],
+        "estimate": meta["estimate"],
+        "blockedby": meta["blockedby"],
+        "stage": meta["stage"],
+    }
 
 
 def calculate_freshness_score(added_str: Optional[str]) -> float:
@@ -174,40 +165,54 @@ def calculate_issue_score(issue: Dict[str, Any]) -> float:
 
 
 def process_scoring(root_dir: str = ".") -> List[Dict[str, Any]]:
-    """Scan all projects, filter out completed and blocked issues, calculate score."""
+    """Scan all projects via GitHub Issues SSOT, filter out completed/blocked issues, and score."""
     projects = load_registry(root_dir)
 
-    # Map of issue_id -> completed status
+    # Map of issue_id -> completed status (across all projects for PM-039 cross-check)
     completed_map: Dict[str, bool] = {}
 
     project_issues_list: List[Tuple[str, str, List[Dict[str, Any]]]] = []
 
     for project_key, info in projects.items():
         project_dir = info.get("dir", f"projects/{project_key}")
-        meta_dir = info.get("meta", os.path.join("metadata", "projects", project_key))
-        # サテライト側 (projects/<name>/docs/tasks.md) を最優先し、存在しない場合は母艦側 (metadata/projects/<KEY>/tasks.md) をフォールバック
-        satellite_tasks = os.path.join(root_dir, project_dir, "docs", "tasks.md")
-        fallback_tasks = os.path.join(root_dir, meta_dir, "tasks.md")
-        tasks_path = satellite_tasks if os.path.exists(satellite_tasks) else fallback_tasks
+        github_repo = str(info.get("github_repo") or "").strip()
+        if not github_repo:
+            logger.warning(
+                f"Skipping scoring for {project_key}: github_repo is not configured in registry."
+            )
+            continue
 
-        issues = parse_tasks_md(tasks_path, project_key)
-        for iss in issues:
-            iss["project_dir"] = project_dir
-            completed_map[iss["id"]] = iss["completed"]
+        raw_issues = fetch_remote_issues(
+            github_repo,
+            state="all",
+            project_key=project_key,
+            normalize=True,
+        )
+        parsed_issues: List[Dict[str, Any]] = []
+        for raw_iss in raw_issues:
+            parsed = parse_github_issue(raw_iss, project_key)
+            if parsed is None:
+                continue
+            parsed["project_dir"] = project_dir
+            completed_map[parsed["id"]] = parsed["completed"]
+            parsed_issues.append(parsed)
 
-        project_issues_list.append((project_key, project_dir, issues))
+        project_issues_list.append((project_key, project_dir, parsed_issues))
 
     candidate_issues: List[Dict[str, Any]] = []
+    skipped_stages = frozenset(
+        {"ideation", "stage:ideation", "draft", "stage:draft", "in-progress", "stage:in-progress"}
+    )
 
     for _project_key, _project_dir, issues in project_issues_list:
         for issue in issues:
-            # Skip completed issues
-            if issue["completed"]:
+            # Skip completed or on-hold issues
+            if issue["completed"] or issue.get("on_hold"):
                 continue
 
-            # Skip ideation / draft issues (tasks must be in ready stage)
+            # Skip ideation / draft / in-progress issues
             stage = issue.get("stage")
-            if stage and stage.lower() in ("ideation", "stage:ideation", "draft"):
+            if stage and stage.lower() in skipped_stages:
                 logger.info(
                     f"[SKIPPED] Issue {issue['id']} is skipped because it is in '{stage}' stage."
                 )
@@ -227,12 +232,15 @@ def process_scoring(root_dir: str = ".") -> List[Dict[str, Any]]:
             candidate_issues.append(
                 {
                     "id": issue["id"],
+                    "issue_number": issue["issue_number"],
                     "project_key": issue["project_key"],
                     "project_dir": issue["project_dir"],
                     "score": score,
                     "title": issue["title"],
                     "priority": issue["priority"],
                     "blockedby": issue["blockedby"],
+                    "stage": issue.get("stage"),
+                    "url": issue.get("url", ""),
                 }
             )
 

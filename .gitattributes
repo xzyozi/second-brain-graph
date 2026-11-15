@@ -1,0 +1,20 @@
+# Normalize repository text and use LF in the working tree.
+* text=auto eol=lf
+
+# Keep this rule file normalized as well.
+/.gitattributes text eol=lf
+
+# Binary files must not be normalized or diffed as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.xlsx binary
+*.xls  binary
+*.zip  binary
+*.7z   binary
+*.gz   binary
+*.mp3  binary
+*.mp4  binary

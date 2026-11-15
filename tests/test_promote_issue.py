@@ -116,7 +116,7 @@ def test_generate_promoted_body() -> None:
         target_files=["src/core/runner.py", "tests/test_runner.py"],
     )
 
-    assert "`stage:ready` (方針確定・tasks.md 登録完了)" in promoted
+    assert "`stage:ready` (方針確定済み)" in promoted
     assert "- [x] **案 1 (推奨): アプローチ1のタイトル**" in promoted
     assert "- [ ] **案 2: アプローチ2のタイトル**" in promoted
     assert "### 確定実装タスク" not in promoted
@@ -127,70 +127,19 @@ def test_generate_promoted_body() -> None:
     assert "dummy/file.py" not in promoted
     assert "## 7. 対象外 (Non-Goals)" in promoted
     assert "**案 2 (アプローチ2のタイトル)**: 案1を採用したため今回はスコープ外" in promoted
-    assert "tasks.md に登録されて stage:ready に昇格しました" in promoted
+    assert "stage:ready に昇格しました" in promoted
 
 
-def test_sync_to_tasks_md(tmp_path: Path) -> None:
-    tasks_file = tmp_path / "docs" / "tasks.md"
-    success = promote_issue.sync_to_tasks_md(
-        tasks_path=tasks_file,
-        project_key="TEST",
-        issue_num=10,
-        title="テストIssue",
-        priority="high",
-    )
-    assert success is True
-    content = tasks_file.read_text(encoding="utf-8")
-    assert "- [ ] [TEST-0001] テストIssue <!-- priority:high issue:#10 stage:ready -->" in content
+def test_promote_issue_updates_github_without_local_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """promote_issue() が GitHub Issue を更新し、tasks.md / docs/issues を作成しないことを検証する."""
+    import subprocess
 
-    # 既に stage:ready の重複登録はスキップされる (False)
-    success_duplicate = promote_issue.sync_to_tasks_md(
-        tasks_path=tasks_file,
-        project_key="TEST",
-        issue_num=10,
-        title="テストIssue",
-        priority="high",
-    )
-    assert success_duplicate is False
-
-    # 既存行が stage:ideation の場合は stage:ready へ昇格される (True)
-    ideation_file = tmp_path / "docs" / "tasks_ideation.md"
-    ideation_file.write_text(
-        "- [ ] [TEST-0003] アイデアタスク <!-- priority:low issue:#20 stage:ideation -->\n",
-        encoding="utf-8",
-    )
-    success_promote = promote_issue.sync_to_tasks_md(
-        tasks_path=ideation_file,
-        project_key="TEST",
-        issue_num=20,
-        title="アイデアタスク",
-        priority="low",
-    )
-    assert success_promote is True
-    assert "stage:ready" in ideation_file.read_text(encoding="utf-8")
-    assert "stage:ideation" not in ideation_file.read_text(encoding="utf-8")
-
-    # 2件目のタスク番号が正しくインクリメントされる
-    success_2 = promote_issue.sync_to_tasks_md(
-        tasks_path=tasks_file,
-        project_key="TEST",
-        issue_num=11,
-        title="テストIssue2",
-        priority="medium",
-    )
-    assert success_2 is True
-    content2 = tasks_file.read_text(encoding="utf-8")
-    assert (
-        "- [ ] [TEST-0002] テストIssue2 <!-- priority:medium issue:#11 stage:ready -->" in content2
-    )
-
-
-def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 擬似リポジトリとサテライトディレクトリ作成
     root_dir = tmp_path / "root"
     sat_dir = root_dir / "projects" / "test_proj"
     sat_dir.mkdir(parents=True)
-    (sat_dir / "docs").mkdir()
 
     # モックの設定
     mock_issue = {
@@ -215,13 +164,19 @@ def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.Mon
         "labels": [{"name": "stage:ideation"}, {"name": "theme:architecture"}],
     }
 
+    recorded_cmds: list[list[str]] = []
+
+    def mock_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        recorded_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
     monkeypatch.setattr(
         promote_issue,
         "resolve_project_info",
         lambda _root, _p: ("TP", sat_dir, "xzyozi/test_proj"),
     )
     monkeypatch.setattr(promote_issue, "fetch_issue", lambda _repo, _num: mock_issue)
-    monkeypatch.setattr(promote_issue.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(promote_issue.subprocess, "run", mock_run)
 
     success = promote_issue.promote_issue(
         root_dir=root_dir,
@@ -233,22 +188,18 @@ def test_promote_issue_creates_spec_file(tmp_path: Path, monkeypatch: pytest.Mon
     )
     assert success is True
 
-    # tasks.md の確認
-    tasks_file = sat_dir / "docs" / "tasks.md"
-    assert tasks_file.exists()
-    assert "- [ ] [TP-0001] 機能改善" in tasks_file.read_text(encoding="utf-8")
+    # GitHub Issue 更新コマンドの検証
+    assert len(recorded_cmds) == 1
+    cmd = recorded_cmds[0]
+    assert cmd[:4] == ["gh", "issue", "edit", "42"]
+    assert "--add-label" in cmd
+    assert "stage:ready" in cmd
+    assert "--remove-label" in cmd
+    assert "stage:ideation" in cmd
 
-    # docs/issues/TP-0001.md の確認
-    spec_file = sat_dir / "docs" / "issues" / "TP-0001.md"
-    assert spec_file.exists()
-    spec_content = spec_file.read_text(encoding="utf-8")
-    assert "# [TP-0001] 機能改善" in spec_content
-    assert "stage:ready" in spec_content
-    assert "- [x] **案 1 (推奨): 推奨方針**" in spec_content
-    assert "**案 2 (代替方針)**: 案1を採用したため今回はスコープ外" in spec_content
-    assert "- [ ] 実装タスク1" in spec_content
-    assert "- [ ] 実装タスク2" in spec_content
-    assert "- `src/main.py`" in spec_content
+    # ローカルファイル同期が行われないことの検証
+    assert not (sat_dir / "docs" / "tasks.md").exists()
+    assert not (sat_dir / "docs" / "issues").exists()
 
 
 def test_promote_issue_main_url_driven(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

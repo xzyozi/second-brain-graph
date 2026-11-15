@@ -102,11 +102,11 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - Issue実行全体を通して再試行は1回のみとする。
   - `llm_timeout_count == 0` の場合: `llm_timeout_count` を 1 にして同一ノードを自動再試行する。
   - `llm_timeout_count == 1` の場合: 直ちに `status = "FAILED_SYSTEM"` として停止し、`execution_history.json` に履歴を記録・ロックを解放する。
-  - 【現行】根本原因として `nvidia-smi` で VRAM 使用量を確認し、必要に応じて `tools/aider_runner.py` または `tools/llm_client.py` の `timeout` パラメータを延長する。
+  - 必要に応じて `config/models.yaml` の `agy_default` profile の `timeout` を調整する。
   - agy経路では VRAM は関係しない。agy の応答遅延・ネットワーク・クォータを確認する。内側のタイムアウト（`profile.timeout`、既定 1200 秒）は外側の worker タイムアウト（`nightly_worker.toml` の `timeout_seconds`、1800 秒）より短く保つ。
 
 ### ケース4: 自動処理失敗時（B7・システム例外・PR失敗時）の手動復旧
-- **症状:** Aiderが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止し、ロックが解放された。
+- **症状:** agyが意図しない変更を行った、またはPR作成に失敗した等で、作業ブランチおよび未コミット差分が保持されたまま自動処理が停止し、ロックが解放された。
 - **対処:**
   - `cd projects/<target-project>` を実行し、`git status` および `git diff` で変更内容を必ず人間が確認する。
   - 差分に問題がない場合は手動でコミット・PR作成を引き継ぐ。破棄する場合は `git restore .` やブランチ削除等を行う。

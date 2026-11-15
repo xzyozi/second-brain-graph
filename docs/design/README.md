@@ -88,8 +88,8 @@ related_documents:
 ### ③ 改訂履歴 (チェンジログ) の追跡メカニズム
 - 仕様の変遷と「なぜその設計・ルールへ変更されたのか」のコンテキストを維持するため、全ドキュメントの末尾に **改訂履歴テーブル** を設置し、変更理由を明記すること。
 
-### ④ Issue仕様書の同期運用
-- サテライトの `docs/issues/<TASK_ID>.md` は、GitHub Issue・サテライト `docs/tasks.md` と同期するIssue仕様書です。
-- Issue起票時は初期仕様を配置し、`tools/promote_issue.py` による `stage:ready` 昇格時は確定タスクとTarget Filesを反映します。
-- 定周期処理は `tools/periodic_review_runner.py` で欠落仕様書を自己修復します。手動で別の進捗チェックリストを維持せず、進捗の正本は `docs/tasks.md` とします。
+### ④ Issue ライフサイクルと GitHub Issues SSOT 運用
+- タスク・進捗・仕様書・優先度メタデータの唯一の正本（SSOT）は **GitHub Issues**（ラベル `stage:*`・本文・Open/Closed 状態）です。
+- 決定論的タスク ID 規則 `{PROJECT_KEY}-{issue_number:04d}` を用い、サテライト配下での `docs/tasks.md` や `docs/issues/<TASK_ID>.md` の二元同期管理は廃止されました（Epic #179）。
+- 起票時は `stage:ideation`、壁打ち昇格（`tools/promote_issue.py`）時は `stage:ready`、実行完了時は `stage:done` として GitHub Issues 上で一元管理します。
 - このライフサイクルの正本は [`SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md`](SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md) です。

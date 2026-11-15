@@ -263,35 +263,68 @@ def test_collect_target_files_with_files_arg(tmp_path: Path) -> None:
     assert result == ["app.py"]
 
 
-def test_sync_review_to_tasks_md(tmp_path: Path) -> None:
-    """tasks.md への新規タスク行追記と重複防止を検証する."""
-    item = run_review.ReviewItem(
-        title="[security] test vulnerability",
-        target_file="app.py#L10",
-        severity="High",
-        summary="summary",
-        problem_detail="detail",
-        suggested_solution="solution",
+def test_create_github_issue_does_not_write_local_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue 起票時（--sync-tasks-md 指定時含む）に tasks.md / docs/issues を生成しないことを検証する."""
+    sat_dir = tmp_path / "projects" / "mock_satellite"
+    sat_dir.mkdir(parents=True)
+    (sat_dir / "app.py").write_text("def test(): pass\n", encoding="utf-8")
+
+    recorded_cmds: list[list[str]] = []
+
+    def mock_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        recorded_cmds.append(cmd)
+        if cmd[:3] == ["gh", "label", "list"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout='[{"name": "stage:ideation"}, {"name": "theme:security"}]',
+                stderr="",
+            )
+        if cmd[:3] == ["gh", "issue", "create"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout="https://github.com/owner/mock_satellite/issues/101\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    mock_json = """
+    {
+      "reviews": [
+        {
+          "title": "[security] test vulnerability",
+          "target_file": "app.py#L10",
+          "severity": "High",
+          "summary": "summary",
+          "problem_detail": "detail",
+          "suggested_solution": "solution",
+          "keywords": ["test"]
+        }
+      ]
+    }
+    """
+
+    monkeypatch.setattr(run_review, "validate_target_repo", lambda root, target: sat_dir)
+    monkeypatch.setattr(run_review, "fetch_existing_issues", lambda target: [])
+    monkeypatch.setattr(subprocess, "run", mock_run)
+
+    exit_code = run_review.main(
+        [
+            "--target",
+            "mock_satellite",
+            "--theme",
+            "security",
+            "--sync-tasks-md",
+            "--mock-response",
+            mock_json,
+        ]
     )
-    # 1回目の追記
-    added = run_review.sync_review_to_tasks_md(tmp_path, item, "security", 101)
-    assert added is True
+    assert exit_code == 0
 
-    tasks_path = tmp_path / "docs" / "tasks.md"
-    assert tasks_path.is_file()
-    content = tasks_path.read_text(encoding="utf-8")
-    assert "issue:#101" in content
-    assert "[security] test vulnerability" in content
-
-    # docs/issues/<TASK_ID>.md の自動配置を検証
-    issues_dir = tmp_path / "docs" / "issues"
-    assert issues_dir.is_dir()
-    spec_files = list(issues_dir.glob("*.md"))
-    assert len(spec_files) == 1
-    spec_content = spec_files[0].read_text(encoding="utf-8")
-    assert "[security] test vulnerability" in spec_content
-    assert "suggested_solution" in spec_content or "solution" in spec_content
-
-    # 2回目の重複追記（スキップされること）
-    added_again = run_review.sync_review_to_tasks_md(tmp_path, item, "security", 101)
-    assert added_again is False
+    issue_create_cmds = [c for c in recorded_cmds if c[:3] == ["gh", "issue", "create"]]
+    assert len(issue_create_cmds) == 1
+    assert not (sat_dir / "docs" / "tasks.md").exists()
+    assert not (sat_dir / "docs" / "issues").exists()

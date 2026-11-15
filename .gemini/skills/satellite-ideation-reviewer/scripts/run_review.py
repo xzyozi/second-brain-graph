@@ -30,7 +30,6 @@ from tools.agy_client import (  # noqa: E402
     run_agy_in_workdir,
 )
 from tools.agy_policy import AgyPolicyDeniedError, authorize_agy_execution  # noqa: E402
-from tools.issue_spec_manager import sync_spec_for_task  # noqa: E402
 from tools.metadata_store import resolve_project_from_cwd  # noqa: E402
 
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
@@ -144,7 +143,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--sync-tasks-md",
         action="store_true",
-        help="Issue 起票時にサテライトの docs/tasks.md にもタスク（バックログ）を自動同期する",
+        help="[非推奨・no-op] GitHub Issues SSOT 化に伴い tasks.md / docs/issues 同期は廃止されました",
     )
     parser.add_argument(
         "--files",
@@ -511,7 +510,7 @@ def format_issue_body(item: ReviewItem, theme_key: str) -> str:
 {item.problem_detail}
 
 ## 2. 仕様および要求事項 (修正方針の検討)
-<!-- ※起票時は修正方針の選択肢（案1, 案2）を提示します。合意された方針が tasks.md へのタスク登録の input となります -->
+<!-- ※起票時は修正方針の選択肢（案1, 案2）を提示します。合意された方針が stage:ready 昇格および実装タスクの input となります -->
 <!-- ※運用方針: 基本は「案 1 (推奨)」を採用します。不都合や別方針の希望がある場合のみ案2の選択または再壁打ちを行います -->
 - [ ] **案 1 (推奨)**: {sol_1}
 - [ ] **案 2**: {sol_2}
@@ -598,84 +597,13 @@ def ensure_satellite_labels(target_dir: Path, theme_key: str, dry_run: bool = Fa
                 logger.warning(f"ラベル '{lbl}' の自動作成に失敗しました: {e}")
 
 
-def resolve_project_key(target_dir: Path) -> str:
-    """target_dir の docs/project.json 等から project_key を解決する."""
-    proj_json = target_dir / "docs" / "project.json"
-    if proj_json.is_file():
-        try:
-            data = json.loads(proj_json.read_text(encoding="utf-8"))
-            if "key" in data and data["key"]:
-                return data["key"]
-        except Exception:
-            pass
-    return target_dir.name.upper()[:4]
-
-
-def sync_review_to_tasks_md(
-    target_dir: Path,
-    item: ReviewItem,
-    theme_key: str,
-    issue_num: int,
-    body: str = "",
-    dry_run: bool = False,
-) -> bool:
-    """サテライトの docs/tasks.md に新規レビュー課題を追記し、docs/issues/<TASK_ID>.md を初期配置する."""
-    tasks_path = target_dir / "docs" / "tasks.md"
-    if not tasks_path.exists():
-        tasks_path.parent.mkdir(parents=True, exist_ok=True)
-        tasks_path.write_text("# Tasks\n\n", encoding="utf-8")
-
-    content = tasks_path.read_text(encoding="utf-8")
-    issue_tag = f"issue:#{issue_num}"
-    if issue_tag in content:
-        return False
-
-    project_key = resolve_project_key(target_dir)
-    existing_nums = [int(m.group(1)) for m in re.finditer(rf"\[{project_key}-(\d{{4}})\]", content)]
-    next_num = max(existing_nums, default=0) + 1
-    task_id = f"{project_key}-{next_num:04d}"
-
-    priority = item.severity.lower()
-    import datetime
-
-    today = datetime.date.today().isoformat()
-    new_line = (
-        f"- [ ] [{task_id}] {item.title} "
-        f"<!-- priority:{priority} {issue_tag} theme:{theme_key} stage:ideation added:{today} -->\n"
-    )
-
-    if content.endswith("\n"):
-        updated = content + new_line
-    else:
-        updated = content + "\n" + new_line
-
-    if not dry_run:
-        tasks_path.write_text(updated, encoding="utf-8")
-        logger.info(f"tasks.md に自動追加しました: [{task_id}] {item.title} ({issue_tag})")
-
-    # docs/issues/<TASK_ID>.md の初期仕様書を自動配置
-    if not body:
-        body = format_issue_body(item, theme_key)
-    sync_spec_for_task(
-        project_dir=target_dir,
-        issue_num=issue_num,
-        title=item.title,
-        body=body,
-        task_id=task_id,
-        overwrite=False,
-        dry_run=dry_run,
-    )
-    return True
-
-
 def create_github_issue(
     target_dir: Path,
     item: ReviewItem,
     theme_key: str,
     dry_run: bool,
-    sync_tasks_md: bool = False,
 ) -> bool:
-    """GitHub Issue を作成する（stage:ideation, theme:<theme> ラベル付き）."""
+    """GitHub Issue を作成する（stage:ideation, theme:<theme> ラベル付き、GitHub Issues SSOT）."""
     body = format_issue_body(item, theme_key)
     labels = ["stage:ideation", f"theme:{theme_key}"]
 
@@ -683,18 +611,6 @@ def create_github_issue(
         print("\n" + "=" * 60)
         print(f"[DRY-RUN] 起票対象: {item.title}")
         print(f"[Labels]: {', '.join(labels)}")
-        if sync_tasks_md:
-            project_key = resolve_project_key(target_dir)
-            print(f"[DRY-RUN] tasks.md 追記予定: [{project_key}-XXXX] {item.title}")
-            sync_spec_for_task(
-                project_dir=target_dir,
-                issue_num=0,
-                title=item.title,
-                body=body,
-                task_id=f"{project_key}-XXXX",
-                overwrite=False,
-                dry_run=True,
-            )
         print("-" * 60)
         print(body.strip())
         print("=" * 60 + "\n")
@@ -724,13 +640,6 @@ def create_github_issue(
         )
         issue_url = res.stdout.strip()
         logger.info(f"Issue 起票完了: {issue_url}")
-
-        if sync_tasks_md:
-            m = re.search(r"/issues/(\d+)", issue_url)
-            if m:
-                issue_num = int(m.group(1))
-                sync_review_to_tasks_md(target_dir, item, theme_key, issue_num, body=body)
-
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Issue 起票に失敗しました ({item.title}): {e.stderr}")
@@ -785,6 +694,12 @@ def main(args: list[str] | None = None) -> int:
     if final_items:
         ensure_satellite_labels(target_dir, opts.theme, opts.dry_run)
 
+    if opts.sync_tasks_md:
+        logger.warning(
+            "--sync-tasks-md は GitHub Issues SSOT 化に伴い廃止されました。"
+            "tasks.md / docs/issues への書き込みは行いません。"
+        )
+
     success_count = 0
     for item in final_items:
         if create_github_issue(
@@ -792,7 +707,6 @@ def main(args: list[str] | None = None) -> int:
             item,
             opts.theme,
             opts.dry_run,
-            sync_tasks_md=opts.sync_tasks_md,
         ):
             success_count += 1
 

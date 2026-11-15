@@ -4,8 +4,6 @@ import json
 import os
 from typing import Any, Dict
 
-import pytest
-
 from tools.score_issues import (
     calculate_estimate_score,
     calculate_freshness_score,
@@ -15,6 +13,7 @@ from tools.score_issues import (
     process_scoring,
     save_to_cache,
 )
+from tools.workspace.github_issues import use_issue_fixture
 
 
 def test_parse_metadata_comment() -> None:
@@ -55,22 +54,9 @@ def test_calculate_issue_score() -> None:
     assert score == 89.4
 
 
-def test_process_scoring_and_pm039_blocker_filtering(tmp_path: pytest.TempPathFactory) -> None:
+def test_process_scoring_and_pm039_blocker_filtering(tmp_path: Any) -> None:
+    """tasks.md なしで GitHub Issues SSOT (フィクスチャ) からスコアリング・PM-039除外できること."""
     root_dir = str(tmp_path)
-
-    meta_dir = os.path.join(root_dir, "metadata", "projects", "TEST")
-    os.makedirs(meta_dir, exist_ok=True)
-
-    tasks_content = (
-        "# Tasks\n"
-        "- [x] [TEST-0001] Base task completed <!-- priority:high -->\n"
-        "- [ ] [TEST-0002] Blocked by incomplete task <!-- priority:critical blockedby:TEST-0003 -->\n"
-        "- [ ] [TEST-0003] Independent task <!-- priority:high -->\n"
-        "- [ ] [TEST-0004] Blocked by completed task <!-- priority:medium blockedby:TEST-0001 -->\n"
-    )
-    with open(os.path.join(meta_dir, "tasks.md"), "w", encoding="utf-8") as f:
-        f.write(tasks_content)
-
     reg_dir = os.path.join(root_dir, "metadata")
     os.makedirs(reg_dir, exist_ok=True)
     registry_data = {
@@ -78,6 +64,7 @@ def test_process_scoring_and_pm039_blocker_filtering(tmp_path: pytest.TempPathFa
         "projects": {
             "TEST": {
                 "name": "Test Project",
+                "github_repo": "xzyozi/test_project",
                 "dir": "projects/test",
                 "meta": "metadata/projects/TEST",
             }
@@ -86,11 +73,45 @@ def test_process_scoring_and_pm039_blocker_filtering(tmp_path: pytest.TempPathFa
     with open(os.path.join(reg_dir, ".project-registry.json"), "w", encoding="utf-8") as f:
         json.dump(registry_data, f)
 
-    candidates = process_scoring(root_dir=root_dir)
+    fixture_issues = {
+        "xzyozi/test_project": [
+            {
+                "number": 1,
+                "title": "Base task completed",
+                "body": "<!-- priority:high -->",
+                "state": "CLOSED",
+                "labels": [{"name": "stage:done"}],
+            },
+            {
+                "number": 2,
+                "title": "Blocked by incomplete task",
+                "body": "Depends on: #3\n<!-- priority:critical -->",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "priority:critical"}],
+            },
+            {
+                "number": 3,
+                "title": "Independent task",
+                "body": "",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "priority:high"}],
+            },
+            {
+                "number": 4,
+                "title": "Blocked by completed task",
+                "body": "<!-- priority:medium blockedby:TEST-0001 -->",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}],
+            },
+        ]
+    }
+
+    with use_issue_fixture(fixture_issues):
+        candidates = process_scoring(root_dir=root_dir)
 
     candidate_ids = [c["id"] for c in candidates]
 
-    # TEST-0001: Completed -> Excluded
+    # TEST-0001: Completed (CLOSED) -> Excluded
     assert "TEST-0001" not in candidate_ids
     # TEST-0002: Blocked by uncompleted TEST-0003 -> Excluded (PM-039)
     assert "TEST-0002" not in candidate_ids
@@ -107,22 +128,9 @@ def test_process_scoring_and_pm039_blocker_filtering(tmp_path: pytest.TempPathFa
         assert len(data["issues"]) == len(candidates)
 
 
-def test_process_scoring_prioritizes_satellite_tasks_md(tmp_path: pytest.TempPathFactory) -> None:
-    """Issue #45: サテライト側の docs/tasks.md が母艦側の tasks.md より優先して読み込まれることを確認する。"""
+def test_process_scoring_skips_ideation_and_in_progress_tasks(tmp_path: Any) -> None:
+    """stage:ideation / stage:in-progress / on-hold ラベル付き Issue が除外されることを確認する。"""
     root_dir = str(tmp_path)
-
-    # 1. 母艦側の tasks.md（古いタスク）
-    meta_dir = os.path.join(root_dir, "metadata", "projects", "TEST")
-    os.makedirs(meta_dir, exist_ok=True)
-    with open(os.path.join(meta_dir, "tasks.md"), "w", encoding="utf-8") as f:
-        f.write("- [ ] [TEST-0001] Old host task <!-- priority:low -->\n")
-
-    # 2. サテライト側の docs/tasks.md（最新タスク）
-    satellite_docs = os.path.join(root_dir, "projects", "test", "docs")
-    os.makedirs(satellite_docs, exist_ok=True)
-    with open(os.path.join(satellite_docs, "tasks.md"), "w", encoding="utf-8") as f:
-        f.write("- [ ] [TEST-0002] Satellite prioritized task <!-- priority:critical -->\n")
-
     reg_dir = os.path.join(root_dir, "metadata")
     os.makedirs(reg_dir, exist_ok=True)
     registry_data = {
@@ -130,6 +138,7 @@ def test_process_scoring_prioritizes_satellite_tasks_md(tmp_path: pytest.TempPat
         "projects": {
             "TEST": {
                 "name": "Test Project",
+                "github_repo": "xzyozi/test_project",
                 "dir": "projects/test",
                 "meta": "metadata/projects/TEST",
             }
@@ -138,48 +147,41 @@ def test_process_scoring_prioritizes_satellite_tasks_md(tmp_path: pytest.TempPat
     with open(os.path.join(reg_dir, ".project-registry.json"), "w", encoding="utf-8") as f:
         json.dump(registry_data, f)
 
-    candidates = process_scoring(root_dir=root_dir)
-    candidate_ids = [c["id"] for c in candidates]
-
-    # サテライト側の tasks.md が読まれているため TEST-0002 のみが候補になり、TEST-0001 は含まれない
-    assert "TEST-0002" in candidate_ids
-    assert "TEST-0001" not in candidate_ids
-
-
-def test_process_scoring_skips_ideation_tasks(tmp_path: pytest.TempPathFactory) -> None:
-    """stage:ideation メタデータが付いたタスクが除外されることを確認する。"""
-    root_dir = str(tmp_path)
-
-    meta_dir = os.path.join(root_dir, "metadata", "projects", "TEST")
-    os.makedirs(meta_dir, exist_ok=True)
-
-    tasks_content = (
-        "# Tasks\n"
-        "- [ ] [TEST-0001] Ready task <!-- priority:high stage:ready -->\n"
-        "- [ ] [TEST-0002] Ideation task <!-- priority:high stage:ideation -->\n"
-        "- [ ] [TEST-0003] Draft task <!-- priority:critical stage:draft -->\n"
-    )
-    with open(os.path.join(meta_dir, "tasks.md"), "w", encoding="utf-8") as f:
-        f.write(tasks_content)
-
-    reg_dir = os.path.join(root_dir, "metadata")
-    os.makedirs(reg_dir, exist_ok=True)
-    registry_data = {
-        "version": "1.0",
-        "projects": {
-            "TEST": {
-                "name": "Test Project",
-                "dir": "projects/test",
-                "meta": "metadata/projects/TEST",
-            }
-        },
+    fixture_issues = {
+        "xzyozi/test_project": [
+            {
+                "number": 1,
+                "title": "Ready task",
+                "body": "",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "priority:high"}],
+            },
+            {
+                "number": 2,
+                "title": "Ideation task",
+                "body": "",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ideation"}, {"name": "priority:high"}],
+            },
+            {
+                "number": 3,
+                "title": "In progress task",
+                "body": "",
+                "state": "OPEN",
+                "labels": [{"name": "stage:in-progress"}, {"name": "priority:critical"}],
+            },
+            {
+                "number": 4,
+                "title": "On hold task",
+                "body": "",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "on-hold"}],
+            },
+        ]
     }
-    with open(os.path.join(reg_dir, ".project-registry.json"), "w", encoding="utf-8") as f:
-        json.dump(registry_data, f)
 
-    candidates = process_scoring(root_dir=root_dir)
+    with use_issue_fixture(fixture_issues):
+        candidates = process_scoring(root_dir=root_dir)
     candidate_ids = [c["id"] for c in candidates]
 
-    assert "TEST-0001" in candidate_ids
-    assert "TEST-0002" not in candidate_ids
-    assert "TEST-0003" not in candidate_ids
+    assert candidate_ids == ["TEST-0001"]

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -27,12 +28,14 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
 # プロジェクトルートをsys.pathに追加
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tools.agy_runner import CoderRunError
-from tools.backend_coordinator import get_coordinator
-from tools.git_utils import GitDiffError, get_git_diff
-from tools.metadata_store import (
+from tools.backends.agy_runner import CoderRunError
+from tools.backends.backend_coordinator import get_coordinator
+from tools.core.sanitizer import sanitize_text
+from tools.workspace.git_utils import GitDiffError, get_git_diff
+from tools.workspace.github_issues import fetch_remote_issue
+from tools.workspace.metadata_store import (
     GENERATED_ARTIFACT_PATTERNS,
     ISSUE_ID_PATTERN,
     MAX_CONSECUTIVE_B7,
@@ -42,7 +45,9 @@ from tools.metadata_store import (
     StatusLiteral,
     TaskStatus,
     get_runtime_cache_dir,
+    load_project_registry,
     next_consecutive_b7,
+    parse_task_id,
     record_execution_history,
     resolve_project_context,
     safe_record_execution_history,
@@ -51,15 +56,21 @@ from tools.metadata_store import (
     validate_project_consistency,
     write_event,
 )
-from tools.sanitizer import sanitize_text
+from tools.workspace.target_files import (
+    InvalidTargetFilesError,
+    extract_target_files_from_issue_text,
+    require_valid_target_files,
+)
 
 __all__ = [
     "ISSUE_ID_PATTERN",
     "ErrorCategory",
     "ErrorCategoryLiteral",
+    "InvalidTargetFilesError",
     "ProjectLockManager",
     "StatusLiteral",
     "TaskStatus",
+    "extract_target_files_from_issue_text",
     "get_runtime_cache_dir",
     "record_execution_history",
     "resolve_project_context",
@@ -276,27 +287,6 @@ def ensure_satellite_environment(cwd: Optional[str]) -> str:
     return str(python_bin)
 
 
-def extract_target_files_from_issue_text(issue_text: str) -> List[str]:
-    """Issue Markdown テキストから『編集対象ファイル (Target Files)』セクションに記述されたファイルパスを動的に抽出する。"""
-    target_files: List[str] = []
-    lines = issue_text.splitlines()
-    in_target_section = False
-    for line in lines:
-        stripped = line.strip()
-        if any(h in stripped.lower() for h in ["編集対象ファイル", "target files", "target_files"]):
-            in_target_section = True
-            continue
-        elif in_target_section and (stripped.startswith("## ") or stripped.startswith("# ")):
-            in_target_section = False
-
-        if in_target_section:
-            matches = re.findall(r"[\w/.-]+\.py", stripped)
-            for m in matches:
-                if m not in target_files:
-                    target_files.append(m)
-    return target_files
-
-
 def is_within_directory(candidate: Path, root: Path) -> bool:
     """candidate を解決した実パスが root ディレクトリ配下にあるかを検証する（パストラバーサル防止）。
 
@@ -454,12 +444,25 @@ class GraphState(TypedDict, total=False):
     empty_diff_detected: Optional[bool]
     already_satisfied: Optional[bool]
     allowed_new_file_globs: Optional[List[str]]
+    language: Optional[str]
+    test_command: Optional[str]
+    watch_ci: Optional[bool]
+    ci_round: int
+    max_ci_round: int
+    ci_timeout_seconds: Optional[float]
+    ci_poll_interval: Optional[float]
+    pr_number: Optional[int]
+    pr_url: Optional[str]
+    issue_number: Optional[int]
+    issue_title: Optional[str]
+    issue_body: Optional[str]
+    github_repo: Optional[str]
 
 
 def classify_error_category(e: Exception) -> ErrorCategoryLiteral:
     """例外から ErrorCategory（LLM_TIMEOUT, AGY_AUTH, AGY_QUOTA, SYSTEM_ERROR等）を分類する."""
-    from tools.agy_client import AgyAuthError, AgyQuotaError
-    from tools.agy_policy import AgyPolicyDeniedError
+    from tools.backends.agy_client import AgyAuthError, AgyQuotaError
+    from tools.backends.agy_policy import AgyPolicyDeniedError
 
     if isinstance(e, AgyPolicyDeniedError):
         return "AGY_POLICY_DENIED"
@@ -509,13 +512,13 @@ def spec_draft_node(state: GraphState) -> GraphState:
     YAGNI違反・スコープ逸脱を検知した場合は再ドラフトを要求する。
     """
     logger.info("Executing spec_draft_node")
-    from tools.jev_adapter import verify_plan_conformance
-    from tools.llm_client import call_llm
+    from tools.backends.jev_adapter import verify_plan_conformance
+    from tools.backends.llm_client import call_llm
 
     state.setdefault("plan_conformance_round", 0)
 
     try:
-        from tools.prompt_harness import resolve_prompt
+        from tools.core.prompt_harness import resolve_prompt
 
         system_prompt = resolve_prompt("planner", "spec_draft").system_prompt
         target_files_str = ", ".join(state.get("target_files", []))
@@ -629,7 +632,7 @@ def code_node(state: GraphState) -> GraphState:
         def _do_code_edit(profile: Any) -> bool:
             # 編集エンジンは route が指す profile の backend で決まる。指示文は
             # prompt.yaml を正本とするハーネスが、エンジンごとの規則を付けて組み立てる。
-            from tools.prompt_harness import build_coder_instruction, engine_for_backend
+            from tools.core.prompt_harness import build_coder_instruction, engine_for_backend
 
             engine = engine_for_backend(profile.backend)
             instruction = build_coder_instruction(
@@ -640,7 +643,7 @@ def code_node(state: GraphState) -> GraphState:
                 feedback=state.get("aider_message"),
             )
             if engine == "agy":
-                from tools.agy_runner import run_agy_edit
+                from tools.backends.agy_runner import run_agy_edit
 
                 agy_timeout = profile.timeout or 1200
                 return run_agy_edit(
@@ -672,26 +675,6 @@ def code_node(state: GraphState) -> GraphState:
                 run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
 
         state["status"] = "code_completed"
-        # 編集エンジンが編集・新規作成したファイルを動的に target_files へ追加
-        if cwd and is_in_git_workspace(cwd):
-            st_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=30)
-            if st_res.returncode == 0:
-                for line in st_res.stdout.splitlines():
-                    if line.strip():
-                        parts = line.strip().split(maxsplit=1)
-                        if len(parts) == 2:
-                            raw_path = parts[1].strip()
-                            if " -> " in raw_path:
-                                raw_path = raw_path.split(" -> ")[1].strip()
-                            rel_path = raw_path.replace("\\", "/")
-                            if (
-                                not rel_path.startswith(".aider")
-                                and not rel_path.startswith(".agy")
-                                and not rel_path.startswith(".pytest")
-                                and rel_path != ".gitignore"
-                                and rel_path not in target_files
-                            ):
-                                target_files.append(rel_path)
     except CoderRunError as e:
         logger.warning(f"CoderRunError caught in code_node: {e}")
         state["error"] = str(e)
@@ -715,106 +698,186 @@ def code_node(state: GraphState) -> GraphState:
 
 
 def lint_node(state: GraphState) -> GraphState:
-    """Ruff による静的解析を実行するノード (DD-003 §4)。
+    """Ruff (Python) および Tree-sitter (TypeScript / Rust) による静的解析・構文検証を実行するノード (Issue #169, DD-003 §4)。
     例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
-    logger.info("Executing lint_node (Ruff check)")
+    logger.info("Executing lint_node (Multi-language verification)")
     cwd = state.get("cwd")
     target_files = state.get("target_files", [])
     try:
-        existing_targets = [
+        # 対象ファイルを言語別に分類
+        py_targets = [
             tf
             for tf in target_files
             if tf.endswith(".py")
-            and cwd
-            and (Path(cwd) / tf).exists()
-            and (Path(cwd) / tf).is_file()
+            and (not cwd or (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file())
         ]
-        targets_to_check = (
-            existing_targets
-            if existing_targets
-            else [tf for tf in target_files if tf.endswith(".py")]
-        )
-        if not targets_to_check:
+        ts_targets = [
+            tf
+            for tf in target_files
+            if any(tf.endswith(ext) for ext in [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"])
+            and (not cwd or (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file())
+        ]
+        rust_targets = [
+            tf
+            for tf in target_files
+            if tf.endswith(".rs")
+            and (not cwd or (Path(cwd) / tf).exists() and (Path(cwd) / tf).is_file())
+        ]
+
+        # 実在チェックで空だが target_files に存在する場合のフォールバック
+        if not py_targets and not ts_targets and not rust_targets and target_files:
+            py_targets = [tf for tf in target_files if tf.endswith(".py")]
+            ts_targets = [
+                tf
+                for tf in target_files
+                if any(tf.endswith(ext) for ext in [".ts", ".tsx", ".js", ".jsx"])
+            ]
+            rust_targets = [tf for tf in target_files if tf.endswith(".rs")]
+
+        if not py_targets and not ts_targets and not rust_targets:
             state["status"] = "lint_passed"
             return state
 
-        python_bin = ensure_satellite_environment(cwd)
-        cmd = [python_bin, "-m", "ruff", "check", "--ignore", "E501"] + targets_to_check
-        # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
-        run_cmd([python_bin, "-m", "ruff", "format"] + targets_to_check, cwd=cwd, timeout=300)
-        run_cmd(
-            [python_bin, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
-            + targets_to_check,
-            cwd=cwd,
-            timeout=300,
-        )
-        res = run_cmd(cmd, cwd=cwd, timeout=300)
-        state["lint_result"] = {
-            "returncode": res.returncode,
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-        }
-        if res.returncode == 0:
+        all_lint_passed = True
+        error_messages: List[str] = []
+
+        # --- 1. Python ファイルの Ruff チェック ---
+        if py_targets and cwd:
+            python_bin = ensure_satellite_environment(cwd)
+            cmd = [python_bin, "-m", "ruff", "check", "--ignore", "E501"] + py_targets
+            # 1次パス: フォーマット整形および自動修復可能な全エラー (型表記, 未使用インポート, ソート, 空白等) を自動修正
+            run_cmd([python_bin, "-m", "ruff", "format"] + py_targets, cwd=cwd, timeout=300)
+            run_cmd(
+                [python_bin, "-m", "ruff", "check", "--fix", "--unsafe-fixes", "--ignore", "E501"]
+                + py_targets,
+                cwd=cwd,
+                timeout=300,
+            )
+            res = run_cmd(cmd, cwd=cwd, timeout=300)
+            state["lint_result"] = {
+                "returncode": res.returncode,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+            }
+            if res.returncode != 0:
+                all_lint_passed = False
+                combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
+                lint_recovery_tips = []
+
+                # F811 (二重定義・再定義エラー) の動的抽出
+                redef_match = re.search(
+                    r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output
+                )
+                if not redef_match:
+                    redef_match = re.search(
+                        r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output
+                    )
+                if redef_match:
+                    groups = redef_match.groups()
+                    sym_name = groups[0]
+                    orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
+                    lint_recovery_tips.append(
+                        f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition (originally at line {orig_line}).\n"
+                        f"  ACTION REQUIRED:\n"
+                        f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
+                        f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
+                    )
+
+                # F821 (未定義変数エラー) の動的抽出
+                undef_match = re.search(r"F821 Undefined name `([^`]+)`", combined_lint_output)
+                if undef_match:
+                    undef_name = undef_match.group(1)
+                    lint_recovery_tips.append(
+                        f"・UNDEFINED NAME ERROR (F821): `{undef_name}` is used but not defined or imported. "
+                        f"Import or define `{undef_name}` before using it."
+                    )
+
+                dynamic_instructions = ""
+                if lint_recovery_tips:
+                    tips_str = "\n".join(lint_recovery_tips)
+                    dynamic_instructions = f"【DYNAMIC RECOVERY INSTRUCTIONS】\n{tips_str}\n\n"
+
+                lint_feedback = (
+                    f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
+                    f"{dynamic_instructions}"
+                    "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
+                    "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
+                    "Follow these general rules:\n"
+                    "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
+                    "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
+                    "3. Redefined/Duplicate symbols: If a function, class, or method is redefined or duplicated, delete the duplicate definition so that exactly one definition remains.\n"
+                    "4. Line too long (E501): Split long string literals, URLs, or expressions across multiple lines using parentheses `(...)` or multi-line string concatenation so that every line is strictly under 120 characters.\n"
+                    "5. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
+                )
+                error_messages.append(lint_feedback)
+
+        # --- 2. TypeScript / JavaScript ファイルの Tree-sitter 構文検証 (Issue #169) ---
+        if ts_targets and cwd:
+            from tools.lang import get_verifier
+
+            ts_verifier = get_verifier("typescript")
+            ts_syntax_errors: List[str] = []
+            for tf in ts_targets:
+                target_p = Path(cwd) / tf
+                if target_p.exists() and target_p.is_file():
+                    res_ts = ts_verifier.verify_syntax(target_p)
+                    if not res_ts.is_valid:
+                        err_lines = "\n  ".join(res_ts.errors)
+                        ts_syntax_errors.append(f"・{tf}:\n  {err_lines}")
+
+            if ts_syntax_errors:
+                all_lint_passed = False
+                ts_feedback = (
+                    "TypeScript/JavaScript Tree-sitter syntax verification failed:\n\n"
+                    + "\n".join(ts_syntax_errors)
+                    + "\n\n【CRITICAL INSTRUCTION - TS/JS SYNTAX ERROR RECOVERY】\n"
+                    "You MUST fix all syntax errors listed above while strictly maintaining existing code functionality.\n"
+                    "Follow these rules:\n"
+                    "1. Check unbalanced braces, parentheses, or brackets.\n"
+                    "2. Check invalid keywords, missing type annotations, or broken export/import syntax.\n"
+                    "3. Ensure the file forms a valid TypeScript/JavaScript AST."
+                )
+                error_messages.append(ts_feedback)
+
+        # --- 3. Rust ファイルの Tree-sitter 構文検証 (Issue #169) ---
+        if rust_targets and cwd:
+            from tools.lang import get_verifier
+
+            rust_verifier = get_verifier("rust")
+            rust_syntax_errors: List[str] = []
+            for tf in rust_targets:
+                target_p = Path(cwd) / tf
+                if target_p.exists() and target_p.is_file():
+                    res_rust = rust_verifier.verify_syntax(target_p)
+                    if not res_rust.is_valid:
+                        err_lines = "\n  ".join(res_rust.errors)
+                        rust_syntax_errors.append(f"・{tf}:\n  {err_lines}")
+
+            if rust_syntax_errors:
+                all_lint_passed = False
+                rust_feedback = (
+                    "Rust syntax / AST verification failed:\n\n"
+                    + "\n".join(rust_syntax_errors)
+                    + "\n\n【CRITICAL INSTRUCTION - RUST SYNTAX ERROR RECOVERY】\n"
+                    "You MUST fix all syntax errors listed above while strictly maintaining existing code functionality.\n"
+                    "Follow these rules:\n"
+                    "1. Check matching braces `{}` and parentheses `()`.\n"
+                    "2. Check proper struct/fn/impl declarations, semicolons `;`, and visibility specifiers.\n"
+                    "3. Ensure the file forms a valid Rust syntax tree."
+                )
+                error_messages.append(rust_feedback)
+
+        if all_lint_passed:
             state["status"] = "lint_passed"
         else:
             state["lint_round"] = state.get("lint_round", 0) + 1
             state["error_category"] = "LINT_ERROR"
             logger.warning(
-                f"Lint check failed (round {state['lint_round']}):\n{res.stdout or res.stderr}"
+                f"Lint/Syntax check failed (round {state['lint_round']}):\n"
+                + "\n---\n".join(error_messages)
             )
-
-            # --- 動的エラー分析・復旧ルール (Lint Recovery Tips) ---
-            combined_lint_output = f"{res.stdout or ''}\n{res.stderr or ''}"
-            lint_recovery_tips = []
-
-            # 1. F811 (二重定義・再定義エラー) の柔軟な動的抽出
-            redef_match = re.search(
-                r"F811.*Redefinition of.*`([^`]+)`.*from line (\d+)", combined_lint_output
-            )
-            if not redef_match:
-                redef_match = re.search(r"F811.*Redefinition of.*`([^`]+)`", combined_lint_output)
-
-            if redef_match:
-                groups = redef_match.groups()
-                sym_name = groups[0]
-                orig_line = groups[1] if len(groups) >= 2 else "an earlier line"
-                lint_recovery_tips.append(
-                    f"・REDEFINITION ERROR (F811): Symbol `{sym_name}` is defined both via import and via class/function definition (originally at line {orig_line}).\n"
-                    f"  ACTION REQUIRED:\n"
-                    f"  - Option A (Preferred if `{sym_name}` belongs to this file): REMOVE `{sym_name}` from the `from ... import ...` statement at the top.\n"
-                    f"  - Option B: DELETE the local `class {sym_name}:` or `def {sym_name}:` block so only one definition remains."
-                )
-
-            # 2. F821 (未定義変数エラー) の動的抽出
-            undef_match = re.search(r"F821 Undefined name `([^`]+)`", combined_lint_output)
-            if undef_match:
-                undef_name = undef_match.group(1)
-                lint_recovery_tips.append(
-                    f"・UNDEFINED NAME ERROR (F821): `{undef_name}` is used but not defined or imported. "
-                    f"Import or define `{undef_name}` before using it."
-                )
-
-            # フィードバックメッセージの構築
-            dynamic_instructions = ""
-            if lint_recovery_tips:
-                tips_str = "\n".join(lint_recovery_tips)
-                dynamic_instructions = f"【DYNAMIC RECOVERY INSTRUCTIONS】\n{tips_str}\n\n"
-
-            lint_feedback = (
-                f"Static analysis / Linter check failed:\n{res.stdout}\n\n"
-                f"{dynamic_instructions}"
-                "【CRITICAL INSTRUCTION - STATIC ANALYSIS RECOVERY】\n"
-                "You MUST fix all listed static analysis errors above while strictly maintaining existing code functionality.\n"
-                "Follow these general rules:\n"
-                "1. Missing/Undefined symbols: Add required import statements at the top of the file, or define the symbol appropriately.\n"
-                "2. Unused symbols/variables: Remove unused assignments, parameters, or imports.\n"
-                "3. Redefined/Duplicate symbols: If a function, class, or method is redefined or duplicated, delete the duplicate definition so that exactly one definition remains.\n"
-                "4. Line too long (E501): Split long string literals, URLs, or expressions across multiple lines using parentheses `(...)` or multi-line string concatenation so that every line is strictly under 120 characters.\n"
-                "5. Syntax & Style: Ensure syntactical correctness and clean adherence to language standards without altering unrelated business logic."
-            )
-
-            state["aider_message"] = lint_feedback
+            state["aider_message"] = "\n\n".join(error_messages)
             if state["lint_round"] >= state.get("max_round", 3):
                 state["status"] = "FAILED_B7"
             else:
@@ -834,7 +897,7 @@ def clean_legacy_pytest_reports(root_dir: Optional[Path] = None) -> int:
         削除された残骸ファイルの数
     """
     if root_dir is None:
-        root_dir = Path(__file__).resolve().parent.parent
+        root_dir = Path(__file__).resolve().parent.parent.parent
 
     cleaned_count = 0
     try:
@@ -855,17 +918,101 @@ def clean_legacy_pytest_reports(root_dir: Optional[Path] = None) -> int:
 
 
 def run_pytest_node(state: GraphState) -> GraphState:
-    """Pytest による単体テストを実行するノード (DD-003 §4)。
-    pytest-json-report を使用してテスト結果を構造化ログとしてパースし Aider へフィードバックする。
+    """単体テストを実行するノード (DD-003 §4, Issue #170)。
+    - Python (test_command未指定): 従来の pytest-json-report を使用してテスト結果を構造化パースし Aider へフィードバック。
+    - TypeScript / Rust / カスタム test_command: 指定または言語既定のテストコマンド (npm test, cargo test など) を実行し、
+      stdout/stderr からフィードバックを生成。
     例外発生時は FAILED_SYSTEM / SYSTEM_ERROR に設定して安全停止する。
     """
-    logger.info("Executing test_node (Pytest)")
+    logger.info("Executing test_node")
     report_file: Optional[Path] = None
 
     try:
         cwd = state.get("cwd")
         target_files = state.get("target_files", [])
+        language = (state.get("language") or "python").lower()
+        test_cmd_setting = (state.get("test_command") or "").strip()
 
+        is_custom_or_non_python = bool(test_cmd_setting) or (language not in ("python", ""))
+
+        if is_custom_or_non_python:
+            if test_cmd_setting:
+                cmd = shlex.split(test_cmd_setting)
+            elif language in ("typescript", "javascript"):
+                if not shutil.which("npm"):
+                    logger.warning(
+                        "Node/npm is not installed in PATH. Skipping npm test execution."
+                    )
+                    state["status"] = "test_passed"
+                    state["test_result"] = {
+                        "returncode": 0,
+                        "stdout": "npm not found in PATH; skipped test.",
+                        "stderr": "",
+                        "report_summary": None,
+                    }
+                    return state
+                cmd = ["npm", "test"]
+            elif language == "rust":
+                if not shutil.which("cargo"):
+                    logger.warning(
+                        "Rust/cargo is not installed in PATH. Skipping cargo test execution."
+                    )
+                    state["status"] = "test_passed"
+                    state["test_result"] = {
+                        "returncode": 0,
+                        "stdout": "cargo not found in PATH; skipped test.",
+                        "stderr": "",
+                        "report_summary": None,
+                    }
+                    return state
+                cmd = ["cargo", "test"]
+            else:
+                cmd = ["pytest"]
+
+            resolved_bin = shutil.which(cmd[0]) if cmd else None
+            exec_cmd = [resolved_bin] + cmd[1:] if resolved_bin else cmd
+
+            logger.info(f"Executing satellite test command: {exec_cmd} in {cwd}")
+            res = run_cmd(exec_cmd, cwd=cwd, timeout=300)
+
+            state["test_result"] = {
+                "returncode": res.returncode,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+                "report_summary": None,
+            }
+
+            if res.returncode == 0:
+                state["status"] = "test_passed"
+            else:
+                state["test_round"] = state.get("test_round", 0) + 1
+                state["error_category"] = "TEST_ERROR"
+                cmd_display = " ".join(cmd)
+                logger.warning(
+                    f"Satellite test failed (round {state['test_round']}): {cmd_display}\n{res.stdout or res.stderr}"
+                )
+
+                test_output = f"{res.stdout or ''}\n{res.stderr or ''}".strip()
+                if len(test_output) > 3000:
+                    test_output = test_output[-3000:]
+
+                generic_instruction = (
+                    "\n\n【IMPORTANT】 Review the test failure output above.\n"
+                    "Fix the underlying source files or test files to resolve the failure."
+                )
+
+                state["aider_message"] = (
+                    f"Satellite test command '{cmd_display}' failed (round {state['test_round']}):\n"
+                    f"{test_output}{generic_instruction}"
+                )
+
+                if state["test_round"] >= state.get("max_round", 3):
+                    state["status"] = "FAILED_B7"
+                else:
+                    state["status"] = "retry_code"
+            return state
+
+        # 従来の Python pytest 実行 (既存挙動 100% 維持)
         # #76: 過去に残骸化した母艦ルート直下の .pytest-report-*.json を自己修復クリーンアップ
         clean_legacy_pytest_reports()
 
@@ -1057,21 +1204,26 @@ def test_feedback_node(state: GraphState) -> GraphState:
         return state
 
     try:
-        from tools.llm_client import call_llm
+        from tools.backends.llm_client import call_llm
 
         test_res: Dict[str, Any] = state.get("test_result") or {}
         stdout_stderr = f"{test_res.get('stdout', '')}\n{test_res.get('stderr', '')}"
 
-        from tools.prompt_harness import resolve_prompt
+        from tools.core.prompt_harness import resolve_prompt
 
         system_prompt = resolve_prompt("planner", "test_feedback").system_prompt
+
+        is_python_default = (
+            state.get("language") or "python"
+        ).lower() == "python" and not state.get("test_command")
+        test_label = "PYTEST" if is_python_default else "TEST"
 
         user_prompt = (
             f"Issue ID: {state['issue_id']}\n"
             f"Target Files: {state.get('target_files', [])}\n"
             f"Test Round: {state.get('test_round', 1)}\n\n"
             f"--- Implementation Plan ---\n{(state.get('impl_plan') or '')[:1000]}\n\n"
-            f"--- Pytest Output Log ---\n{stdout_stderr[:3000]}"
+            f"--- {test_label.capitalize()} Output Log ---\n{stdout_stderr[:3000]}"
         )
 
         res = call_llm(
@@ -1085,9 +1237,9 @@ def test_feedback_node(state: GraphState) -> GraphState:
         feedback_advice = res.get("content", str(res)) if isinstance(res, dict) else str(res)
 
         enhanced_message = (
-            f"【ARCHITECT ADVICE FOR PYTEST FAILURE (Round {state.get('test_round', 1)})】\n"
+            f"【ARCHITECT ADVICE FOR {test_label} FAILURE (Round {state.get('test_round', 1)})】\n"
             f"{feedback_advice}\n\n"
-            f"【RAW PYTEST OUTPUT】\n"
+            f"【RAW {test_label} OUTPUT】\n"
             f"{stdout_stderr[:1500]}"
         )
 
@@ -1109,7 +1261,7 @@ def review_node(state: GraphState) -> GraphState:
     および LGTM を含む全レビューの review_rounds 履歴保存を行う。
     """
     logger.info("Executing review_node")
-    from tools.llm_client import call_llm
+    from tools.backends.llm_client import call_llm
 
     cwd = state.get("cwd")
 
@@ -1160,7 +1312,7 @@ def review_node(state: GraphState) -> GraphState:
     )
 
     try:
-        from tools.prompt_harness import resolve_prompt
+        from tools.core.prompt_harness import resolve_prompt
 
         res = call_llm(
             role="reviewer",
@@ -1183,7 +1335,11 @@ def review_node(state: GraphState) -> GraphState:
             return state
 
         verdict = res["verdict"]
-        raw_comments = res.get("comments", [])
+        raw_comments = res.get("comments")
+        if not raw_comments and res.get("comment"):
+            raw_comments = [str(res["comment"])]
+        elif raw_comments is None:
+            raw_comments = []
 
         # コメント構造化 ({file, line, message, severity}) の保証
         structured_comments: List[Dict[str, Any]] = []
@@ -1228,7 +1384,7 @@ def review_node(state: GraphState) -> GraphState:
                 )
             else:
                 try:
-                    from tools.jev_adapter import verify_review_conformance
+                    from tools.backends.jev_adapter import verify_review_conformance
 
                     # pytest 終了コードの取得 (0: 成功, それ以外: 失敗)
                     pytest_rc: Optional[int] = None
@@ -1403,48 +1559,78 @@ def review_node(state: GraphState) -> GraphState:
     return state
 
 
+def _resolve_issue_spec_record(
+    issue_id: str,
+    project_key: Optional[str],
+    github_repo: str = "",
+    project_root: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    """GitHub Issues SSOT (またはモックフィクスチャ) から Issue 詳細を取得する."""
+    parsed = parse_task_id(issue_id)
+    if not parsed:
+        return None
+    resolved_key = project_key or parsed[0]
+    issue_num = parsed[1]
+
+    repo = github_repo.strip()
+    if not repo:
+        try:
+            projects = load_project_registry(project_root)
+            repo = str(projects.get(resolved_key, {}).get("github_repo") or "").strip()
+        except Exception as exc:
+            logger.debug(f"Failed to resolve github_repo from registry: {exc}")
+
+    if not repo:
+        return None
+
+    return fetch_remote_issue(repo, issue_num, project_key=resolved_key, normalize=True)
+
+
 def build_pr_content(state: GraphState) -> tuple[str, str]:
-    """Issue メタデータおよび実行結果から PR タイトルとリッチな Markdown 本文を構築する (Issue #30, #31)."""
+    """GitHub Issue メタデータおよび実行結果から PR タイトルと本文を構築する."""
     issue_id = state.get("issue_id", "UNKNOWN")
-    metadata_dir = state.get("metadata_dir")
     project_key = state.get("project_key")
     target_files = state.get("target_files", [])
 
     title = f"feat: [{issue_id}] 自動実装完了"
     summary_text = f"Issue {issue_id} の自動実装および検証が完了しました。"
-    closes_issue = ""
+    parsed = parse_task_id(issue_id)
+    issue_number = state.get("issue_number") or (parsed[1] if parsed else None)
+    closes_issue = f"Closes #{issue_number}" if issue_number else ""
 
-    # issues/<ID>.md からタイトルと概要、関連Issueを抽出
-    if metadata_dir and project_key:
-        issue_md_path = Path(metadata_dir) / "projects" / project_key / "issues" / f"{issue_id}.md"
-        if issue_md_path.exists():
-            try:
-                content = issue_md_path.read_text(encoding="utf-8")
-                lines = content.splitlines()
-                for line in lines:
-                    if line.startswith("# ") and issue_id in line:
-                        clean_title = line.lstrip("# ").strip()
-                        title = f"feat: {clean_title}"
-                        break
+    issue_title = str(state.get("issue_title") or "").strip()
+    issue_body = str(state.get("issue_body") or "").strip()
 
-                # 概要セクションの抽出
-                if "## 1. 概要・背景" in content:
-                    parts = content.split("## 1. 概要・背景")
-                    if len(parts) > 1:
-                        next_section = parts[1].split("##")[0].strip()
-                        if next_section:
-                            summary_text = next_section
+    if not (issue_title and issue_body):
+        remote_issue = _resolve_issue_spec_record(
+            issue_id,
+            project_key,
+            github_repo=str(state.get("github_repo") or ""),
+        )
+        if remote_issue:
+            if not issue_title:
+                issue_title = str(remote_issue.get("title") or "").strip()
+            if not issue_body:
+                issue_body = str(remote_issue.get("body") or "").strip()
+            if not issue_number and isinstance(remote_issue.get("number"), int):
+                issue_number = remote_issue["number"]
+                closes_issue = f"Closes #{issue_number}"
 
-                # 関連Issue (例: #4, #12)
-                match = re.search(
-                    r"(?:関連Issue|Issue)[:\s]+(?:GitHub Issue\s*)?#?(\d+)",
-                    content,
-                    re.IGNORECASE,
-                )
-                if match:
-                    closes_issue = f"Closes #{match.group(1)}"
-            except Exception as e:
-                logger.warning(f"Failed to parse issue markdown for PR body: {e}")
+    if issue_title:
+        title = (
+            f"feat: {issue_title}"
+            if f"[{issue_id}]" in issue_title
+            else f"feat: [{issue_id}] {issue_title}"
+        )
+
+    if issue_body:
+        for heading in ("## 1. 概要・背景", "## 1. 概要", "## 概要"):
+            if heading in issue_body:
+                parts = issue_body.split(heading, 1)
+                next_section = parts[1].split("\n##", 1)[0].strip()
+                if next_section:
+                    summary_text = next_section
+                    break
 
     target_files_md = (
         "\n".join([f"- `{tf}`" for tf in target_files]) if target_files else "- (指定なし)"
@@ -1468,6 +1654,45 @@ def build_pr_content(state: GraphState) -> tuple[str, str]:
         body_lines.extend(["", "## 関連 Issue", f"- {closes_issue}"])
 
     return title, "\n".join(body_lines)
+
+
+def _resolve_gh_bin() -> str:
+    """GitHub CLI (gh) の実行パスを探索・解決する。"""
+    gh_bin = shutil.which("gh") or "gh"
+    if not shutil.which(gh_bin):
+        for candidate in [
+            r"C:\Program Files\GitHub CLI\gh.exe",
+            r"C:\Program Files (x86)\GitHub CLI\gh.exe",
+            os.path.expanduser(r"~\AppData\Local\Programs\GitHub CLI\gh.exe"),
+        ]:
+            if os.path.exists(candidate):
+                return candidate
+    return gh_bin
+
+
+def _parse_porcelain_path(line: str) -> Optional[str]:
+    """`git status --porcelain` の 1 行から正規化された POSIX 相対パスを抽出する."""
+    stripped = line.rstrip("\r\n")
+    if not stripped.strip():
+        return None
+    if len(stripped) > 3 and stripped[2] == " " and stripped[0:2].strip():
+        raw_path = stripped[3:].strip()
+    else:
+        parts = stripped.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            return None
+        raw_path = parts[1].strip()
+    if " -> " in raw_path:
+        raw_path = raw_path.split(" -> ", 1)[1].strip()
+    return raw_path.strip('"').replace("\\", "/")
+
+
+def _is_runtime_artifact_path(posix_path: str) -> bool:
+    """ランタイム生成の一時ディレクトリ・ファイルかどうかを判定する."""
+    name = Path(posix_path).name
+    return posix_path.startswith((".aider", ".agy", ".pytest")) or name.startswith(
+        (".aider", ".agy", ".pytest")
+    )
 
 
 def done_node(state: GraphState) -> GraphState:
@@ -1524,12 +1749,16 @@ def done_node(state: GraphState) -> GraphState:
                     normalized_targets = [t.strip().replace("\\", "/") for t in target_files]
                     unauthorized = [sf for sf in staged_files if sf not in normalized_targets]
                     if unauthorized:
-                        logger.warning(
-                            f"[BOUNDARY WARNING] Unauthorized staged files detected outside initial target_files: {unauthorized}"
+                        logger.error(
+                            f"[BOUNDARY VIOLATION] Unauthorized staged files detected outside initial target_files: {unauthorized}"
                         )
+                        state["status"] = "PR_FAILED"
+                        state["error_category"] = "PR_ERROR"
                         state["boundary_warning"] = (
                             f"Unauthorized staged files detected outside initial target_files: {unauthorized}"
                         )
+                        state["error"] = state["boundary_warning"]
+                        return state
 
             # 2. 未コミット差分の存在確認とコミット
             status_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=60)
@@ -1540,7 +1769,26 @@ def done_node(state: GraphState) -> GraphState:
                 state["error"] = f"git status failed: {status_res.stderr}"
                 return state
 
-            if status_res.stdout.strip():
+            normalized_target_set = {Path(t.strip()).as_posix() for t in target_files if t.strip()}
+            porcelain_paths = [
+                p for line in status_res.stdout.splitlines() if (p := _parse_porcelain_path(line))
+            ]
+            non_runtime_paths = [p for p in porcelain_paths if not _is_runtime_artifact_path(p)]
+            unauthorized_worktree = [p for p in non_runtime_paths if p not in normalized_target_set]
+            if unauthorized_worktree:
+                logger.error(
+                    f"[BOUNDARY VIOLATION] Unauthorized working tree changes detected outside initial target_files: {unauthorized_worktree}"
+                )
+                run_cmd(["git", "reset", "-q", "HEAD"], cwd=cwd, timeout=30)
+                state["status"] = "PR_FAILED"
+                state["error_category"] = "PR_ERROR"
+                state["boundary_warning"] = (
+                    f"Unauthorized working tree changes detected outside initial target_files: {unauthorized_worktree}"
+                )
+                state["error"] = state["boundary_warning"]
+                return state
+
+            if non_runtime_paths:
                 commit_res = run_cmd(
                     ["git", "commit", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
                     cwd=cwd,
@@ -1559,7 +1807,6 @@ def done_node(state: GraphState) -> GraphState:
                     f"All tests passed and implementation is verified as already satisfied on base branch '{base_branch}'. "
                     "Marking as COMPLETED."
                 )
-                from tools.metadata_store import mark_task_completed_in_tasks_md
 
                 # 作業ブランチの安全クリーンアップ
                 run_cmd(["git", "checkout", "-f", base_branch], cwd=cwd, timeout=60)
@@ -1568,15 +1815,6 @@ def done_node(state: GraphState) -> GraphState:
                 )
                 if chk_branch.returncode == 0:
                     run_cmd(["git", "branch", "-D", head_branch], cwd=cwd, timeout=30)
-
-                # tasks.md の完了反映 (- [ ] -> - [x])
-                proj_root = Path(cwd).parent.parent if cwd else None
-                mark_task_completed_in_tasks_md(
-                    cwd,
-                    state["issue_id"],
-                    project_key=state.get("project_key"),
-                    project_root=proj_root,
-                )
 
                 state["status"] = "COMPLETED"
                 state["already_satisfied"] = True
@@ -1600,22 +1838,13 @@ def done_node(state: GraphState) -> GraphState:
                 )
                 return state
 
-            # 4. PR の作成 (事前確認: gh pr list --json number で構造化確認)
-            gh_bin = shutil.which("gh") or "gh"
-            if not shutil.which(gh_bin):
-                for candidate in [
-                    r"C:\Program Files\GitHub CLI\gh.exe",
-                    r"C:\Program Files (x86)\GitHub CLI\gh.exe",
-                    os.path.expanduser(r"~\AppData\Local\Programs\GitHub CLI\gh.exe"),
-                ]:
-                    if os.path.exists(candidate):
-                        gh_bin = candidate
-                        break
+            # 4. PR の作成 (事前確認: gh pr list --json number,url で構造化確認)
+            gh_bin = _resolve_gh_bin()
 
             try:
                 # 既存 PR の構造化データのプレ確認 (言語・ロケール依存の完全排除)
                 pr_list_res = run_cmd(
-                    [gh_bin, "pr", "list", "--head", head_branch, "--json", "number"],
+                    [gh_bin, "pr", "list", "--head", head_branch, "--json", "number,url"],
                     cwd=cwd,
                     timeout=30,
                 )
@@ -1624,6 +1853,10 @@ def done_node(state: GraphState) -> GraphState:
                         prs = json.loads(pr_list_res.stdout)
                         if isinstance(prs, list) and len(prs) > 0:
                             pr_num = prs[0].get("number")
+                            if pr_num is not None:
+                                state["pr_number"] = pr_num
+                            if prs[0].get("url"):
+                                state["pr_url"] = prs[0].get("url")
                             logger.info(
                                 f"Existing PR #{pr_num} detected for branch '{head_branch}'. Setting status to COMPLETED."
                             )
@@ -1651,6 +1884,11 @@ def done_node(state: GraphState) -> GraphState:
                     timeout=180,
                 )
                 if pr_res.returncode == 0:
+                    pr_url_output = pr_res.stdout.strip()
+                    state["pr_url"] = pr_url_output
+                    match = re.search(r"/pull/(\d+)", pr_url_output)
+                    if match:
+                        state["pr_number"] = int(match.group(1))
                     state["status"] = "COMPLETED"
                 else:
                     logger.error(f"gh pr create failed: {pr_res.stderr}")
@@ -1677,6 +1915,198 @@ def done_node(state: GraphState) -> GraphState:
     return state
 
 
+def ci_watch_node(state: GraphState) -> GraphState:
+    """PR 起票後の GitHub Actions CI 実行完了を監視し、結果を判定するノード (Issue #171)。
+    - All Green: COMPLETED を維持して正常終了へ。
+    - Pending: 一定間隔でポーリング待機。タイムアウト時は FAILED_CI。
+    - Fail: 失敗ログ (gh run view --log-failed) を取得し、Aider リカバリプロンプトを構築して retry_code へ遷移。
+      リトライ回数が上限 (max_ci_round) に達した場合は FAILED_CI。
+    """
+    logger.info("Executing ci_watch_node (GitHub Actions CI Monitoring)")
+    cwd = state.get("cwd")
+    issue_id = state.get("issue_id", "UNKNOWN")
+    head_branch = f"sbos/{issue_id}"
+    gh_bin = _resolve_gh_bin()
+
+    timeout_seconds = state.get("ci_timeout_seconds", 600) or 600
+    poll_interval = state.get("ci_poll_interval", 15.0) or 15.0
+    max_ci_round = state.get("max_ci_round", 2)
+    ci_round = state.get("ci_round", 0)
+
+    try:
+        # PR 番号の特定
+        pr_number = state.get("pr_number")
+        if not pr_number and cwd:
+            pr_list_res = run_cmd(
+                [gh_bin, "pr", "list", "--head", head_branch, "--json", "number,url"],
+                cwd=cwd,
+                timeout=30,
+            )
+            if pr_list_res.returncode == 0:
+                try:
+                    prs = json.loads(pr_list_res.stdout)
+                    if isinstance(prs, list) and prs:
+                        pr_number = prs[0].get("number")
+                        state["pr_number"] = pr_number
+                        if prs[0].get("url"):
+                            state["pr_url"] = prs[0].get("url")
+                except Exception as pe:
+                    logger.warning(f"Failed to parse gh pr list JSON in ci_watch_node: {pe}")
+
+        if not pr_number:
+            logger.warning(
+                f"No PR number found for branch '{head_branch}'. Skipping CI watch and completing."
+            )
+            state["status"] = "COMPLETED"
+            return state
+
+        logger.info(
+            f"Monitoring CI checks for PR #{pr_number} (Timeout: {timeout_seconds}s, Poll: {poll_interval}s, Round: {ci_round + 1}/{max_ci_round})..."
+        )
+        start_time = time.time()
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout_seconds:
+                logger.error(
+                    f"CI watch timed out after {int(elapsed)}s for PR #{pr_number} on branch '{head_branch}'"
+                )
+                state["status"] = "FAILED_CI"
+                state["error_category"] = "CI_ERROR"
+                state["error"] = f"CI watch timed out after {int(elapsed)} seconds"
+                return state
+
+            checks_res = run_cmd(
+                [gh_bin, "pr", "checks", str(pr_number), "--json", "name,state,bucket,link"],
+                cwd=cwd,
+                timeout=60,
+            )
+
+            checks_data: List[Dict[str, Any]] = []
+            if checks_res.returncode == 0 and checks_res.stdout.strip():
+                try:
+                    parsed = json.loads(checks_res.stdout)
+                    if isinstance(parsed, list):
+                        checks_data = parsed
+                except Exception:
+                    pass
+
+            # まだ check run が 1 件も登録されていない場合は待機
+            if not checks_data:
+                logger.info(
+                    f"No CI checks reported yet for PR #{pr_number} ({int(elapsed)}s elapsed). Waiting {poll_interval}s..."
+                )
+                time.sleep(poll_interval)
+                continue
+
+            # 1. 失敗ジョブの判定
+            failed_checks = [
+                c
+                for c in checks_data
+                if str(c.get("bucket", "")).lower() in ["fail", "error", "cancel"]
+                or str(c.get("state", "")).upper() in ["FAILURE", "STARTUP_FAILURE", "CANCELLED"]
+            ]
+
+            if failed_checks:
+                logger.warning(
+                    f"CI check failure detected for PR #{pr_number}: {[c.get('name') for c in failed_checks]}"
+                )
+
+                # 失敗ログの取得を試みる (gh run list -> gh run view --log-failed)
+                failed_log = ""
+                run_list = run_cmd(
+                    [
+                        gh_bin,
+                        "run",
+                        "list",
+                        "--branch",
+                        head_branch,
+                        "--limit",
+                        "1",
+                        "--json",
+                        "databaseId",
+                    ],
+                    cwd=cwd,
+                    timeout=30,
+                )
+                if run_list.returncode == 0:
+                    try:
+                        rdata = json.loads(run_list.stdout)
+                        if isinstance(rdata, list) and rdata and rdata[0].get("databaseId"):
+                            run_id = rdata[0]["databaseId"]
+                            run_log_res = run_cmd(
+                                [gh_bin, "run", "view", str(run_id), "--log-failed"],
+                                cwd=cwd,
+                                timeout=60,
+                            )
+                            if run_log_res.returncode == 0 and run_log_res.stdout.strip():
+                                failed_log = run_log_res.stdout.strip()
+                    except Exception as le:
+                        logger.warning(f"Failed to fetch detailed run log: {le}")
+
+                if not failed_log:
+                    # フォールバック: checks_res の出力や失敗ジョブ名
+                    failed_names = ", ".join([str(c.get("name")) for c in failed_checks])
+                    failed_log = f"Failed checks: {failed_names}\n" + "\n".join(
+                        [f"- {c.get('name')}: {c.get('link')}" for c in failed_checks]
+                    )
+
+                if len(failed_log) > 3000:
+                    failed_log = failed_log[-3000:]
+
+                state["ci_round"] = ci_round + 1
+                state["error_category"] = "CI_ERROR"
+
+                generic_instruction = (
+                    "\n\n【CI FAILURE RECOVERY INSTRUCTIONS】\n"
+                    "Review the GitHub Actions CI failure output above.\n"
+                    "Fix the failing source files, tests, or configurations to make CI checks pass on GitHub Actions."
+                )
+
+                state["aider_message"] = (
+                    f"GitHub Actions CI failed for PR #{pr_number} (Round {state['ci_round']}/{max_ci_round}):\n"
+                    f"{failed_log}{generic_instruction}"
+                )
+
+                if state["ci_round"] >= max_ci_round:
+                    state["status"] = "FAILED_CI"
+                    state["error"] = f"CI failed after {state['ci_round']} round(s)"
+                else:
+                    state["status"] = "retry_code"
+                return state
+
+            # 2. 進行中ジョブの判定
+            pending_checks = [
+                c
+                for c in checks_data
+                if str(c.get("bucket", "")).lower() in ["pending", "in_progress", "wait"]
+                or str(c.get("state", "")).upper()
+                in ["PENDING", "QUEUED", "IN_PROGRESS", "WAITING"]
+            ]
+
+            if pending_checks:
+                logger.info(
+                    f"CI checks for PR #{pr_number} in progress ({len(pending_checks)} pending, {int(elapsed)}s elapsed). Waiting {poll_interval}s..."
+                )
+                time.sleep(poll_interval)
+                continue
+
+            # 3. すべて成功
+            logger.info(
+                f"All CI checks passed for PR #{pr_number} in {int(elapsed)}s. Marking status as COMPLETED."
+            )
+            state["status"] = "COMPLETED"
+            return state
+
+    except Exception as e:
+        logger.error(f"Error in ci_watch_node: {e}")
+        state["status"] = "FAILED_SYSTEM"
+        state["error_category"] = "SYSTEM_ERROR"
+        state["error"] = str(e)
+
+    return state
+
+
 def escalate_node(state: GraphState) -> GraphState:
     """上限到達時・例外発生時のエスカレーション停止と敗因分析レポートの自動生成ノード"""
     logger.info(f"Executing escalate_node for {state['issue_id']}")
@@ -1693,7 +2123,7 @@ def escalate_node(state: GraphState) -> GraphState:
     cwd = state.get("cwd")
     if cwd and state.get("error_category") in ["LINT_ERROR", "TEST_ERROR"]:
         try:
-            from tools.llm_client import call_llm
+            from tools.backends.llm_client import call_llm
 
             logger.info("Generating Failure Analysis Report...")
 
@@ -1702,7 +2132,7 @@ def escalate_node(state: GraphState) -> GraphState:
             lint_res = (state.get("lint_result") or {}).get("stdout", "")
             latest_error = test_res if state.get("error_category") == "TEST_ERROR" else lint_res
 
-            from tools.prompt_harness import resolve_prompt
+            from tools.core.prompt_harness import resolve_prompt
 
             system_prompt = resolve_prompt("reviewer", "failure_analysis").system_prompt
             user_prompt = f"Target Files: {state.get('target_files')}\n\nFinal Error Log:\n{latest_error[:2000]}"
@@ -1822,9 +2252,10 @@ def execute_issue(
     resume: Optional[bool] = None,
     fresh: bool = False,
     auto_stash: bool = False,
+    watch_ci: Optional[bool] = None,
 ) -> None:
     if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent
     if metadata_dir is None:
         metadata_dir = project_root / "metadata"
 
@@ -1845,6 +2276,9 @@ def execute_issue(
         base_branch = ctx.get("base_branch", "develop")
         work_branch_prefix = ctx.get("work_branch_prefix", "sbos/")
         allowed_new_file_globs = ctx.get("allowed_new_file_globs", [])
+        language = ctx.get("language", "python")
+        test_command = ctx.get("test_command", "")
+        watch_ci_setting = watch_ci if watch_ci is not None else bool(ctx.get("watch_ci", False))
         is_valid = ctx.get("valid", False)
 
         # 母艦誤編集防止フェイルセーフ (MULTI-001 §2③・§5)
@@ -2198,6 +2632,7 @@ def execute_issue(
             workflow.add_node("test_feedback_node", test_feedback_node)
             workflow.add_node("review_node", review_node)
             workflow.add_node("done_node", done_node)
+            workflow.add_node("ci_watch_node", ci_watch_node)
             workflow.add_node("escalate_node", escalate_node)
 
             workflow.set_entry_point("spec_draft")
@@ -2327,55 +2762,94 @@ def execute_issue(
                 },
             )
 
-            workflow.add_edge("done_node", END)
+            def route_after_done(s: GraphState) -> str:
+                if s.get("status") in ["PR_FAILED", "FAILED_SYSTEM", "FAILED_B7"]:
+                    return "escalate_node"
+                if s.get("already_satisfied") or not s.get("watch_ci"):
+                    return "end"
+                return "ci_watch_node"
+
+            workflow.add_conditional_edges(
+                "done_node",
+                route_after_done,
+                {
+                    "ci_watch_node": "ci_watch_node",
+                    "escalate_node": "escalate_node",
+                    "end": END,
+                },
+            )
+
+            def route_after_ci_watch(s: GraphState) -> str:
+                if s.get("status") in ["FAILED_SYSTEM", "FAILED_CI", "FAILED_B7"]:
+                    return "escalate_node"
+                if s.get("status") == "retry_code":
+                    return "code_node"
+                if s.get("status") in ["COMPLETED", "ci_passed"]:
+                    return "end"
+                return _route_unknown_status("ci_watch_node", s)
+
+            workflow.add_conditional_edges(
+                "ci_watch_node",
+                route_after_ci_watch,
+                {
+                    "code_node": "code_node",
+                    "escalate_node": "escalate_node",
+                    "end": END,
+                },
+            )
+
             workflow.add_edge("escalate_node", END)
 
             app = workflow.compile()
 
-            # Issue 詳細記述ファイルの探索および読み込み (1. サテライト docs/issues/ -> 2. 母艦 metadata/projects/<KEY>/issues/)
-            satellite_issue_file = Path(cwd) / "docs" / "issues" / f"{issue_id}.md" if cwd else None
-            meta_issue_file = (
-                metadata_dir / "projects" / project_key / "issues" / f"{issue_id}.md"
-                if metadata_dir
-                else None
+            # GitHub Issues SSOT (またはテストフィクスチャ) から Issue 詳細仕様を取得
+            github_repo = str(ctx.get("github_repo") or "").strip()
+            parsed_task = parse_task_id(issue_id)
+            issue_number = parsed_task[1] if parsed_task else None
+            issue_title = ""
+            issue_body = ""
+            instruction_text = f"Implement issue {issue_id}"
+
+            remote_issue = _resolve_issue_spec_record(
+                issue_id,
+                project_key,
+                github_repo=github_repo,
+                project_root=project_root,
             )
-            issue_detail_file = None
-            if satellite_issue_file and satellite_issue_file.exists():
-                issue_detail_file = satellite_issue_file
-            elif meta_issue_file and meta_issue_file.exists():
-                issue_detail_file = meta_issue_file
+            if remote_issue:
+                issue_title = str(remote_issue.get("title") or "").strip()
+                issue_body = str(remote_issue.get("body") or "").strip()
+                if isinstance(remote_issue.get("number"), int):
+                    issue_number = remote_issue["number"]
 
-            if issue_detail_file and issue_detail_file.exists():
-                logger.info(f"Loaded issue detail specification from {issue_detail_file}")
-                instruction_text = issue_detail_file.read_text(encoding="utf-8")
-                md_targets = extract_target_files_from_issue_text(instruction_text)
-                if md_targets:
-                    resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
-                    logger.info(
-                        f"Dynamically resolved target_files from issue markdown: {resolved_targets}"
-                    )
-                    target_files = resolved_targets
-            else:
-                instruction_text = f"Implement issue {issue_id}"
-                satellite_tasks_md = Path(cwd) / "docs" / "tasks.md" if cwd else None
-                meta_tasks_md = (
-                    metadata_dir / "projects" / project_key / "tasks.md" if metadata_dir else None
-                )
-                tasks_md = None
-                if satellite_tasks_md and satellite_tasks_md.exists():
-                    tasks_md = satellite_tasks_md
-                elif meta_tasks_md and meta_tasks_md.exists():
-                    tasks_md = meta_tasks_md
+                if issue_body:
+                    if issue_body.lstrip().startswith("# ") or not issue_title:
+                        instruction_text = issue_body
+                    else:
+                        instruction_text = f"# [{issue_id}] {issue_title}\n\n{issue_body}"
 
-                if tasks_md and tasks_md.exists():
                     try:
-                        tasks_content = tasks_md.read_text(encoding="utf-8")
-                        for line in tasks_content.splitlines():
-                            if issue_id in line:
-                                instruction_text = f"Implement issue {issue_id}: {line.strip()}"
-                                break
-                    except Exception as te:
-                        logger.warning(f"Failed to parse tasks.md for fallback instruction: {te}")
+                        md_targets = require_valid_target_files(issue_body)
+                    except InvalidTargetFilesError as invalid_error:
+                        # 不正パスは黙って捨てず、code_node 開始前に安全停止する (#186)
+                        logger.error(f"{invalid_error} (issue: {issue_id})")
+                        _fail_system(
+                            project_key,
+                            issue_id,
+                            str(invalid_error),
+                            cwd=cwd,
+                            metadata_dir=metadata_dir,
+                            history_file=history_file,
+                        )
+                        return
+                    if md_targets:
+                        resolved_targets = resolve_target_files_against_cwd(md_targets, cwd=cwd)
+                        logger.info(
+                            f"Dynamically resolved target_files from GitHub Issue: {resolved_targets}"
+                        )
+                        target_files = resolved_targets
+                elif issue_title:
+                    instruction_text = f"# [{issue_id}] {issue_title}"
 
             initial_state = GraphState(
                 issue_id=issue_id,
@@ -2395,6 +2869,10 @@ def execute_issue(
                 cwd=cwd,
                 metadata_dir=str(metadata_dir),
                 base_branch=base_branch,
+                issue_number=issue_number,
+                issue_title=issue_title,
+                issue_body=issue_body,
+                github_repo=github_repo,
                 aider_message="",
                 impl_plan=None,
                 lint_result=None,
@@ -2406,6 +2884,11 @@ def execute_issue(
                 history_summary=None,
                 rdjson=None,
                 allowed_new_file_globs=allowed_new_file_globs,
+                language=language,
+                test_command=test_command,
+                watch_ci=watch_ci_setting,
+                ci_round=0,
+                max_ci_round=2,
             )
             try:
                 final_state = app.invoke(
@@ -2495,7 +2978,10 @@ def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path
     """
     if cache_file is None:
         cache_file = (
-            Path(__file__).resolve().parent.parent / "tools" / ".cache" / "priority-cache.json"
+            Path(__file__).resolve().parent.parent.parent
+            / "tools"
+            / ".cache"
+            / "priority-cache.json"
         )
     logger.info(f"Orchestrating uncompleted issues (project_key: {project_key or 'ALL'})")
 
@@ -2535,7 +3021,7 @@ def cmd_orchestrate(project_key: Optional[str] = None, cache_file: Optional[Path
 
         top_issue = top_items[0].get("issue_id")
         logger.info(
-            f"Suggested Command: python tools/orchestrator_graph.py execute --issue-id {top_issue}"
+            f"Suggested Command: python tools/core/orchestrator_graph.py execute --issue-id {top_issue}"
         )
     except Exception as e:
         logger.error(f"Failed to read priority cache: {e}")
@@ -2568,6 +3054,12 @@ def main() -> None:
         default=False,
         help="Automatically stash uncommitted changes in satellite repository before execution",
     )
+    exec_parser.add_argument(
+        "--watch-ci",
+        action="store_true",
+        default=None,
+        help="Watch GitHub Actions CI completion after PR creation and auto-recover on failure (Issue #171)",
+    )
 
     orch_parser = subparsers.add_parser("orchestrate", help="Orchestrate uncompleted issues")
     orch_parser.add_argument("--project-key", help="Target Project Key (All if omitted)")
@@ -2590,6 +3082,7 @@ def main() -> None:
             resume=args.resume,
             fresh=args.fresh,
             auto_stash=args.auto_stash,
+            watch_ci=args.watch_ci,
         )
     elif args.subcommand == "orchestrate":
         cmd_orchestrate(args.project_key)
@@ -2597,10 +3090,11 @@ def main() -> None:
         legacy_parser = argparse.ArgumentParser()
         legacy_parser.add_argument("--issue-id", help="Target Issue ID")
         legacy_parser.add_argument("--project-key", help="Target Project Key")
+        legacy_parser.add_argument("--watch-ci", action="store_true", default=None)
         leg_args, _ = legacy_parser.parse_known_args()
         if leg_args.issue_id and leg_args.project_key:
             validate_project_consistency(leg_args.issue_id, leg_args.project_key)
-            execute_issue(leg_args.issue_id, leg_args.project_key)
+            execute_issue(leg_args.issue_id, leg_args.project_key, watch_ci=leg_args.watch_ci)
         else:
             parser.print_help()
 

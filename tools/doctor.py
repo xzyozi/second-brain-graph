@@ -2,8 +2,8 @@
 """
 tools/doctor.py - プロジェクト受入態勢診断＆一発修復ツール (Issue #83)
 
-サテライトプロジェクトの受入態勢（レジストリ、project.json、tasks.md、.venv、.gitignore、
-Issue仕様書、GitHub標準ラベル）を一括診断し、--fix で不足している構成要素を自動生成・修復します。
+サテライトプロジェクトの受入態勢（レジストリ、project.json、レガシーファイル有無、.venv、.gitignore、
+GitHub Issues 疎通、GitHub標準ラベル）を一括診断し、--fix で不足している構成要素を自動生成・修復します。
 
 使用例:
   uv run python tools/doctor.py TFG
@@ -15,7 +15,6 @@ Issue仕様書、GitHub標準ラベル）を一括診断し、--fix で不足し
 import argparse
 import json
 import logging
-import re
 import shutil
 import subprocess
 import sys
@@ -26,13 +25,14 @@ from typing import Any, Dict, List, Optional, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.metadata_store import (  # noqa: E402
+from tools.workspace.metadata_store import (  # noqa: E402
+    SUPPORTED_LANGUAGES,
+    get_gitignore_entries_for_language,
     load_project_registry,
     resolve_project_from_cwd,
     resolve_target_spec,
     self_heal_satellite_project_json,
 )
-from tools.run_task import ensure_satellite_gitignore, missing_gitignore_entries  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("doctor")
@@ -169,10 +169,28 @@ def check_project_json(
                     message=f"docs/project.json の allowed_new_file_globs は文字列の配列である必要があります: {globs}",
                     fixable=False,
                 )
+        lang = data.get("language", "python")
+        if not isinstance(lang, str) or lang.strip().lower() not in SUPPORTED_LANGUAGES:
+            return CheckResult(
+                name="Satellite project.json",
+                status="WARN",
+                message=f"docs/project.json の language ('{lang}') はサポート対象外または不正です (サポート: {', '.join(SUPPORTED_LANGUAGES)})",
+                fixable=False,
+            )
+        if "test_command" in data and not isinstance(data["test_command"], str):
+            return CheckResult(
+                name="Satellite project.json",
+                status="WARN",
+                message=f"docs/project.json の test_command は文字列である必要があります: {data['test_command']}",
+                fixable=False,
+            )
+        msg_extra = f", language: {lang}"
+        if data.get("test_command"):
+            msg_extra += f", test_cmd: {data['test_command']}"
         return CheckResult(
             name="Satellite project.json",
             status="OK",
-            message=f"docs/project.json 存在・key一致 ({project_key})",
+            message=f"docs/project.json 存在・key一致 ({project_key}{msg_extra})",
         )
     except Exception as e:
         return CheckResult(
@@ -183,138 +201,255 @@ def check_project_json(
         )
 
 
-def check_tasks_md(
-    sat_dir: Path,
-    project_key: str,
-    fix: bool = False,
-) -> CheckResult:
-    """3. サテライト docs/tasks.md の存在チェック"""
-    tasks_file = sat_dir / "docs" / "tasks.md"
-    if not tasks_file.exists():
-        if fix:
-            tasks_file.parent.mkdir(parents=True, exist_ok=True)
-            tasks_file.write_text(
-                f"# Tasks for {project_key}\n\n<!-- タスク一覧 -->\n", encoding="utf-8"
-            )
-            return CheckResult(
-                name="Tasks Backlog",
-                status="FIXED",
-                message="docs/tasks.md を新規作成しました。",
-            )
-        return CheckResult(
-            name="Tasks Backlog",
-            status="FAIL",
-            message="docs/tasks.md が存在しません (修復可能: --fix)",
-            fixable=True,
-        )
+def check_legacy_local_files(sat_dir: Path) -> CheckResult:
+    """3. 非推奨となったレガシーローカルファイル (docs/tasks.md, docs/issues/) の残存チェック"""
+    legacy_items: List[str] = []
+    if (sat_dir / "docs" / "tasks.md").exists():
+        legacy_items.append("docs/tasks.md")
+    issues_dir = sat_dir / "docs" / "issues"
+    if issues_dir.exists() and any(issues_dir.iterdir()):
+        legacy_items.append("docs/issues/")
 
-    try:
-        content = tasks_file.read_text(encoding="utf-8")
-        task_count = len(re.findall(rf"\[{project_key}-\d{{4}}", content))
+    if legacy_items:
         return CheckResult(
-            name="Tasks Backlog",
-            status="OK",
-            message=f"docs/tasks.md 存在 (登録タスク数: {task_count} 件)",
-        )
-    except Exception as e:
-        return CheckResult(
-            name="Tasks Backlog",
+            name="Legacy Local Files",
             status="WARN",
-            message=f"docs/tasks.md の解析中にエラーが発生しました: {e}",
+            message=(
+                f"非推奨のレガシーファイルが残存しています: {', '.join(legacy_items)} "
+                "(GitHub Issues SSOT 移行後は削除可能です)"
+            ),
             fixable=False,
         )
 
+    return CheckResult(
+        name="Legacy Local Files",
+        status="OK",
+        message="GitHub Issues SSOT 準拠 (レガシー tasks.md / docs/issues なし)",
+    )
 
-def check_venv(sat_dir: Path, fix: bool = False) -> CheckResult:
-    """4. サテライト .venv 仮想環境の存在と Python 実行可能性チェック"""
-    venv_dir = sat_dir / ".venv"
-    if sys.platform == "win32":
-        py_bin = venv_dir / "Scripts" / "python.exe"
-    else:
-        py_bin = venv_dir / "bin" / "python"
 
-    if not py_bin.exists():
-        if fix:
-            try:
-                # 1. uv venv を試行
-                res = subprocess.run(
-                    ["uv", "venv"],
-                    cwd=str(sat_dir),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if res.returncode == 0 and py_bin.exists():
+def check_environment(sat_dir: Path, language: str = "python", fix: bool = False) -> CheckResult:
+    """4. サテライト実行環境（Python .venv, Node.js package.json, Rust Cargo.toml）の存在と実行可能性チェック (Issue #168)"""
+    norm_lang = (language or "python").strip().lower()
+
+    if norm_lang == "python":
+        venv_dir = sat_dir / ".venv"
+        if sys.platform == "win32":
+            py_bin = venv_dir / "Scripts" / "python.exe"
+        else:
+            py_bin = venv_dir / "bin" / "python"
+
+        if not py_bin.exists():
+            if fix:
+                try:
+                    # 1. uv venv を試行
+                    res = subprocess.run(
+                        ["uv", "venv"],
+                        cwd=str(sat_dir),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if res.returncode == 0 and py_bin.exists():
+                        return CheckResult(
+                            name="Virtual Environment",
+                            status="FIXED",
+                            message="uv venv により .venv 仮想環境を作成しました。",
+                        )
+                    # 2. フォールバックで python -m venv
+                    res2 = subprocess.run(
+                        [sys.executable, "-m", "venv", str(venv_dir)],
+                        cwd=str(sat_dir),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if res2.returncode == 0 and py_bin.exists():
+                        return CheckResult(
+                            name="Virtual Environment",
+                            status="FIXED",
+                            message="python -m venv により .venv 仮想環境を作成しました。",
+                        )
+                except Exception as e:
                     return CheckResult(
                         name="Virtual Environment",
-                        status="FIXED",
-                        message="uv venv により .venv 仮想環境を作成しました。",
+                        status="FAIL",
+                        message=f".venv の作成に失敗しました: {e}",
+                        fixable=True,
                     )
-                # 2. フォールバックで python -m venv
-                res2 = subprocess.run(
-                    [sys.executable, "-m", "venv", str(venv_dir)],
-                    cwd=str(sat_dir),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if res2.returncode == 0 and py_bin.exists():
-                    return CheckResult(
-                        name="Virtual Environment",
-                        status="FIXED",
-                        message="python -m venv により .venv 仮想環境を作成しました。",
-                    )
-            except Exception as e:
-                return CheckResult(
-                    name="Virtual Environment",
-                    status="FAIL",
-                    message=f".venv の作成に失敗しました: {e}",
-                    fixable=True,
-                )
-        return CheckResult(
-            name="Virtual Environment",
-            status="FAIL",
-            message=f".venv 仮想環境が見つかりません (修復可能: --fix)。パス: {py_bin}",
-            fixable=True,
-        )
-
-    # 実行可能性テスト
-    try:
-        ver_proc = subprocess.run(
-            [str(py_bin), "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if ver_proc.returncode == 0:
-            ver_str = ver_proc.stdout.strip() or ver_proc.stderr.strip()
             return CheckResult(
                 name="Virtual Environment",
-                status="OK",
-                message=f".venv 仮想環境 有効 ({ver_str})",
+                status="FAIL",
+                message=f".venv 仮想環境が見つかりません (修復可能: --fix)。パス: {py_bin}",
+                fixable=True,
             )
-        else:
+
+        # 実行可能性テスト
+        try:
+            ver_proc = subprocess.run(
+                [str(py_bin), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if ver_proc.returncode == 0:
+                ver_str = ver_proc.stdout.strip() or ver_proc.stderr.strip()
+                return CheckResult(
+                    name="Virtual Environment",
+                    status="OK",
+                    message=f".venv 仮想環境 有効 ({ver_str})",
+                )
+            else:
+                return CheckResult(
+                    name="Virtual Environment",
+                    status="WARN",
+                    message=f".venv の Python がエラーコード {ver_proc.returncode} で終了しました。",
+                    fixable=False,
+                )
+        except Exception as e:
             return CheckResult(
                 name="Virtual Environment",
                 status="WARN",
-                message=f".venv の Python がエラーコード {ver_proc.returncode} で終了しました。",
+                message=f".venv 実行テスト失敗: {e}",
                 fixable=False,
             )
-    except Exception as e:
+
+    elif norm_lang in ("typescript", "javascript"):
+        pkg_json = sat_dir / "package.json"
+        if not pkg_json.exists():
+            return CheckResult(
+                name="Node.js Environment",
+                status="FAIL",
+                message=f"package.json が見つかりません: {pkg_json}",
+                fixable=False,
+            )
+
+        node_bin = shutil.which("node")
+        npm_bin = shutil.which("npm")
+        if not node_bin:
+            return CheckResult(
+                name="Node.js Environment",
+                status="WARN",
+                message="システム PATH に Node.js (node) が見つかりません。",
+                fixable=False,
+            )
+
+        # node version check
+        try:
+            n_res = subprocess.run(
+                [node_bin, "--version"], capture_output=True, text=True, timeout=5, check=False
+            )
+            node_ver = n_res.stdout.strip() or "v?"
+        except Exception:
+            node_ver = "unknown"
+
+        node_modules = sat_dir / "node_modules"
+        if not node_modules.exists() or not any(node_modules.iterdir()):
+            if fix and npm_bin:
+                try:
+                    inst_res = subprocess.run(
+                        [npm_bin, "install"],
+                        cwd=str(sat_dir),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if inst_res.returncode == 0:
+                        return CheckResult(
+                            name="Node.js Environment",
+                            status="FIXED",
+                            message=f"npm install により依存関係をセットアップしました (Node {node_ver})",
+                        )
+                except Exception as ex:
+                    logger.debug(f"npm install failed during fix: {ex}")
+            return CheckResult(
+                name="Node.js Environment",
+                status="WARN",
+                message=f"node_modules が未作成です (Node {node_ver}, 修復可能: --fix)",
+                fixable=bool(npm_bin),
+            )
+
         return CheckResult(
-            name="Virtual Environment",
-            status="WARN",
-            message=f".venv 実行テスト失敗: {e}",
-            fixable=False,
+            name="Node.js Environment",
+            status="OK",
+            message=f"Node.js 環境 有効 (Node {node_ver}, package.json / node_modules 存在)",
         )
 
+    elif norm_lang == "rust":
+        cargo_toml = sat_dir / "Cargo.toml"
+        if not cargo_toml.exists():
+            return CheckResult(
+                name="Rust Environment",
+                status="FAIL",
+                message=f"Cargo.toml が見つかりません: {cargo_toml}",
+                fixable=False,
+            )
 
-def check_gitignore(sat_dir: Path, fix: bool = False) -> CheckResult:
-    """サテライトの .gitignore 設定チェック"""
+        cargo_bin = shutil.which("cargo")
+        if not cargo_bin:
+            return CheckResult(
+                name="Rust Environment",
+                status="WARN",
+                message="システム PATH に Cargo (cargo) が見つかりません。",
+                fixable=False,
+            )
+
+        try:
+            c_res = subprocess.run(
+                [cargo_bin, "--version"], capture_output=True, text=True, timeout=5, check=False
+            )
+            cargo_ver = c_res.stdout.strip() if c_res.returncode == 0 else "cargo"
+            return CheckResult(
+                name="Rust Environment",
+                status="OK",
+                message=f"Rust 環境 有効 ({cargo_ver}, Cargo.toml 存在)",
+            )
+        except Exception as e:
+            return CheckResult(
+                name="Rust Environment",
+                status="WARN",
+                message=f"Cargo 実行テスト失敗: {e}",
+                fixable=False,
+            )
+
+    return CheckResult(
+        name="Language Environment",
+        status="OK",
+        message=f"言語 '{norm_lang}' の基本検証スキップ",
+    )
+
+
+def check_venv(sat_dir: Path, fix: bool = False) -> CheckResult:
+    """後方互換用エイリアス: Python .venv の検証"""
+    return check_environment(sat_dir, language="python", fix=fix)
+
+
+def _missing_gitignore_for_lang(content: str, language: str = "python") -> List[str]:
+    """サテライトの .gitignore 内で言語別に未設定の生成物パターンを算出する (Issue #168)"""
+    lines = {
+        line.strip().rstrip("/")
+        for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    entries = get_gitignore_entries_for_language(language)
+    missing = []
+    for entry in entries:
+        norm = entry.strip().rstrip("/")
+        if norm in lines:
+            continue
+        if norm.endswith("*"):
+            prefix = norm[:-1]
+            if any(line_item.startswith(prefix) for line_item in lines):
+                continue
+        missing.append(entry)
+    return missing
+
+
+def check_gitignore(sat_dir: Path, language: str = "python", fix: bool = False) -> CheckResult:
+    """サテライトの .gitignore 設定チェック (言語別対応 Issue #168)"""
     gitignore_file = sat_dir / ".gitignore"
     if not gitignore_file.exists():
-        # ensure_satellite_gitignore は .gitignore を新規作成しないため、--fix でも直せない (Issue #100)
         return CheckResult(
             name="Git Ignore",
             status="WARN",
@@ -323,16 +458,30 @@ def check_gitignore(sat_dir: Path, fix: bool = False) -> CheckResult:
         )
 
     content = gitignore_file.read_text(encoding="utf-8")
-    missing_entries = missing_gitignore_entries(content)
+    missing_entries = _missing_gitignore_for_lang(content, language=language)
 
     if missing_entries:
         if fix:
-            ensure_satellite_gitignore(str(sat_dir))
-            return CheckResult(
-                name="Git Ignore",
-                status="FIXED",
-                message=f".gitignore に {', '.join(missing_entries)} を追記しました。",
-            )
+            try:
+                new_content = (
+                    content.rstrip()
+                    + f"\n\n# Autonomous worker ignores ({language})\n"
+                    + "\n".join(missing_entries)
+                    + "\n"
+                )
+                gitignore_file.write_text(new_content, encoding="utf-8")
+                return CheckResult(
+                    name="Git Ignore",
+                    status="FIXED",
+                    message=f".gitignore に {', '.join(missing_entries)} を追記しました。",
+                )
+            except Exception as ex:
+                return CheckResult(
+                    name="Git Ignore",
+                    status="FAIL",
+                    message=f".gitignore 追記失敗: {ex}",
+                    fixable=True,
+                )
         return CheckResult(
             name="Git Ignore",
             status="WARN",
@@ -343,58 +492,63 @@ def check_gitignore(sat_dir: Path, fix: bool = False) -> CheckResult:
     return CheckResult(
         name="Git Ignore",
         status="OK",
-        message=".gitignore に生成物パターン (.venv/, .aider* 等) が設定済み",
+        message=f".gitignore に生成物パターン ({language}) が設定済み",
     )
 
 
-def check_issue_specs(sat_dir: Path, project_key: str) -> CheckResult:
-    """6. 未完了タスクに対応する仕様書 (docs/issues/*.md) の整合性チェック"""
-    tasks_file = sat_dir / "docs" / "tasks.md"
-    if not tasks_file.exists():
+def check_github_issues_access(github_repo: Optional[str]) -> CheckResult:
+    """6. GitHub CLI / GitHub Issues (SSOT) 疎通チェック"""
+    if not github_repo:
         return CheckResult(
-            name="Issue Specifications",
-            status="OK",
-            message="tasks.md が存在しないためスキップ",
-        )
-
-    content = tasks_file.read_text(encoding="utf-8")
-    ready_tasks = re.findall(
-        rf"-\s*\[\s*\]\s*\[({project_key}-\d{{4}}(?:-[A-Z])?)\].*?stage:ready",
-        content,
-    )
-    if not ready_tasks:
-        ready_tasks = re.findall(
-            rf"-\s*\[\s*\]\s*\[({project_key}-\d{{4}}(?:-[A-Z])?)\]",
-            content,
-        )
-
-    if not ready_tasks:
-        return CheckResult(
-            name="Issue Specifications",
-            status="OK",
-            message="未完了タスクなし (または仕様書チェック対象なし)",
-        )
-
-    issues_dir = sat_dir / "docs" / "issues"
-    missing_specs = []
-    for tid in ready_tasks:
-        spec_path = issues_dir / f"{tid}.md"
-        if not spec_path.exists():
-            missing_specs.append(tid)
-
-    if missing_specs:
-        return CheckResult(
-            name="Issue Specifications",
+            name="GitHub Issues Access",
             status="WARN",
-            message=f"仕様書が未作成のタスクがあります: {', '.join(missing_specs[:5])}{'...' if len(missing_specs) > 5 else ''}",
-            fixable=False,
+            message="github_repo が未設定のため GitHub Issues 疎通確認をスキップしました。",
         )
 
-    return CheckResult(
-        name="Issue Specifications",
-        status="OK",
-        message=f"未完了タスク {len(ready_tasks)} 件の仕様書 (docs/issues/*.md) が全て存在",
-    )
+    if not shutil.which("gh"):
+        return CheckResult(
+            name="GitHub Issues Access",
+            status="WARN",
+            message="GitHub CLI (gh) がインストールされていないため疎通確認をスキップしました。",
+        )
+
+    try:
+        proc = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                github_repo,
+                "--state",
+                "all",
+                "--limit",
+                "1",
+                "--json",
+                "number",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return CheckResult(
+                name="GitHub Issues Access",
+                status="WARN",
+                message=f"GitHub Issues 疎通失敗 ({github_repo}): {proc.stderr.strip()[:100]}",
+            )
+        return CheckResult(
+            name="GitHub Issues Access",
+            status="OK",
+            message=f"GitHub Issues (SSOT) 疎通正常: {github_repo}",
+        )
+    except Exception as e:
+        return CheckResult(
+            name="GitHub Issues Access",
+            status="WARN",
+            message=f"GitHub Issues 疎通確認中にエラー: {e}",
+        )
 
 
 def check_github_labels(github_repo: Optional[str], fix: bool = False) -> CheckResult:
@@ -529,17 +683,29 @@ def diagnose_project(
         check_project_json(project_key, sat_dir, pdata, project_root=project_root, fix=fix)
     )
 
-    # 3. docs/tasks.md チェック
-    results.append(check_tasks_md(sat_dir, project_key, fix=fix))
+    # 言語メタデータの抽出 (Issue #168)
+    satellite_lang = "python"
+    pjson_path = sat_dir / "docs" / "project.json"
+    if pjson_path.exists():
+        try:
+            pjson_data = json.loads(pjson_path.read_text(encoding="utf-8"))
+            satellite_lang = pjson_data.get("language", "python")
+        except Exception:
+            pass
+    elif "language" in pdata:
+        satellite_lang = pdata["language"]
 
-    # 4. .venv 仮想環境チェック
-    results.append(check_venv(sat_dir, fix=fix))
+    # 3. レガシーローカルファイル (docs/tasks.md / docs/issues) チェック
+    results.append(check_legacy_local_files(sat_dir))
 
-    # .gitignore チェック
-    results.append(check_gitignore(sat_dir, fix=fix))
+    # 4. 実行環境チェック (言語別ディスパッチ)
+    results.append(check_environment(sat_dir, language=satellite_lang, fix=fix))
 
-    # 5. Issue 仕様書チェック
-    results.append(check_issue_specs(sat_dir, project_key))
+    # .gitignore チェック (言語別ディスパッチ)
+    results.append(check_gitignore(sat_dir, language=satellite_lang, fix=fix))
+
+    # 5. GitHub Issues (SSOT) 疎通チェック
+    results.append(check_github_issues_access(github_repo))
 
     # 6. GitHub ラベルチェック
     results.append(check_github_labels(github_repo, fix=fix))

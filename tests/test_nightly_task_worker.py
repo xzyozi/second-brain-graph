@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tools import nightly_task_worker
+from tools.workspace.github_issues import use_issue_fixture
 
 
 def test_load_config_valid_toml(tmp_path: Path) -> None:
@@ -51,36 +52,73 @@ def test_load_config_valid_toml(tmp_path: Path) -> None:
     assert config["execution"]["timeout_seconds"] == 300
 
 
-def test_parse_tasks_md_candidates(tmp_path: Path) -> None:
-    """tasks.md から stage:ready タスクのみが抽出され優先度スコア順に計算されることを検証する."""
-    tasks_file = tmp_path / "docs" / "tasks.md"
-    tasks_file.parent.mkdir(parents=True)
-    tasks_content = """
-    # Tasks
+def test_collect_issue_candidates(tmp_path: Path) -> None:
+    """GitHub Issues から stage:ready タスクのみが抽出され優先度スコア順に計算されることを検証する."""
+    fixture_issues = {
+        "xzyozi/clip_watcher": [
+            {
+                "number": 101,
+                "title": "Task Ideation",
+                "body": "",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ideation"}, {"name": "priority:high"}],
+            },
+            {
+                "number": 102,
+                "title": "Task Ready High",
+                "body": "<!-- added:2026-09-01 -->",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "priority:high"}],
+            },
+            {
+                "number": 103,
+                "title": "Task Ready Medium",
+                "body": "<!-- added:2026-09-20 -->",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "priority:medium"}],
+            },
+            {
+                "number": 104,
+                "title": "Task Completed",
+                "body": "",
+                "state": "CLOSED",
+                "labels": [{"name": "stage:done"}, {"name": "priority:critical"}],
+            },
+            {
+                "number": 105,
+                "title": "Task Blocked by open issue",
+                "body": "Depends on: #102",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "priority:critical"}],
+            },
+            {
+                "number": 106,
+                "title": "Task Blocked by closed issue",
+                "body": "Depends on: #104",
+                "state": "OPEN",
+                "labels": [{"name": "stage:ready"}, {"name": "priority:low"}],
+            },
+        ]
+    }
 
-    - [ ] [CW-0001] Task Ideation <!-- priority:high stage:ideation issue:#101 -->
-    - [ ] [CW-0002] Task Ready High <!-- priority:high stage:ready issue:#102 added:2026-09-01 -->
-    - [ ] [CW-0003] Task Ready Medium <!-- priority:medium stage:ready issue:#103 added:2026-09-20 -->
-    - [x] [CW-0004] Task Completed <!-- priority:critical stage:ready issue:#104 -->
-    - [ ] [CW-0005] Task Blocked <!-- priority:critical stage:ready issue:#105 blockedby:CW-0002 -->
-    """
-    tasks_file.write_text(tasks_content, encoding="utf-8")
+    with use_issue_fixture(fixture_issues):
+        candidates = nightly_task_worker.collect_issue_candidates(
+            repo="xzyozi/clip_watcher",
+            project_key="CW",
+            project_name="clip_watcher",
+            satellite_dir=tmp_path,
+            require_label="stage:ready",
+            skip_blocked=True,
+            today=datetime.date(2026, 9, 25),
+        )
 
-    candidates = nightly_task_worker.parse_tasks_md_candidates(
-        tasks_path=tasks_file,
-        project_key="CW",
-        project_name="clip_watcher",
-        satellite_dir=tmp_path,
-        require_label="stage:ready",
-        skip_blocked=True,
-    )
-
-    # CW-0001 (ideation), CW-0004 (completed), CW-0005 (blocked) は除外される
-    assert len(candidates) == 2
+    # CW-0101 (ideation), CW-0104 (completed), CW-0105 (blocked by open #102) は除外
+    # CW-0106 は完了済み #104 依存なので候補に含まれる
+    assert len(candidates) == 3
     task_ids = [c.task_id for c in candidates]
-    assert task_ids == ["CW-0002", "CW-0003"]
+    assert task_ids == ["CW-0102", "CW-0103", "CW-0106"]
 
-    # CW-0002 (high) のスコアが CW-0003 (medium) より高いこと
+    # CW-0102 (high) のスコアが CW-0103 (medium) より高いこと
     assert candidates[0].score > candidates[1].score
 
 
@@ -244,7 +282,12 @@ def test_run_loop_with_max_iterations(
 
     cycle_count = 0
 
-    def mock_cycle(root: Path, config: dict, opts: object) -> int:
+    def mock_cycle(
+        root: Path,
+        config: dict,
+        opts: object,
+        stop_event: threading.Event | None = None,
+    ) -> int:
         nonlocal cycle_count
         cycle_count += 1
         return 0
@@ -271,6 +314,52 @@ def test_run_loop_with_max_iterations(
     assert "終了理由 (Exit Reason): max_iterations" in caplog.text
 
 
+def test_run_loop_stops_after_safety_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """安全停止イベントが設定された周回後に次の周回を開始しない。"""
+    cfg_file = tmp_path / "safety_loop_config.toml"
+    cfg_file.write_text(
+        'enabled = true\n[loop]\nenabled = true\nmode = "interval"\ninterval_seconds = 0\n',
+        encoding="utf-8",
+    )
+
+    cycle_count = 0
+
+    def mock_cycle(
+        root: Path,
+        config: dict,
+        opts: object,
+        stop_event: threading.Event | None = None,
+    ) -> int:
+        nonlocal cycle_count
+        cycle_count += 1
+        assert stop_event is not None
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", mock_cycle)
+
+    with caplog.at_level(logging.INFO, logger="nightly_worker"):
+        exit_code = nightly_task_worker.main(
+            [
+                "--config",
+                str(cfg_file),
+                "--loop",
+                "--loop-mode",
+                "interval",
+                "--interval",
+                "0",
+            ]
+        )
+
+    assert exit_code == 0
+    assert cycle_count == 1
+    assert "終了理由 (Exit Reason): stop_event" in caplog.text
+
+
 def test_run_loop_logs_daily_boundary_reached(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -285,7 +374,12 @@ def test_run_loop_logs_daily_boundary_reached(
 
     cycle_count = 0
 
-    def mock_cycle(root: Path, config: dict, opts: object) -> int:
+    def mock_cycle(
+        root: Path,
+        config: dict,
+        opts: object,
+        stop_event: threading.Event | None = None,
+    ) -> int:
         nonlocal cycle_count
         cycle_count += 1
         return 0
@@ -358,7 +452,11 @@ def test_run_loop_keyboard_interrupt_logs_exit_reason(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", lambda root, config, opts: 0)
+    monkeypatch.setattr(
+        nightly_task_worker,
+        "run_batch_cycle",
+        lambda root, config, opts, stop_event=None: 0,
+    )
 
     def raise_keyboard_interrupt(*args: object, **kwargs: object) -> bool:
         raise KeyboardInterrupt
@@ -393,7 +491,11 @@ def test_windows_does_not_register_sigterm(
 
     monkeypatch.setattr(nightly_task_worker.sys, "platform", "win32")
     monkeypatch.setattr(nightly_task_worker.signal, "signal", fake_signal)
-    monkeypatch.setattr(nightly_task_worker, "run_batch_cycle", lambda root, config, opts: 0)
+    monkeypatch.setattr(
+        nightly_task_worker,
+        "run_batch_cycle",
+        lambda root, config, opts, stop_event=None: 0,
+    )
 
     with caplog.at_level(logging.INFO, logger="nightly_worker"):
         exit_code = nightly_task_worker.main(
@@ -469,7 +571,14 @@ def test_get_task_error_category(tmp_path: Path) -> None:
     state_file.write_text('{"error_category": "AGY_AUTH"}', encoding="utf-8")
     assert nightly_task_worker.get_task_error_category(tmp_path, task) == "AGY_AUTH"
 
-    # 3. metadata/projects/TEST_PROJ/state.json が優先されること
+    # 3. tools/.cache/projects/<KEY>/state.json の対象Issueエントリを最優先する
+    cache_state = tmp_path / "tools" / ".cache" / "projects" / "TEST_PROJ" / "state.json"
+    cache_state.parent.mkdir(parents=True, exist_ok=True)
+    cache_state.write_text('{"T1": {"error_category": "AGY_QUOTA"}}', encoding="utf-8")
+    assert nightly_task_worker.get_task_error_category(tmp_path, task) == "AGY_QUOTA"
+
+    # 4. cacheに対象エントリがない場合は旧metadataパスへフォールバックする
+    cache_state.write_text('{"OTHER": {"error_category": "SYSTEM_ERROR"}}', encoding="utf-8")
     meta_state = tmp_path / "metadata" / "projects" / "TEST_PROJ" / "state.json"
     meta_state.parent.mkdir(parents=True, exist_ok=True)
     meta_state.write_text('{"error_category": "AGY_QUOTA"}', encoding="utf-8")
@@ -523,7 +632,7 @@ def test_run_batch_cycle_aborts_on_consecutive_auth_quota_failures(
     )
 
     monkeypatch.setattr(
-        nightly_task_worker, "parse_tasks_md_candidates", lambda **kwargs: [task1, task2, task3]
+        nightly_task_worker, "collect_issue_candidates", lambda **kwargs: [task1, task2, task3]
     )
 
     executed_tasks: list[str] = []
@@ -604,7 +713,7 @@ def test_run_batch_cycle_stops_on_consecutive_policy_denied_failures(
     )
 
     monkeypatch.setattr(
-        nightly_task_worker, "parse_tasks_md_candidates", lambda **kwargs: [task1, task2, task3]
+        nightly_task_worker, "collect_issue_candidates", lambda **kwargs: [task1, task2, task3]
     )
 
     executed_tasks: list[str] = []
