@@ -675,26 +675,6 @@ def code_node(state: GraphState) -> GraphState:
                 run_cmd(["git", "checkout", "--", ".gitignore"], cwd=cwd, timeout=30)
 
         state["status"] = "code_completed"
-        # 編集エンジンが編集・新規作成したファイルを動的に target_files へ追加
-        if cwd and is_in_git_workspace(cwd):
-            st_res = run_cmd(["git", "status", "--porcelain"], cwd=cwd, timeout=30)
-            if st_res.returncode == 0:
-                for line in st_res.stdout.splitlines():
-                    if line.strip():
-                        parts = line.strip().split(maxsplit=1)
-                        if len(parts) == 2:
-                            raw_path = parts[1].strip()
-                            if " -> " in raw_path:
-                                raw_path = raw_path.split(" -> ")[1].strip()
-                            rel_path = raw_path.replace("\\", "/")
-                            if (
-                                not rel_path.startswith(".aider")
-                                and not rel_path.startswith(".agy")
-                                and not rel_path.startswith(".pytest")
-                                and rel_path != ".gitignore"
-                                and rel_path not in target_files
-                            ):
-                                target_files.append(rel_path)
     except CoderRunError as e:
         logger.warning(f"CoderRunError caught in code_node: {e}")
         state["error"] = str(e)
@@ -1690,6 +1670,31 @@ def _resolve_gh_bin() -> str:
     return gh_bin
 
 
+def _parse_porcelain_path(line: str) -> Optional[str]:
+    """`git status --porcelain` の 1 行から正規化された POSIX 相対パスを抽出する."""
+    stripped = line.rstrip("\r\n")
+    if not stripped.strip():
+        return None
+    if len(stripped) > 3 and stripped[2] == " " and stripped[0:2].strip():
+        raw_path = stripped[3:].strip()
+    else:
+        parts = stripped.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            return None
+        raw_path = parts[1].strip()
+    if " -> " in raw_path:
+        raw_path = raw_path.split(" -> ", 1)[1].strip()
+    return raw_path.strip('"').replace("\\", "/")
+
+
+def _is_runtime_artifact_path(posix_path: str) -> bool:
+    """ランタイム生成の一時ディレクトリ・ファイルかどうかを判定する."""
+    name = Path(posix_path).name
+    return posix_path.startswith((".aider", ".agy", ".pytest")) or name.startswith(
+        (".aider", ".agy", ".pytest")
+    )
+
+
 def done_node(state: GraphState) -> GraphState:
     """PR 作成および完了ノード (DD-003 §4)。
     dirty working tree 拒否 -> git add -> ステージ済みファイル検証 -> git commit -> git push -> gh pr create パイプラインを実行。
@@ -1764,7 +1769,26 @@ def done_node(state: GraphState) -> GraphState:
                 state["error"] = f"git status failed: {status_res.stderr}"
                 return state
 
-            if status_res.stdout.strip():
+            normalized_target_set = {Path(t.strip()).as_posix() for t in target_files if t.strip()}
+            porcelain_paths = [
+                p for line in status_res.stdout.splitlines() if (p := _parse_porcelain_path(line))
+            ]
+            non_runtime_paths = [p for p in porcelain_paths if not _is_runtime_artifact_path(p)]
+            unauthorized_worktree = [p for p in non_runtime_paths if p not in normalized_target_set]
+            if unauthorized_worktree:
+                logger.error(
+                    f"[BOUNDARY VIOLATION] Unauthorized working tree changes detected outside initial target_files: {unauthorized_worktree}"
+                )
+                run_cmd(["git", "reset", "-q", "HEAD"], cwd=cwd, timeout=30)
+                state["status"] = "PR_FAILED"
+                state["error_category"] = "PR_ERROR"
+                state["boundary_warning"] = (
+                    f"Unauthorized working tree changes detected outside initial target_files: {unauthorized_worktree}"
+                )
+                state["error"] = state["boundary_warning"]
+                return state
+
+            if non_runtime_paths:
                 commit_res = run_cmd(
                     ["git", "commit", "-m", f"feat: [{state['issue_id']}] 自動実装完了"],
                     cwd=cwd,
