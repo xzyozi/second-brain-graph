@@ -35,7 +35,7 @@ Epic #116のagy移行は実装済みである。`intent → routes → profile �
 | 設定ブロック        | 主な項目                                                      | 契約                                                                    |
 | :------------------ | :------------------------------------------------------------ | :---------------------------------------------------------------------- |
 | `models.<role>`     | `temperature`、`max_tokens`                                   | `planner`、`coder`、`reviewer` の生成パラメータ。モデル名は保持しない。 |
-| `aider`             | `edit_format`、`timeout` ほか                                 | 【現行】Aider 実行の設定（DD-004）。                                    |
+| `aider`             | `edit_format`、`timeout` ほか                                 | 【退役・後方互換】任意項目。現行のコード編集はagy profileが担う。       |
 | `backend_execution` | `mode`、`fallback`、`gpu_lease_timeout`、`routes`、`profiles` | backend の排他実行と intent ルーティング。                              |
 | `profiles.<name>`   | `backend`、`model`、`openai_endpoint` ほか                    | 下表のとおり backend ごとに必須項目が異なる。                           |
 

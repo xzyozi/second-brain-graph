@@ -1,5 +1,5 @@
 # 基本設計書（基本仕様・システム全体アーキテクチャ定義）
-**実在 OSS スタック統合による Second Brain OS 再設計（LangGraph / OpenAI 互換 API・agy / Aider・agy / Ruff / Reviewdog）**
+**実在 OSS スタック統合による Second Brain OS 再設計（LangGraph / OpenAI 互換 API・agy / Ruff / Reviewdog）**
 
 | 項目     | 内容                                                                                                                                                                                                                                                          |
 | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -33,7 +33,7 @@
 | :---------------------------------------------------- | :------------------------------------------------------------ | :------------------------------------------------ |
 | 手書き `while` ループと状態管理の不透明性             | 宣言的な StateGraph による状態遷移と観測可能な実行履歴        | **LangGraph** (`StateGraph`)                      |
 | CLI subprocess 起動による引数長制限・接続管理の複雑さ | OpenAI 互換 HTTP API の直接呼出と intent ごとの endpoint 解決 | **OpenAI SDK** ＋ **BackendExecutionCoordinator** |
-| 自作 AST マージの破綻・コード一部消失                 | Git ワーキングツリーへの差分編集と自動コミット抑止            | **Aider** (`aider-chat`)                          |
+| 自作 AST マージの破綻・コード一部消失                 | Git ワーキングツリーへの差分編集と自動コミット抑止            | **agy** (Antigravity CLI)。旧: Aider（退役済み）  |
 | 構文エラー等での無駄な LLM トークン消費               | 高速な一次機械チェックと修正ループ                            | **Ruff** ／ **pytest**                            |
 | レビュー結果の視覚的アノテーション欠落                | RDJSON を用いた差分行単位の表示                               | **Reviewdog**                                     |
 | コンテキスト・状態の分散                              | GraphState と母艦メタデータへの責務分離                       | **LangGraph** ／ `metadata/`                      |
@@ -89,7 +89,7 @@
 ## 4. 母艦×衛星 Git 隔離モデルとの整合
 
 1. **`.gitignore` による完全遮断:** 母艦の `.gitignore` により、衛星内の差分および Git 履歴は母艦 Git から完全に隔離する。中央台帳は `metadata/.project-registry.json` に配置する。
-2. **メタデータの母艦管理:** `project.json`、`tasks.md`、Issue、`state.json`、ロックは `metadata/projects/<PROJECT_KEY>/` に置き、衛星ソースツリーを汚染しない。
+2. **メタデータ管理と GitHub Issues SSOT:** 実行状態 (`state.json`)・ロックは `metadata/projects/<PROJECT_KEY>/`、プロジェクト設定 (`project.json`) はサテライト `docs/` に配置し、タスク・Issue仕様の正本は GitHub Issues へ一元化して衛星ソースツリーを汚染しない。
 3. **コード編集エンジンのコミット制御:** agyにはcommit / pushをさせず、コード編集だけを許可する。stage、commit、push、PR作成は `done_node` が担当する。
 4. **人間承認を残す PR 運用:** 成功時に作業ブランチから PR を作成する。運用者は成果物を確認し、マージ可否を判断する。PR 失敗時には差分・ブランチを保持し停止する。
 

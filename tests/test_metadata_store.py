@@ -14,7 +14,6 @@ from tools.metadata_store import (
     ProjectLockManager,
     TaskStatus,
     get_runtime_cache_dir,
-    mark_task_completed_in_tasks_md,
     record_execution_history,
     reset_task_state,
     resolve_project_context,
@@ -484,40 +483,6 @@ def test_reset_task_state(tmp_path: Path) -> None:
     assert reset_task_state("PROJ", "TASK-9999", state_file=non_existent) is False
 
 
-def test_mark_task_completed_in_tasks_md(tmp_path: Path) -> None:
-    """Issue #80: mark_task_completed_in_tasks_md が該当タスクを安全に完了チェックに更新することを検証する。"""
-    sat_docs = tmp_path / "docs"
-    sat_docs.mkdir(parents=True)
-    tasks_file = sat_docs / "tasks.md"
-
-    initial_content = (
-        "# Tasks\n\n"
-        "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->\n"
-        "- [ ] [CW-0038] 除外アプリ判定 <!-- priority:medium issue:#109 stage:ready -->\n"
-        "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->\n"
-    )
-    tasks_file.write_text(initial_content, encoding="utf-8")
-
-    # CW-0038 を完了に更新
-    updated = mark_task_completed_in_tasks_md(str(tmp_path), "CW-0038")
-    assert updated is True
-
-    new_content = tasks_file.read_text(encoding="utf-8")
-    lines = new_content.splitlines()
-
-    # CW-0001 は変更なし
-    assert (
-        lines[2] == "- [x] [CW-0001] タスク1 <!-- priority:medium issue:#7 completed:2026-10-01 -->"
-    )
-    # CW-0038 は - [x] になり completed: が付与
-    assert lines[3].startswith("- [x] [CW-0038] 除外アプリ判定")
-    assert "completed:" in lines[3]
-    # CW-0039 は未完了のまま
-    assert (
-        lines[4] == "- [ ] [CW-0039] 別のタスク <!-- priority:medium issue:#110 stage:ideation -->"
-    )
-
-
 def test_parse_github_issue_url() -> None:
     """GitHub Issue URL のパース処理を検証する。"""
     from tools.metadata_store import parse_github_issue_url
@@ -552,12 +517,7 @@ def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
     reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
 
     sat_dir = project_root / "projects" / "test_file_grep"
-    sat_docs = sat_dir / "docs"
-    sat_docs.mkdir(parents=True, exist_ok=True)
-
-    # tasks.md に TFG-0005 (issue:#5) を配置
-    tasks_content = "# Tasks\n- [ ] [TFG-0005] パス検証関数を追加 (issue:#5)\n"
-    (sat_docs / "tasks.md").write_text(tasks_content, encoding="utf-8")
+    sat_dir.mkdir(parents=True, exist_ok=True)
 
     from tools.metadata_store import resolve_target_spec
 
@@ -588,3 +548,200 @@ def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
     assert res_num["project_key"] == "TFG"
     assert res_num["task_id"] == "TFG-0005"
     assert res_num["issue_number"] == 5
+
+
+def test_resolve_project_context_multilang_ts_and_rust(tmp_path: Path) -> None:
+    """Issue #168: TypeScript および Rust サテライトのメタデータ・ファイル探索が正しく解決されることを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "TSPROJ": {
+                "name": "ts_satellite",
+                "dir": "projects/ts_satellite",
+                "meta": "projects/ts_satellite/docs",
+            },
+            "RUSTPROJ": {
+                "name": "rust_satellite",
+                "dir": "projects/rust_satellite",
+                "meta": "projects/rust_satellite/docs",
+            },
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    # 1. TypeScript サテライトの模擬
+    ts_dir = tmp_path / "projects" / "ts_satellite"
+    ts_dir.mkdir(parents=True)
+    (ts_dir / ".git").mkdir()
+    (ts_dir / "src").mkdir()
+    (ts_dir / "src" / "index.ts").write_text("console.log('hi');", encoding="utf-8")
+    (ts_dir / "src" / "App.tsx").write_text("export const App = () => null;", encoding="utf-8")
+    ts_docs = ts_dir / "docs"
+    ts_docs.mkdir(parents=True)
+    (ts_docs / "project.json").write_text(
+        json.dumps(
+            {
+                "key": "TSPROJ",
+                "language": "typescript",
+                "test_command": "npm run test:unit",
+                "test_runner": "npm",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ctx_ts = resolve_project_context("TSPROJ", metadata_dir=meta_dir, project_root=tmp_path)
+    assert ctx_ts["valid"] is True
+    assert ctx_ts["language"] == "typescript"
+    assert ctx_ts["test_command"] == "npm run test:unit"
+    assert ctx_ts["test_runner"] == "npm"
+    assert "src/index.ts" in ctx_ts["target_files"]
+    assert "src/App.tsx" in ctx_ts["target_files"]
+
+    # 2. Rust サテライトの模擬
+    rust_dir = tmp_path / "projects" / "rust_satellite"
+    rust_dir.mkdir(parents=True)
+    (rust_dir / ".git").mkdir()
+    (rust_dir / "src").mkdir()
+    (rust_dir / "src" / "main.rs").write_text("fn main() {}", encoding="utf-8")
+    rust_docs = rust_dir / "docs"
+    rust_docs.mkdir(parents=True)
+    (rust_docs / "project.json").write_text(
+        json.dumps(
+            {
+                "key": "RUSTPROJ",
+                "language": "rust",
+                "test_command": "cargo test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ctx_rust = resolve_project_context("RUSTPROJ", metadata_dir=meta_dir, project_root=tmp_path)
+    assert ctx_rust["valid"] is True
+    assert ctx_rust["language"] == "rust"
+    assert ctx_rust["test_command"] == "cargo test"
+    assert "src/main.rs" in ctx_rust["target_files"]
+
+
+def test_validate_project_consistency_multilang_validation(tmp_path: Path) -> None:
+    """Issue #168: 不正な language や test_command が指定された場合に ValueError が発生することを確認する。"""
+    meta_dir = tmp_path / "metadata"
+    meta_dir.mkdir(parents=True)
+    reg_file = meta_dir / ".project-registry.json"
+    reg_data = {
+        "projects": {
+            "BAD": {
+                "name": "bad_satellite",
+                "dir": "projects/bad_satellite",
+                "meta": "projects/bad_satellite/docs",
+            }
+        }
+    }
+    reg_file.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    bad_dir = tmp_path / "projects" / "bad_satellite"
+    bad_docs = bad_dir / "docs"
+    bad_docs.mkdir(parents=True)
+
+    # 未知の言語
+    (bad_docs / "project.json").write_text(
+        json.dumps({"key": "BAD", "language": "unsupported_lang"}),
+        encoding="utf-8",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Unsupported language"):
+        validate_project_consistency(
+            "BAD-0001", "BAD", metadata_dir=meta_dir, project_root=tmp_path
+        )
+
+    # 不正な test_command 型
+    (bad_docs / "project.json").write_text(
+        json.dumps({"key": "BAD", "language": "typescript", "test_command": 12345}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="'test_command' field in project.json must be a string"):
+        validate_project_consistency(
+            "BAD-0001", "BAD", metadata_dir=meta_dir, project_root=tmp_path
+        )
+
+
+def test_format_and_parse_task_id() -> None:
+    """Issue #191: 決定論的タスク ID 変換 format_task_id / parse_task_id を検証する。"""
+    import pytest
+
+    from tools.metadata_store import format_task_id, parse_task_id
+
+    assert format_task_id("tfg", 5) == "TFG-0005"
+    assert format_task_id("SBOS", 191) == "SBOS-0191"
+
+    assert parse_task_id("TFG-0005") == ("TFG", 5)
+    assert parse_task_id("tfg-0042-A") == ("TFG", 42)
+    assert parse_task_id("TFG-0000") is None
+    assert parse_task_id("invalid") is None
+
+    with pytest.raises(ValueError):
+        format_task_id("", 5)
+    with pytest.raises(ValueError):
+        format_task_id("TFG", 0)
+    with pytest.raises(ValueError):
+        format_task_id("TFG", True)
+
+
+def test_resolve_target_spec_without_legacy_files(tmp_path: Path) -> None:
+    """Issue #191 / #194: tasks.md や docs/issues の有無に関わらず決定論的に ID 解決できること。"""
+    project_root = tmp_path
+    metadata_dir = project_root / "metadata"
+    metadata_dir.mkdir(parents=True)
+    reg_file = metadata_dir / ".project-registry.json"
+    reg_file.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "TFG": {
+                        "name": "test_file_grep",
+                        "github_repo": "xzyozi/test_file_grep",
+                        "dir": "projects/test_file_grep",
+                        "meta": "metadata/projects/TFG",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    sat_dir = project_root / "projects" / "test_file_grep"
+    sat_dir.mkdir(parents=True)
+
+    # レガシーファイルが存在していても無視され、常に決定論的規則で解決される
+    sat_docs = sat_dir / "docs"
+    sat_docs.mkdir(parents=True)
+    (sat_docs / "tasks.md").write_text(
+        "- [ ] [TFG-0999] 旧連番タスク (issue:#5)\n",
+        encoding="utf-8",
+    )
+
+    from tools.metadata_store import (
+        resolve_issue_number_for_task,
+        resolve_target_spec,
+        resolve_task_id_for_issue,
+    )
+
+    assert resolve_task_id_for_issue("TFG", 5, project_root) == "TFG-0005"
+    assert resolve_issue_number_for_task("TFG-0005", project_root) == 5
+
+    res = resolve_target_spec(
+        "https://github.com/xzyozi/test_file_grep/issues/5",
+        project_root=project_root,
+    )
+    assert res["task_id"] == "TFG-0005"
+    assert res["issue_number"] == 5
+
+    # tasks.md が全くない状態でも決定論的に成功する
+    (sat_docs / "tasks.md").unlink()
+    res_clean = resolve_target_spec("7", cwd=sat_dir, project_root=project_root)
+    assert res_clean["task_id"] == "TFG-0007"
+    assert res_clean["issue_number"] == 7

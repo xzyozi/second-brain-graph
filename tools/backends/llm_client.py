@@ -9,10 +9,10 @@ from typing import Any, Dict, Optional
 
 from openai import OpenAI
 
-from tools.agy_client import run_agy_text
-from tools.backend_coordinator import get_coordinator
-from tools.config_loader import ProfileConfig, get_model_params
-from tools.sanitizer import sanitize_text
+from tools.backends.agy_client import run_agy_text
+from tools.backends.backend_coordinator import get_coordinator
+from tools.core.sanitizer import sanitize_text
+from tools.workspace.config_loader import ProfileConfig, get_model_params
 
 logger = logging.getLogger("llm_client")
 
@@ -21,6 +21,16 @@ ROLE_TO_INTENT_MAP = {
     "coder": "code_edit",
     "reviewer": "code_review",
 }
+
+
+def _invalid_json_fallback(comment: str, raw_output: str) -> Dict[str, Any]:
+    """Expect-JSON 失敗時に review_node の空コメント誤補正を防ぐ安全側辞書を返す."""
+    return {
+        "verdict": "changes_requested",
+        "comment": comment,
+        "comments": [{"file": "N/A", "line": 1, "message": comment, "severity": "WARNING"}],
+        "raw": raw_output,
+    }
 
 
 def _parse_llm_output(raw_output: str, expect_json: bool) -> Dict[str, Any]:
@@ -47,19 +57,11 @@ def _parse_llm_output(raw_output: str, expect_json: bool) -> Dict[str, Any]:
             parsed, _ = decoder.raw_decode(raw_output[start_idx:])
             if isinstance(parsed, dict):
                 return parsed
-            return {
-                "verdict": "changes_requested",
-                "comment": "JSONルートがオブジェクトではありません",
-                "raw": raw_output,
-            }
+            return _invalid_json_fallback("JSONルートがオブジェクトではありません", raw_output)
         except json.JSONDecodeError as e:
-            return {
-                "verdict": "changes_requested",
-                "comment": f"JSONパースエラー: {e}",
-                "raw": raw_output,
-            }
+            return _invalid_json_fallback(f"JSONパースエラー: {e}", raw_output)
 
-    return {"verdict": "changes_requested", "comment": "JSON抽出失敗", "raw": raw_output}
+    return _invalid_json_fallback("JSON抽出失敗", raw_output)
 
 
 def _do_agy_llm_call(

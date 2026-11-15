@@ -20,7 +20,7 @@
 │   ├── design/                     # 各種設計書・運用設計・課題一覧
 │   │   ├── SBOS-BD-002_基本設計書.md
 │   │   ├── SBOS-DD-003_詳細設計書.md
-│   │   ├── SBOS-DD-004_Aider統合仕様.md
+│   │   ├── SBOS-DD-004_Aider統合仕様.md   # コード編集エンジン(agy)統合仕様。ファイル名は互換のためAiderのまま
 │   │   ├── SBOS-DD-005_Backend_GPUリース仕様.md
 │   │   ├── SBOS-DD-006_品質ゲート_レビュー仕様.md
 │   │   ├── SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md
@@ -46,7 +46,6 @@
 │   ├── llm_client.py               # LiteLLMラッパー / agyテキスト応答
 │   ├── agy_client.py               # agy CLI プロセス制御・タイムアウト・エラー分類
 │   ├── agy_runner.py               # agy コード編集実行エンジン
-│   ├── aider_runner.py             # Aider自動制御モジュール (フォールバック・互換)
 │   ├── add_project.py              # 新規衛星プロジェクト登録・ラベル同期
 │   ├── screen_issues.py            # Issueの重複・カテゴリスクリーニング
 │   ├── close_stale_issues.py       # 放置Issueの自動クローズ
@@ -135,8 +134,8 @@ uv run python tools/periodic_review_runner.py --status-only
 
 - **[自律レビュー＆Issue起票仕様書](docs/features/satellite_ideation_reviewer.md)**: `agys` によるサテライトコードレビューと完全自動起票
 - **[基本設計書 (SBOS-BD-002)](docs/design/SBOS-BD-002_基本設計書.md)**: システムアーキテクチャと全体方針
-- **[詳細設計書 (SBOS-DD-003)](docs/design/SBOS-DD-003_詳細設計書.md)**: LangGraph / LiteLLM / Aider の内部構造
-- **[Aider統合仕様 (SBOS-DD-004)](docs/design/SBOS-DD-004_Aider統合仕様.md)**: Aiderの起動・編集・フェイルセーフ契約
+- **[詳細設計書 (SBOS-DD-003)](docs/design/SBOS-DD-003_詳細設計書.md)**: LangGraph / agy の内部構造
+- **[コード編集エンジン統合仕様 (SBOS-DD-004)](docs/design/SBOS-DD-004_Aider統合仕様.md)**: agyの起動・編集・フェイルセーフ契約（Aiderは退役済みの旧資産。ファイル名のみ互換のため維持）
 - **[Backend GPUリース仕様 (SBOS-DD-005)](docs/design/SBOS-DD-005_Backend_GPUリース仕様.md)**: LLMバックエンドとGPUリース制御
 - **[品質ゲート・レビュー仕様 (SBOS-DD-006)](docs/design/SBOS-DD-006_品質ゲート_レビュー仕様.md)**: Ruff、pytest、LLMレビュー、Reviewdogの品質ゲート
 - **[Issueライフサイクル仕様 (SBOS-DD-007)](docs/design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md)**: JEV検問、stageラベル、tasks.md/docs/issues同期

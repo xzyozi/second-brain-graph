@@ -125,12 +125,13 @@ def test_call_llm_extracts_json_embedded_in_text() -> None:
 
 
 def test_call_llm_falls_back_when_output_is_not_json() -> None:
-    """JSON を含まない出力では changes_requested へフォールバックし raw を保持することを確認する。"""
+    """JSON を含まない出力では changes_requested へフォールバックし raw と非空 comments を保持することを確認する。"""
     raw = "これはただのテキストで JSON ではありません。"
     result = _run_call_llm_with_content(raw)
 
     assert result["verdict"] == "changes_requested"
     assert result["raw"] == raw
+    assert result["comments"]
 
 
 def test_call_llm_falls_back_when_json_root_is_array() -> None:
@@ -140,6 +141,7 @@ def test_call_llm_falls_back_when_json_root_is_array() -> None:
 
     assert result["verdict"] == "changes_requested"
     assert result["raw"] == raw
+    assert result["comments"]
 
 
 def test_call_llm_returns_raw_when_expect_json_false() -> None:

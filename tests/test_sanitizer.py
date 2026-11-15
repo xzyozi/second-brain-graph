@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tests/test_sanitizer.py - 機密情報マスキング・サニタイズモジュールの単体テスト."""
 
-from tools.sanitizer import (
+from tools.core.sanitizer import (
     REDACTED,
     REDACTED_EMAIL,
     REDACTED_PRIVATE_KEY,

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Sequence
 from urllib.parse import quote
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 ROLE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 DEFAULT_SYSTEM_PROMPT = """You are an expert software engineer and systems architect.

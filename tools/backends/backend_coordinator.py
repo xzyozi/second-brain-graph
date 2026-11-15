@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Iterator, Optional
 
 from filelock import FileLock, Timeout
 
-from tools.config_loader import ProfileConfig, get_backend_execution_config
+from tools.workspace.config_loader import ProfileConfig, get_backend_execution_config
 
 logger = logging.getLogger("backend_coordinator")
 
@@ -39,7 +39,7 @@ class GpuLeaseAdapter:
     """
 
     def __init__(self, lock_file: str = ".gpu_lease.lock", timeout: int = 60) -> None:
-        lock_path = Path(__file__).resolve().parent.parent / "metadata" / lock_file
+        lock_path = Path(__file__).resolve().parent.parent.parent / "metadata" / lock_file
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
         self.lock = FileLock(str(lock_path), timeout=timeout)
