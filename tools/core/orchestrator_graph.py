@@ -1355,7 +1355,11 @@ def review_node(state: GraphState) -> GraphState:
             return state
 
         verdict = res["verdict"]
-        raw_comments = res.get("comments", [])
+        raw_comments = res.get("comments")
+        if not raw_comments and res.get("comment"):
+            raw_comments = [str(res["comment"])]
+        elif raw_comments is None:
+            raw_comments = []
 
         # コメント構造化 ({file, line, message, severity}) の保証
         structured_comments: List[Dict[str, Any]] = []
