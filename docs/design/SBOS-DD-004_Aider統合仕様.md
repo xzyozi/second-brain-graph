@@ -7,7 +7,7 @@
 | 版数               | Rev.3.0（agyを現行コード編集エンジンとして確定。Aider退役資産・実機未確認範囲を明記）                            |
 | 改訂日             | 2026年11月4日                                                                                                    |
 | 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-005（Backend 仕様）、Epic #116                     |
-| 対象コンポーネント | `tools/agy_runner.py`・`tools/agy_client.py`・`tools/edit_guard.py`・`tools/orchestrator_graph.py` (`code_node`) |
+| 対象コンポーネント | `tools/backends/agy_runner.py`・`tools/backends/agy_client.py`・`tools/core/edit_guard.py`・`tools/core/orchestrator_graph.py` (`code_node`) |
 | 役割               | LLM を利用した非破壊的な Git ワーキングツリー差分編集および新規ファイル生成                                      |
 
 > **ファイル名について**: 本書は当初Aider専用だったためファイル名にAiderを含む。現行仕様はagyコード編集エンジンを正本とし、Aiderは `legacy/local_llm/` と archive tag に退避した旧資産として扱う。リンク互換性のため、ファイル名変更は別Issueで行う。
@@ -46,7 +46,7 @@ Aiderの詳細CLI仕様は archive tag `archive/local-llm-20261104` と `legacy/
 
 ## 3. agy CLI実行仕様（現行）
 
-agyは非対話型subprocessとして `agy --dangerously-skip-permissions -p <prompt>` で起動する。起動処理は `tools/agy_client.py`、編集用のcwd・対象ファイル保護は `tools/agy_runner.py` と `tools/edit_guard.py` が担当する。
+agyは非対話型subprocessとして `agy --dangerously-skip-permissions -p <prompt>` で起動する。起動処理は `tools/backends/agy_client.py`、編集用のcwd・対象ファイル保護は `tools/backends/agy_runner.py` と `tools/core/edit_guard.py` が担当する。
 
 * **テキスト応答**: `run_agy_text()` は空の一時ディレクトリで実行し、リポジトリを読み書きさせない。
 * **コード編集**: `run_agy_edit()` は解決済み衛星cwdで実行し、編集前後にedit_guardを適用する。
@@ -56,7 +56,7 @@ agyは非対話型subprocessとして `agy --dangerously-skip-permissions -p <pr
 
 ### 3.1 対象外ファイルの保護
 
-編集エンジンの実行前後で、`target_files` 外の変更を `tools/edit_guard.py` が復元・削除する。許可された新規ファイルは `allowed_new_file_globs` により保持し、秘密ファイル検出と母艦cwd拒否を適用する。
+編集エンジンの実行前後で、`target_files` 外の変更を `tools/core/edit_guard.py` が復元・削除する。許可された新規ファイルは `allowed_new_file_globs` により保持し、秘密ファイル検出と母艦cwd拒否を適用する。
 
 * **前提:** 編集前の作業ツリーは clean とみなす（Fresh は dirty を拒否し、Resume は WIP コミット済み）。このため `target_files` 外の変更はエンジン由来と判断し、実行前のスナップショットとの比較は行わない。実行前に clean でない場合は、警告ログを残す（`warn_if_working_tree_dirty`）。
 * **追跡済みファイル（`??` 以外）:** 削除せず `git restore --staged --worktree` で HEAD の内容に戻す。ステージ済みの変更や、削除（ステージ有無を問わず）も取り消す。
@@ -73,15 +73,15 @@ agyは非対話型subprocessとして `agy --dangerously-skip-permissions -p <pr
 
 ## 3.2 agy編集実行仕様（現行） (`agy_runner.py` / `agy_client.py`)
 
-> 本章は現行実装（`tools/agy_client.py` / `tools/agy_runner.py`）の契約である。agy CLIそのものの認証、ネットワーク、実モデル品質は本書では保証せず、`docs/test/SBOS-TEST-001_agy移行確認試験書.md` のL3〜L5で確認する。
+> 本章は現行実装（`tools/backends/agy_client.py` / `tools/backends/agy_runner.py`）の契約である。agy CLIそのものの認証、ネットワーク、実モデル品質は本書では保証せず、`docs/test/SBOS-TEST-001_agy移行確認試験書.md` のL3〜L5で確認する。
 
 ### 3.2 モジュール構成
 
 | モジュール            | 責務                                                                           | しないこと                                    |
 | :-------------------- | :----------------------------------------------------------------------------- | :-------------------------------------------- |
-| `tools/agy_client.py` | agy実行ファイル解決、起動、timeout、**プロセスツリーごとの終了**、エラー種別化 | プロンプト組み立て、JSON解析、Git後始末       |
-| `tools/agy_runner.py` | `run_agy_edit()`、`AgyRunError`への変換、edit_guard呼び出し                    | prompt SSOT、外部送信認可、commit/push/PR作成 |
-| `tools/edit_guard.py` | cwd検証、target_files外変更・秘密ファイル・新規globの保護                      | agyの起動、LLM応答解析                        |
+| `tools/backends/agy_client.py` | agy実行ファイル解決、起動、timeout、**プロセスツリーごとの終了**、エラー種別化 | プロンプト組み立て、JSON解析、Git後始末       |
+| `tools/backends/agy_runner.py` | `run_agy_edit()`、`AgyRunError`への変換、edit_guard呼び出し                    | prompt SSOT、外部送信認可、commit/push/PR作成 |
+| `tools/core/edit_guard.py` | cwd検証、target_files外変更・秘密ファイル・新規globの保護                      | agyの起動、LLM応答解析                        |
 
 依存の向きは `code_node` → `agy_runner` → `agy_client` の一方向とする。promptのrole/intent解決は `prompt_harness`、外部送信認可は `agy_policy` が担当する。`tools/` から `.gemini/skills/` 配下のスクリプトをimportしない。
 
@@ -142,7 +142,7 @@ Aider に渡る指示文は、変更前とバイト単位で一致させる。
 
 ### 3.6 作業ツリーに作られる成果物
 
-agy が作業ツリーに作る成果物（セッション、キャッシュ、一時ファイル）の名前は #117 で確認する。成果物がある場合は、`tools/metadata_store.py` の `GENERATED_ARTIFACT_GITIGNORE_ENTRIES` にパターンを追加する。
+agy が作業ツリーに作る成果物（セッション、キャッシュ、一時ファイル）の名前は #117 で確認する。成果物がある場合は、`tools/workspace/metadata_store.py` の `GENERATED_ARTIFACT_GITIGNORE_ENTRIES` にパターンを追加する。
 
 **後始末との相互作用（要注意）**: `cleanup_unauthorized_aider_artifacts` の保護対象（`_is_protected_path`）は、`target_files`、`.aider` 始まり、`.pytest` 始まり、`.gitignore` の4種に固定されている。agy の成果物は保護対象外のため、**未追跡の「ファイル」であれば削除される**。一方、**ディレクトリは削除対象外**（§2.1）で、そのまま残る。agy が実行中に自分のセッション情報を作業ツリー内のファイルに書く場合、編集の最中に後始末で消えるわけではない（後始末は agy の終了後に走る）が、次回の実行で前回の情報が使えなくなる可能性がある。成果物の置き場所と、保護対象へ追加すべきかは #117 の結果で判断する。これは `run_task.py` の dirty 判定、Resume の WIP コミットの除外（DD-003 §5.2）、`doctor.py` の `.gitignore` チェックが共通で参照する定義であり、追加しないと成果物が dirty と判定され、実行が中断または汚染される。
 
