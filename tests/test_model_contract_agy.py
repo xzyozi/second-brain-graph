@@ -14,8 +14,13 @@ from __future__ import annotations
 
 import pytest
 
-from tools.agy_client import AgyError, AgyNotFoundError, resolve_agy_executable, run_agy_text
-from tools.llm_client import call_llm
+from tools.backends.agy_client import (
+    AgyError,
+    AgyNotFoundError,
+    resolve_agy_executable,
+    run_agy_text,
+)
+from tools.backends.llm_client import call_llm
 
 pytestmark = pytest.mark.integration
 

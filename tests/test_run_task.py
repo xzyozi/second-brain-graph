@@ -386,7 +386,7 @@ def test_reset_task_environment(tmp_path: Path) -> None:
 
     with (
         patch("subprocess.run", side_effect=mock_run),
-        patch("tools.metadata_store.reset_task_state") as mock_reset_state,
+        patch("tools.workspace.metadata_store.reset_task_state") as mock_reset_state,
         patch("tools.run_task.PROJECT_ROOT", project_root),
         patch("tools.run_task.ensure_satellite_environment"),
     ):
@@ -531,8 +531,8 @@ def test_run_task_main_resolves_url_and_cwd(tmp_path: Path) -> None:
 
 def test_missing_gitignore_entries_reports_all_for_empty_content() -> None:
     """空の .gitignore では生成物の全エントリが不足として返る (Issue #98)。"""
-    from tools.metadata_store import GENERATED_ARTIFACT_GITIGNORE_ENTRIES
     from tools.run_task import missing_gitignore_entries
+    from tools.workspace.metadata_store import GENERATED_ARTIFACT_GITIGNORE_ENTRIES
 
     assert missing_gitignore_entries("") == list(GENERATED_ARTIFACT_GITIGNORE_ENTRIES)
 
@@ -557,8 +557,8 @@ def test_missing_gitignore_entries_normalizes_lines() -> None:
 
 def test_ensure_satellite_gitignore_adds_all_generated_entries(tmp_path: Path) -> None:
     """生成物パターンがすべて追記され、再実行しても重複しない (Issue #98)。"""
-    from tools.metadata_store import GENERATED_ARTIFACT_GITIGNORE_ENTRIES
     from tools.run_task import ensure_satellite_gitignore
+    from tools.workspace.metadata_store import GENERATED_ARTIFACT_GITIGNORE_ENTRIES
 
     gi_file = tmp_path / ".gitignore"
     gi_file.write_text("# existing\n", encoding="utf-8")

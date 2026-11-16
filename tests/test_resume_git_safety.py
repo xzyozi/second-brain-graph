@@ -9,7 +9,7 @@ import pytest
 
 from tests.test_consecutive_b7_guard import ISSUE_ID, _write_state
 from tests.test_orchestrator_hardening import _setup_satellite
-from tools.orchestrator_graph import (
+from tools.core.orchestrator_graph import (
     ProjectLockManager,
     build_wip_pathspec,
     commit_wip_changes,
@@ -82,7 +82,7 @@ def _fake_run_cmd(responses: dict[str, MagicMock], executed: list[str]) -> Calla
 def test_commit_wip_changes_commits_when_staged() -> None:
     executed: list[str] = []
     responses = {"diff --cached --quiet": MagicMock(returncode=1, stdout="", stderr="")}
-    with patch("tools.orchestrator_graph.run_cmd", _fake_run_cmd(responses, executed)):
+    with patch("tools.core.orchestrator_graph.run_cmd", _fake_run_cmd(responses, executed)):
         assert commit_wip_changes("/sat", ISSUE_ID) is None
 
     assert any(c.startswith("git add -A -- . :(exclude,glob)**/.aider*") for c in executed)
@@ -91,7 +91,7 @@ def test_commit_wip_changes_commits_when_staged() -> None:
 
 def test_commit_wip_changes_skips_commit_when_nothing_staged() -> None:
     executed: list[str] = []
-    with patch("tools.orchestrator_graph.run_cmd", _fake_run_cmd({}, executed)):
+    with patch("tools.core.orchestrator_graph.run_cmd", _fake_run_cmd({}, executed)):
         assert commit_wip_changes("/sat", ISSUE_ID) is None
 
     assert not any(c.startswith("git commit") for c in executed)
@@ -99,7 +99,7 @@ def test_commit_wip_changes_skips_commit_when_nothing_staged() -> None:
 
 def test_commit_wip_changes_reports_add_failure() -> None:
     responses = {"git add": MagicMock(returncode=1, stdout="", stderr="index.lock exists")}
-    with patch("tools.orchestrator_graph.run_cmd", _fake_run_cmd(responses, [])):
+    with patch("tools.core.orchestrator_graph.run_cmd", _fake_run_cmd(responses, [])):
         error = commit_wip_changes("/sat", ISSUE_ID)
 
     assert error is not None
@@ -112,7 +112,7 @@ def test_commit_wip_changes_reports_commit_failure() -> None:
         "diff --cached --quiet": MagicMock(returncode=1, stdout="", stderr=""),
         "git commit": MagicMock(returncode=1, stdout="", stderr="hook failed"),
     }
-    with patch("tools.orchestrator_graph.run_cmd", _fake_run_cmd(responses, [])):
+    with patch("tools.core.orchestrator_graph.run_cmd", _fake_run_cmd(responses, [])):
         error = commit_wip_changes("/sat", ISSUE_ID)
 
     assert error is not None
@@ -137,9 +137,9 @@ def _run_resume(
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", _fake_run_cmd(merged_responses, executed)),
-        patch("tools.orchestrator_graph.StateGraph") as mock_state_graph,
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.run_cmd", _fake_run_cmd(merged_responses, executed)),
+        patch("tools.core.orchestrator_graph.StateGraph") as mock_state_graph,
     ):
         mock_app = MagicMock()
         mock_app.invoke.return_value = {"status": "COMPLETED"}

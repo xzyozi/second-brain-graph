@@ -1,4 +1,4 @@
-"""Unit tests for tools/metadata_store.py
+"""Unit tests for tools/workspace/metadata_store.py
 
 Issue #22 (DD-003 §10.4) メタデータ・状態管理モジュールの単体テスト。
 """
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tools.metadata_store import (
+from tools.workspace.metadata_store import (
     ErrorCategory,
     ProjectLockManager,
     TaskStatus,
@@ -224,7 +224,7 @@ def test_record_execution_history_and_safe_wrapper(tmp_path: Path) -> None:
 
     # safe ラッパーで例外が起きてもクラッシュしないこと
     with patch(
-        "tools.metadata_store.record_execution_history", side_effect=Exception("Disk error")
+        "tools.workspace.metadata_store.record_execution_history", side_effect=Exception("Disk error")
     ):
         safe_record_execution_history(state, final_status="FAILED", history_file=history_file)
 
@@ -485,7 +485,7 @@ def test_reset_task_state(tmp_path: Path) -> None:
 
 def test_parse_github_issue_url() -> None:
     """GitHub Issue URL のパース処理を検証する。"""
-    from tools.metadata_store import parse_github_issue_url
+    from tools.workspace.metadata_store import parse_github_issue_url
 
     res = parse_github_issue_url("https://github.com/xzyozi/test_file_grep/issues/5")
     assert res == ("xzyozi/test_file_grep", 5)
@@ -519,7 +519,7 @@ def test_resolve_target_spec_url_and_task_id(tmp_path: Path) -> None:
     sat_dir = project_root / "projects" / "test_file_grep"
     sat_dir.mkdir(parents=True, exist_ok=True)
 
-    from tools.metadata_store import resolve_target_spec
+    from tools.workspace.metadata_store import resolve_target_spec
 
     # 1. URL からの解決
     res_url = resolve_target_spec(
@@ -674,7 +674,7 @@ def test_format_and_parse_task_id() -> None:
     """Issue #191: 決定論的タスク ID 変換 format_task_id / parse_task_id を検証する。"""
     import pytest
 
-    from tools.metadata_store import format_task_id, parse_task_id
+    from tools.workspace.metadata_store import format_task_id, parse_task_id
 
     assert format_task_id("tfg", 5) == "TFG-0005"
     assert format_task_id("SBOS", 191) == "SBOS-0191"
@@ -724,7 +724,7 @@ def test_resolve_target_spec_without_legacy_files(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    from tools.metadata_store import (
+    from tools.workspace.metadata_store import (
         resolve_issue_number_for_task,
         resolve_target_spec,
         resolve_task_id_for_issue,

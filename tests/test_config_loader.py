@@ -1,4 +1,4 @@
-"""Unit tests for tools/config_loader.py validation logic.
+"""Unit tests for tools/workspace/config_loader.py validation logic.
 
 正常系 (実 config/models.json の読み込み) は他テストで担保されているため、
 ここでは Pydantic model_validator による異常系 (fail-closed) を中心に検証する。

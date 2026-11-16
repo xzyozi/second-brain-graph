@@ -17,8 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from tools.agy_client import AgyError, AgyNotFoundError, resolve_agy_executable, run_agy_text
-from tools.agy_runner import run_agy_edit
+from tools.backends.agy_client import (
+    AgyError,
+    AgyNotFoundError,
+    resolve_agy_executable,
+    run_agy_text,
+)
+from tools.backends.agy_runner import run_agy_edit
 from tools.lang import PythonLanguageVerifier
 
 pytestmark = pytest.mark.integration

@@ -1,4 +1,4 @@
-"""Unit tests for tools/edit_guard.py (Issue #125).
+"""Unit tests for tools/core/edit_guard.py (Issue #125).
 
 Aider / agy 共通の書き込み境界ガード、母艦保護、秘密情報検出、
 未追跡ファイル/ディレクトリの削除、追跡済み復元、.gitignore 復元を検証する。
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.edit_guard import (
+from tools.core.edit_guard import (
     EditGuardError,
     MotherRepositoryProtectionError,
     detect_secret_files,
@@ -190,7 +190,7 @@ def test_rollback_removes_newly_created_gitignore(tmp_path: Path) -> None:
 
 def test_glob_to_regex_and_matches_any_glob() -> None:
     """glob パターンマッチングが正しく判定されることを検証する (Issue #102)."""
-    from tools.edit_guard import matches_any_glob
+    from tools.core.edit_guard import matches_any_glob
 
     globs = ["tests/**", "src/**/*.rs", "docs/*.md"]
 
