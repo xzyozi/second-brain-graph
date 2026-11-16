@@ -6,7 +6,7 @@
 
 パーサー基盤として **Tree-sitter** (CST / AST 構文解析エンジン) を導入しており、正規表現やトークンスキャンに頼らない 100% 正確な構文エラー検出・識別子抽出を実現しています。
 
-単体の pytest 用テスト検証にとどまらず、自律エージェント基盤 (`tools/orchestrator_graph.py`) の `review_node` や `code_node` から呼び出すことで、コード生成直後の自動フィードバックループを実現します。
+単体の pytest 用テスト検証にとどまらず、自律エージェント基盤 (`tools/core/orchestrator_graph.py`) の `review_node` や `code_node` から呼び出すことで、コード生成直後の自動フィードバックループを実現します。
 
 ---
 

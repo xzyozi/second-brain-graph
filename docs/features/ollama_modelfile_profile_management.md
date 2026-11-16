@@ -2,9 +2,9 @@
 
 ## 目的
 
-`tools/build_modelfile.py` は、独立したGGUFファイルを参照するQwen用Ollama Modelfileを生成する。Ollama登録、`config/models.json` のprofile追加、intent route変更は実行しない。
+`tools/models/build_modelfile.py` は、独立したGGUFファイルを参照するQwen用Ollama Modelfileを生成する。Ollama登録、`config/models.json` のprofile追加、intent route変更は実行しない。
 
-`tools/register_ollama_model.py` は最小構成の一時ModelfileでGGUFを登録するツールである。一方、本ツールはハードウェア資源、推論パラメータ、Qwenテンプレート、SYSTEMプロンプトを含む永続Modelfileを生成する。
+`tools/models/register_ollama_model.py` は最小構成の一時ModelfileでGGUFを登録するツールである。一方、本ツールはハードウェア資源、推論パラメータ、Qwenテンプレート、SYSTEMプロンプトを含む永続Modelfileを生成する。
 
 ## 論理名と生成ファイル名
 
@@ -53,7 +53,7 @@ Windowsでは `:` と `/` をファイル名に使えないため、生成ファ
 GGUFが未配置のため、Modelfileだけを準備する場合:
 
 ```powershell
-uv run python tools/build_modelfile.py `
+uv run python tools/models/build_modelfile.py `
   --gguf-path .\models\qwen3.gguf `
   --model-name qwen3 `
   --role coder `
@@ -64,7 +64,7 @@ uv run python tools/build_modelfile.py `
 GGUFを配置済みの場合:
 
 ```powershell
-uv run python tools/build_modelfile.py `
+uv run python tools/models/build_modelfile.py `
   --gguf-path .\models\qwen3.gguf `
   --model-name qwen3 `
   --role coder `
@@ -79,7 +79,7 @@ uv run python tools/build_modelfile.py `
 UTF-8のSYSTEMプロンプトを既定値から置き換える場合:
 
 ```powershell
-uv run python tools/build_modelfile.py `
+uv run python tools/models/build_modelfile.py `
   --gguf-path .\models\qwen3.gguf `
   --model-name qwen3 `
   --role coder `
@@ -91,11 +91,11 @@ uv run python tools/build_modelfile.py `
 
 ## 責務分離
 
-| モジュール                       | 責務                                                              |
-| -------------------------------- | ----------------------------------------------------------------- |
-| `tools/build_modelfile.py`       | 検証済みの永続Modelfileを生成し、手動登録コマンドを表示する。     |
-| `tools/register_ollama_model.py` | 独立GGUFを最小ModelfileでOllamaへ安全に登録する。                 |
-| `config/models.json`             | 登録済みOllamaモデルをアプリのprofile・intent routeへ割り当てる。 |
+| モジュール                              | 責務                                                              |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| `tools/models/build_modelfile.py`       | 検証済みの永続Modelfileを生成し、手動登録コマンドを表示する。     |
+| `tools/models/register_ollama_model.py` | 独立GGUFを最小ModelfileでOllamaへ安全に登録する。                 |
+| `config/models.json`                    | 登録済みOllamaモデルをアプリのprofile・intent routeへ割り当てる。 |
 
 ## 注意事項
 
