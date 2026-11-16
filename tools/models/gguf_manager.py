@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/gguf_manager.py - GGUFモデルファイルの配置構造・パス解決・存在検証を管理するモジュール."""
+"""tools/models/gguf_manager.py - GGUFモデルファイルの配置構造・パス解決・存在検証を管理するモジュール."""
 
 import logging
 from pathlib import Path

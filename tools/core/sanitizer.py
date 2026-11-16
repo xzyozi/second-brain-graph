@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/sanitizer.py - 機密情報マスキング・サニタイズ共通モジュール (DD-003 §10.3, Issue #20)
+"""tools/core/sanitizer.py - 機密情報マスキング・サニタイズ共通モジュール (DD-003 §10.3, Issue #20)
 
 LLM 送信プロンプト、Git diff、テスト実行ログ、実行履歴 (execution_history.json)、
 および Failure Report 等に含まれる可能性のある機密情報（APIキー、トークン、パスワード、
