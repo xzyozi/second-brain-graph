@@ -8,6 +8,7 @@ tools/ 配下のモジュールが 5 つのサブパッケージ（core, backend
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from typing import Any
 
@@ -46,8 +47,15 @@ for _legacy_name, _target_pkg in _LEGACY_MODULE_MAP.items():
         try:
             _mod = importlib.import_module(_target_pkg)
             sys.modules[_full_legacy] = _mod
-        except Exception:
-            pass
+        except Exception as _exc:  # noqa: BLE001 - 互換登録の失敗で tools 全体の import を止めない
+            # 失敗は黙殺せず記録する。実際の利用時は __getattr__ が再 import して原因を例外で伝える。
+            logging.getLogger(__name__).warning(
+                "legacy alias tools.%s -> %s を登録できません: %s: %s",
+                _legacy_name,
+                _target_pkg,
+                type(_exc).__name__,
+                _exc,
+            )
 
 
 def __getattr__(name: str) -> Any:

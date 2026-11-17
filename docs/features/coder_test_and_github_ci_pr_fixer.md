@@ -18,7 +18,7 @@
 
 ### 2.1 モデル登録と構成
 - **GGUFファイル**: `models/Ornith-1.5-9B-Q5_K_M.gguf` (約 6.64 GB)
-- **登録コマンド**: `python tools/register_ollama_model.py models/Ornith-1.5-9B-Q5_K_M.gguf ornith-1.5-9b:latest`
+- **登録コマンド**: `python tools/models/register_ollama_model.py models/Ornith-1.5-9B-Q5_K_M.gguf ornith-1.5-9b:latest`
 - **設定ファイル**: `config/models.yaml`（旧 `config/models.json`）内の `coding_ollama` プロファイルに `ornith-1.5-9b:latest` を割り当て。
 
 ### 2.2 実機（Live E2E）テスト結果
@@ -60,7 +60,7 @@
 > **補足（実装状況）**: 本節に記載の `tools/github_ci_pr_fixer.py` は構想・設計段階の独立CLIスクリプトである。現状の運用では、エージェントスキル `github-pr-ci-fixer`（`SKILL.md`）が GitHub CLI (`gh`) とローカル Git/pytest コマンドを直動制御して CI 修正を自律完結させており、専用 Python スクリプトは未実装（必要に応じて将来作成）となっている。
 
 ### 3.1 独立分離の理由 (Single Responsibility Principle)
-- メインの [orchestrator_graph.py](../../tools/orchestrator_graph.py) は Issue 全体の計画・分解・タスク制御に集中させる。
+- メインの [orchestrator_graph.py](../../tools/core/orchestrator_graph.py) は Issue 全体の計画・分解・タスク制御に集中させる。
 - PR 単位での CI 失敗監視および最小修復ロジックは、独立スクリプト `tools/github_ci_pr_fixer.py` に分離し、コードの複雑化を防ぐ。
 
 ### 3.2 アーキテクチャと連携フロー

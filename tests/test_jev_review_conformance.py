@@ -3,10 +3,10 @@
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
-from tools.jev_adapter import (
+from tools.backends.jev_adapter import (
     verify_review_conformance,
 )
-from tools.orchestrator_graph import GraphState, review_node
+from tools.core.orchestrator_graph import GraphState, review_node
 
 
 def test_verify_review_conformance_empty_diff() -> None:
@@ -100,9 +100,9 @@ def test_verify_review_conformance_fail_open_on_exception() -> None:
     assert "bypassed" in detail
 
 
-@patch("tools.llm_client.call_llm")
-@patch("tools.jev_adapter.verify_review_conformance")
-@patch("tools.orchestrator_graph.get_git_diff")
+@patch("tools.backends.llm_client.call_llm")
+@patch("tools.backends.jev_adapter.verify_review_conformance")
+@patch("tools.core.orchestrator_graph.get_git_diff")
 def test_review_node_lgtm_confirmed_by_jev(
     mock_diff: MagicMock,
     mock_verify: MagicMock,
@@ -138,9 +138,9 @@ def test_review_node_lgtm_confirmed_by_jev(
     assert round_log["jev_review_conformance"]["is_valid"] is True
 
 
-@patch("tools.llm_client.call_llm")
-@patch("tools.jev_adapter.verify_review_conformance")
-@patch("tools.orchestrator_graph.get_git_diff")
+@patch("tools.backends.llm_client.call_llm")
+@patch("tools.backends.jev_adapter.verify_review_conformance")
+@patch("tools.core.orchestrator_graph.get_git_diff")
 def test_review_node_lgtm_overridden_by_jev_rejection(
     mock_diff: MagicMock,
     mock_verify: MagicMock,
@@ -181,9 +181,9 @@ def test_review_node_lgtm_overridden_by_jev_rejection(
     assert round_log["jev_review_conformance"]["is_valid"] is False
 
 
-@patch("tools.llm_client.call_llm")
-@patch("tools.jev_adapter.verify_review_conformance")
-@patch("tools.orchestrator_graph.get_git_diff")
+@patch("tools.backends.llm_client.call_llm")
+@patch("tools.backends.jev_adapter.verify_review_conformance")
+@patch("tools.core.orchestrator_graph.get_git_diff")
 def test_review_node_changes_requested_skips_jev(
     mock_diff: MagicMock,
     mock_verify: MagicMock,

@@ -56,7 +56,7 @@
 ## 3. システム全体アーキテクチャと安全回路
 
 ```text
-[ tools/orchestrator_graph.py ]  ← LangGraph StateGraph（母艦）
+[ tools/core/orchestrator_graph.py ]  ← LangGraph StateGraph（母艦）
 
   メタデータ検証・文脈解決・プロジェクトロック取得
          │
@@ -82,7 +82,7 @@
 
 ### 3.1 LLM バックエンドの責務分離
 
-`tools/llm_client.py` は role・intent を解決し、agyのテキスト応答を既存の返却形式へ変換する。`BackendExecutionCoordinator` は `config/models.yaml` の intent route に従い、agy backendをGPUリースなしで実行する。JEVはこの経路を通らずOllamaへ直接接続する。具象的なルーティング状態やバックエンド制限事項は DD-003 §2.2 と DD-005 を正本として一元管理する。（loader が読むのは `models.yaml` のみ）
+`tools/backends/llm_client.py` は role・intent を解決し、agyのテキスト応答を既存の返却形式へ変換する。`BackendExecutionCoordinator` は `config/models.yaml` の intent route に従い、agy backendをGPUリースなしで実行する。JEVはこの経路を通らずOllamaへ直接接続する。具象的なルーティング状態やバックエンド制限事項は DD-003 §2.2 と DD-005 を正本として一元管理する。（loader が読むのは `models.yaml` のみ）
 
 ---
 
@@ -103,9 +103,9 @@
 
 ### 5.1 運用インターフェースと将来構想
 
-- **標準エントリポイント:** `uv run python tools/orchestrator_graph.py orchestrate` で実行計画を表示し、`uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> --project-key <PROJECT_KEY> --fresh` でLangGraphを起動する。
+- **標準エントリポイント:** `uv run python tools/core/orchestrator_graph.py orchestrate` で実行計画を表示し、`uv run python tools/core/orchestrator_graph.py execute --issue-id <ISSUE_ID> --project-key <PROJECT_KEY> --fresh` でLangGraphを起動する。
 - **補助ラッパー:** `uv run python tools/run_task.py <ISSUE_ID> --fresh` は衛星リポジトリのクリーンアップ後にexecuteを起動する。夜間運用は `uv run python tools/nightly_task_worker.py --config config/nightly_worker.toml` を使う。
-- **agy起動:** `tools/agy_client.py` が `agy --dangerously-skip-permissions -p <prompt>` を非対話subprocessとして起動する。実行ファイル解決、timeout、終了コード分類はagy clientが担当する。
+- **agy起動:** `tools/backends/agy_client.py` が `agy --dangerously-skip-permissions -p <prompt>` を非対話subprocessとして起動する。実行ファイル解決、timeout、終了コード分類はagy clientが担当する。
 - **将来構想:** 自動優先度計算バッチ、定期スクラミング、外部通知連携等は現行自律実行基盤の枠外とし、将来拡張機能として位置づける。
 
 ---

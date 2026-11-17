@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from tools.agy_client import AgyExitError, AgyTimeoutError, run_agy_in_workdir, run_agy_text
+from tools.backends.agy_client import (
+    AgyExitError,
+    AgyTimeoutError,
+    run_agy_in_workdir,
+    run_agy_text,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 

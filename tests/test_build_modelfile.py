@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""tools.build_modelfileの単体テスト。"""
+"""tools.models.build_modelfileの単体テスト。"""
 
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-import tools.build_modelfile as build_modelfile
+import tools.models.build_modelfile as build_modelfile
 
 
 def _prepare_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:

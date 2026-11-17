@@ -1,18 +1,18 @@
-"""Unit tests for tools.backend_coordinator."""
+"""Unit tests for tools.backends.backend_coordinator."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.backend_coordinator import (
+from tools.backends.backend_coordinator import (
     AgyBackendAdapter,
     BackendExecutionCoordinator,
     GpuLeaseAdapter,
 )
-from tools.config_loader import BackendExecutionConfig, ProfileConfig
+from tools.workspace.config_loader import BackendExecutionConfig, ProfileConfig
 
 
-@patch("tools.backend_coordinator.get_backend_execution_config")
+@patch("tools.backends.backend_coordinator.get_backend_execution_config")
 def test_coordinator_routing_agy(mock_get_config: MagicMock) -> None:
     """agy プロファイルへのルーティングと正常実行を検証する."""
     mock_get_config.return_value = BackendExecutionConfig(
@@ -38,7 +38,7 @@ def test_coordinator_routing_agy(mock_get_config: MagicMock) -> None:
     action_mock.assert_called_once_with(mock_get_config.return_value.profiles["agy_default"])
 
 
-@patch("tools.backend_coordinator.get_backend_execution_config")
+@patch("tools.backends.backend_coordinator.get_backend_execution_config")
 def test_coordinator_unmapped_intent(mock_get_config: MagicMock) -> None:
     """未マップの intent で ValueError が発生することを検証する."""
     mock_get_config.return_value = BackendExecutionConfig(
@@ -52,7 +52,7 @@ def test_coordinator_unmapped_intent(mock_get_config: MagicMock) -> None:
         coordinator.execute("unknown_intent", {"action": lambda _: None})
 
 
-@patch("tools.backend_coordinator.get_backend_execution_config")
+@patch("tools.backends.backend_coordinator.get_backend_execution_config")
 def test_coordinator_retired_backend_raises_value_error(mock_get_config: MagicMock) -> None:
     """退役したバックエンド（ollama / llama_server）が指定された場合、明確なエラーを送出することを検証する."""
     mock_get_config.return_value = BackendExecutionConfig(

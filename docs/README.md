@@ -30,7 +30,7 @@
   * [`0002-agy-availability-quota-and-nightly-worker-guard.md`](adr/0002-agy-availability-quota-and-nightly-worker-guard.md): agy 障害分類・指数バックオフと夜間ワーカー安全中断方針
   * [`0003-edit-guard-and-allowed-new-file-globs.md`](adr/0003-edit-guard-and-allowed-new-file-globs.md): 書き込み境界ガード (edit_guard) と新規ファイル許可 (allowed_new_file_globs)
   * [`0004-agy-external-send-policy-and-satellite-allowlist.md`](adr/0004-agy-external-send-policy-and-satellite-allowlist.md): agy外部送信ポリシーとサテライト許可リスト
-* **サテライト生成文書**: サテライト側の `docs/issues/<TASK_ID>.md` は、Issue起票・昇格・定周期同期時に自動生成・自己修復されます。仕様は [`SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md`](design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md) を参照してください。
+* **GitHub Issues SSOT 運用**: タスク仕様・ステータス（`stage:*` ラベル）・優先度は GitHub Issues に一元管理され、サテライト固有の構成は各サテライトの `docs/project.json` に配置されます（旧 `docs/tasks.md` / `docs/issues/` の二元管理は廃止済み）。仕様は [`SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md`](design/SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md) を参照してください。
 
 ---
 

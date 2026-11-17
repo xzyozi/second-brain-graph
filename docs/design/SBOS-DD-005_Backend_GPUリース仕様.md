@@ -7,10 +7,10 @@
 | 版数               | Rev.2.1（agy外部送信ポリシーとproject key allowlistを追記）                                                                        |
 | 改訂日             | 2026年11月4日                                                                                                                      |
 | 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-004（コード編集エンジン統合）、Issue #39、Epic #116                  |
-| 対象コンポーネント | `tools/backend_coordinator.py`、`tools/llama_backend.py`、`tools/gguf_manager.py`、`tools/config_loader.py`、`tools/llm_client.py` |
+| 対象コンポーネント | `tools/backends/backend_coordinator.py`、`tools/llama_backend.py`、`tools/models/gguf_manager.py`、`tools/workspace/config_loader.py`、`tools/backends/llm_client.py` |
 | 役割               | LLMプロファイル検証、agy backendの実行、JEV用Ollamaの据え置き、GPUリース管理、外部送信ポリシーの適用                               |
 
-> **現行構成**: JEVを除くLLM処理はagy backendへルーティングする。JEV（`tools/jev_adapter.py`、`submodules/jev-localsystem`、`tools/screen_issues.py`）だけは本書のroutes/profilesを経由せず、Ollama（既定モデル `qwen2.5:0.5b`）へ直接接続する。Aiderとllama-serverはruntimeから退役し、旧資産はlegacy/archiveに保存する。
+> **現行構成**: JEVを除くLLM処理はagy backendへルーティングする。JEV（`tools/backends/jev_adapter.py`、`submodules/jev-localsystem`、`tools/screen_issues.py`）だけは本書のroutes/profilesを経由せず、Ollama（既定モデル `qwen2.5:0.5b`）へ直接接続する。Aiderとllama-serverはruntimeから退役し、旧資産はlegacy/archiveに保存する。
 
 ---
 
@@ -22,11 +22,11 @@ Epic #116のagy移行は実装済みである。`intent → routes → profile �
 
 ### 1.1 本書の対象外（据え置き）
 
-**JEV（`tools/jev_adapter.py`、`submodules/jev-localsystem`、`tools/screen_issues.py`）は本書の `routes` / `profiles` を経由せず、Ollama（既定モデル `qwen2.5:0.5b`、環境変数 `JEV_MODEL` で上書き）へ直接接続する。** JEV は Zero-Decode（logprobs）を使うため agy へ置き換えられず、Epic #116 でも据え置きとする。したがって、**agy へ移行した後も Ollama の実行環境は運用上必要**である。JEV は利用できない場合に判定をバイパスする（フェイルオープン、DD-006 §1.1・§3.1.1）。
+**JEV（`tools/backends/jev_adapter.py`、`submodules/jev-localsystem`、`tools/screen_issues.py`）は本書の `routes` / `profiles` を経由せず、Ollama（既定モデル `qwen2.5:0.5b`、環境変数 `JEV_MODEL` で上書き）へ直接接続する。** JEV は Zero-Decode（logprobs）を使うため agy へ置き換えられず、Epic #116 でも据え置きとする。したがって、**agy へ移行した後も Ollama の実行環境は運用上必要**である。JEV は利用できない場合に判定をバイパスする（フェイルオープン、DD-006 §1.1・§3.1.1）。
 
 ## 2. 設定モデルとスキーマ (`config/models.yaml`)
 
-`config/models.yaml` は LLM 関連設定の SSOT である。`tools/config_loader.py` の `load_model_config()` は `models.yaml` **のみ**を読み込む。ファイルが存在しない場合は `FileNotFoundError` となり、`models.json` へのフォールバックは行わない。YAML 形式の採用により、各設定パラメータの選定理由や VRAM 推奨マージンをコメントとして直接記述できる。
+`config/models.yaml` は LLM 関連設定の SSOT である。`tools/workspace/config_loader.py` の `load_model_config()` は `models.yaml` **のみ**を読み込む。ファイルが存在しない場合は `FileNotFoundError` となり、`models.json` へのフォールバックは行わない。YAML 形式の採用により、各設定パラメータの選定理由や VRAM 推奨マージンをコメントとして直接記述できる。
 
 > **訂正（Rev.2.0）**: Rev.1.1 は「後方互換用フォールバックとして `models.json`」と記載していたが、実装には存在しない。`config/models.json` は旧版のコピーであり、loader は読まない。扱いは Issue #128 で決める。
 
@@ -137,7 +137,7 @@ agyはGPUを使わないため、`backend == "agy"` のときはGPUリースを�
 
 > **訂正（Rev.2.0）**: Rev.1.1 は llama-server Adapter について「Ollama API 到達不能時は VRAM 解放済みと判定して処理を継続する」と記載していたが、実装は逆で、既定で起動を拒否する（Issue #25）。
 
-## 6. GGUFモデル管理仕様 (`tools/gguf_manager.py`)【現行】
+## 6. GGUFモデル管理仕様 (`tools/models/gguf_manager.py`)【現行】
 
 `llama-server` 起動時に読み込む GGUF フォーマットのモデルファイル（`*.gguf`）の配置・パス解決および存在検証を管理する。agy への移行後も、旧 profile を残す段階では有効である。旧 profile と llama-server 基盤の削除は Issue #128 で扱う。
 
@@ -153,10 +153,10 @@ agyはGPUを使わないため、`backend == "agy"` のときはGPUリースを�
 
 | 項目                                                                    | 状況                                                                                                                                            | 確定先 / 実績   |
 | :---------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------- | :-------------- |
-| `ProfileConfig` の `agy` 対応、`AgyBackendAdapter`、GPU リース対象外    | **実装完了** (`tools/backend_coordinator.py`)                                                                                                   | PR #135 (#120)  |
-| `call_llm` の agy 経路                                                  | **実装完了** (`tools/llm_client.py`)                                                                                                            | PR #135 (#121)  |
+| `ProfileConfig` の `agy` 対応、`AgyBackendAdapter`、GPU リース対象外    | **実装完了** (`tools/backends/backend_coordinator.py`)                                                                                                   | PR #135 (#120)  |
+| `call_llm` の agy 経路                                                  | **実装完了** (`tools/backends/llm_client.py`)                                                                                                            | PR #135 (#121)  |
 | `routes` の agy への切り替え                                            | **実装完了** (`config/models.yaml`)                                                                                                             | PR #137 (#123)  |
-| agy の認証・クォータ障害分類と夜間バッチ安全中断ガード                  | **実装完了** (`tools/agy_client.py` 等)                                                                                                         | PR #139 (#126)  |
+| agy の認証・クォータ障害分類と夜間バッチ安全中断ガード                  | **実装完了** (`tools/backends/agy_client.py` 等)                                                                                                         | PR #139 (#126)  |
 | agy のモデル指定オプション、`temperature` / `max_tokens` 相当の指定手段 | agy 側の設定に委譲（CLI側パラメータ指定なし）                                                                                                   | ADR 0001 (#117) |
 | 外部送信の方針（agy 経路は `sanitize_text` の対象外の情報も送りうる）   | `backend_execution.agy_external_send` で認可。既定は移行互換の `allow_all`、実業務運用前に `allowlist` へ切り替える。秘密ファイル拒否も設定可能 | #124            |
 | 旧 profile・llama-server 基盤・`openai` 依存の退役と後始末              | 未実施（JEV のため Ollama 環境は残る）                                                                                                          | #128            |

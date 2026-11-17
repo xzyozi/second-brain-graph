@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tools.core.orchestrator_graph import GraphState, review_node
 from tools.doctor import check_reviewdog
-from tools.orchestrator_graph import GraphState, review_node
 
 
 def _state() -> GraphState:
@@ -42,13 +42,15 @@ def _state() -> GraphState:
 
 def _run_review(which_result: str | None, run_cmd_mock: MagicMock) -> GraphState:
     with (
-        patch("tools.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []}),
-        patch("tools.orchestrator_graph.get_git_diff", return_value="diff text"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.shutil.which", return_value=which_result),
-        patch("tools.orchestrator_graph.run_cmd", run_cmd_mock),
         patch(
-            "tools.jev_adapter.verify_review_conformance",
+            "tools.backends.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []}
+        ),
+        patch("tools.core.orchestrator_graph.get_git_diff", return_value="diff text"),
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.shutil.which", return_value=which_result),
+        patch("tools.core.orchestrator_graph.run_cmd", run_cmd_mock),
+        patch(
+            "tools.backends.jev_adapter.verify_review_conformance",
             return_value=(True, 1.0, "JEV conformance passed"),
         ),
     ):

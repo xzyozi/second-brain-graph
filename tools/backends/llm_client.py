@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/llm_client.py - LiteLLM 経由でのモデル一元管理動的 LLM 呼び出しモジュール."""
+"""tools/backends/llm_client.py - LiteLLM 経由でのモデル一元管理動的 LLM 呼び出しモジュール."""
 
 import json
 import logging

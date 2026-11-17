@@ -22,8 +22,8 @@ from tools.workspace.github_issues import (
 
 
 def test_legacy_tools_alias_import() -> None:
-    """tools.github_issues エイリアスから同一モジュールをインポートできる."""
-    import tools.github_issues as alias_mod
+    """tools.workspace.github_issues エイリアスから同一モジュールをインポートできる."""
+    import tools.workspace.github_issues as alias_mod
     import tools.workspace.github_issues as canonical_mod
 
     assert alias_mod.fetch_remote_issue is canonical_mod.fetch_remote_issue

@@ -1,19 +1,21 @@
 ---
 title: "Issue 壁打ちライフサイクルと JEV スクリーニング仕様書"
 document_type: "detailed_design"
-version: "1.4.0"
+version: "1.5.0"
 created_at: "2026-09-25"
-updated_at: "2026-11-14"
+updated_at: "2026-11-16"
 author: "アーキテクチャチーム / xzyozi"
-purpose: "GitHub Issues を唯一の正本 (SSOT) とする自律開発パイプラインの前段に位置する壁打ち・構想フェーズの状態管理ルール、JEVによるスクリーニング仕様、およびラベルベース状態遷移を定義する"
+purpose: "GitHub Issues を唯一の正本 (SSOT) とする自律開発パイプラインの前段に位置する壁打ち・構想フェーズの状態管理ルール、JEVによるスクリーニング・昇格検問仕様、対話型壁打ちスキル仕様、およびラベルベース状態遷移を定義する"
 related_documents:
   - "docs/design/SBOS-BD-002_基本設計書.md"
   - "docs/design/SBOS-DD-003_詳細設計書.md"
+  - "docs/design/SBOS-DD-006_品質ゲート_レビュー仕様.md"
   - "metadata/templates/issue_template.md"
 related_issues:
   - "#70"
   - "#116"
   - "#179"
+  - "#203"
 ---
 
 # 詳細設計書（Issue 壁打ちライフサイクルと JEV スクリーニング仕様）
@@ -23,11 +25,11 @@ related_issues:
 | :------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号       | SBOS-DD-007                                                                                                                                                              |
 | ドキュメント名 | Issue 壁打ちライフサイクルと JEV スクリーニング仕様書                                                                                                                    |
-| 版数           | Rev.1.4 (Epic #179: `tasks.md` / `docs/issues` 二元管理を廃止し、GitHub Issues SSOT へ一本化)                                                                            |
-| 改訂日         | 2026-11-14                                                                                                                                                               |
+| 版数           | Rev.1.5 (Issue #203: 母艦内対話型壁打ちスキル `issue-refinement` 新設、および `promote_issue.py` の母艦対応・構造チェック・JEV 出口検問統合)                           |
+| 改訂日         | 2026-11-16                                                                                                                                                               |
 | 作成日         | 2026-09-25                                                                                                                                                               |
 | 作成者         | アーキテクチャチーム / xzyozi                                                                                                                                            |
-| 対象           | `tools/lifecycle/screen_issues.py`, `tools/lifecycle/close_stale_issues.py`, `tools/score_issues.py`, `tools/promote_issue.py`, `tools/lifecycle/periodic_review_runner.py`, `tools/workspace/github_issues.py`, `.github/workflows/cleanup-stale-ideation.yml` |
+| 対象           | `tools/screen_issues.py`, `tools/lifecycle/close_stale_issues.py`, `tools/score_issues.py`, `tools/promote_issue.py`, `tools/lifecycle/periodic_review_runner.py`, `tools/backends/jev_adapter.py`, `tools/workspace/github_issues.py`, `.agents/skills/issue-refinement/SKILL.md`, `.github/workflows/cleanup-stale-ideation.yml` |
 
 ---
 
@@ -84,7 +86,7 @@ Issue の状態を以下の 4 つの `stage:*` ラベルと Open/Closed 状態�
 
 ## 3. コンポーネント仕様
 
-### 3.1 JEV Issue スクリーニング (`tools/lifecycle/screen_issues.py`)
+### 3.1 JEV Issue スクリーニング (`tools/screen_issues.py`)
 - **役割**:
   - 全 Issue（Open / Closed 双方）を取得し、重複・類似 Issue の検知と領域カテゴリの推論を行う。
 - **JEV 重複検知ポリシー (`DUPLICATE_CHECK_POLICY`)**:
@@ -177,6 +179,46 @@ Issue の状態を以下の 4 つの `stage:*` ラベルと Open/Closed 状態�
 3. **環境診断 (`tools/doctor.py`)**:
    - `check_github_issues_access()` で GitHub CLI / Issues SSOT への疎通を診断し、`check_legacy_local_files()` で非推奨となった `docs/tasks.md` / `docs/issues/` の残存有無を検査する（ローカルファイル不在時は正常 `OK` 扱い）。
 
+### 3.11 対話型壁打ちスキルと JEV 入口・出口検問 (Issue #203)
+Tier 2（対話による要件・設計詰め）を標準化するため、母艦リポジトリに専用スキル **`.agents/skills/issue-refinement/SKILL.md`** を配置し、壁打ち工程の入口・出口に JEV 検問を統合します。
+
+#### 1. 既存スキルとの役割分離・配置方針
+| スキル | 配置パス | 実行方式・対象 | 役割 |
+| :--- | :--- | :--- | :--- |
+| `issue-refinement` | `.agents/skills/issue-refinement/SKILL.md` | Antigravity 標準探索パスによる対話ロード（母艦・サテライト双方） | `stage:ideation` Issue の対話壁打ち・設計精査・`stage:ready` 昇格 |
+| `satellite-ideation-reviewer` | `.gemini/skills/satellite-ideation-reviewer/` | `periodic_review_runner.py` 等からのパス直指定バッチ起動（サテライト専用） | コード巡回レビューによる `stage:ideation` Issue の自律起票 |
+
+#### 2. 壁打ち実行フロー（Phase 0〜4）
+1. **Phase 0（対象リポジトリ特定・ガード）**:
+   - `metadata/.project-registry.json`・サテライト `docs/project.json`・`git rev-parse --show-toplevel`・`gh repo view` を照合し、対象（母艦 `xzyozi/second-brain-graph` または登録済みサテライト）を一意特定する。曖昧な場合は作業を進めずユーザーへ確認する。
+2. **Phase 1（段階的 `docs/`・規約読み込み）**:
+   - **Step 1（ルート規定）**: `docs/project.json`, `README.md`, `CONTEXT.md`, `AGENTS.md`, `CLAUDE.md`, `pyproject.toml`（存在するもの）から基本規約・テスト/CI 契約を把握する。
+   - **Step 2（設計索引）**: `docs/README.md`・`docs/design/README.md` 等から目次を把握し、全件丸読みによるコンテキスト圧迫を避ける。
+   - **Step 3（関連精読）**: 当該 Issue に関係する設計書および実ソース・テストのみを精読する。なお、過去の `legacy/` 資産や移行前ローカルファイル（`docs/tasks.md`, `docs/issues/`）には引きずられず、現行 GitHub Issues と現行 `docs/` を正本として扱う。
+3. **Phase 2（JEV 入口検問：重複・既解決確認）**:
+   - 壁打ち開始前に `tools/screen_issues.py`（`verify_duplicate_with_jev()`）で Open / Closed の既存 Issue との重複・類似・既対応有無を検査する（Ollama 不在時は既存のレキシカル Jaccard フォールバックで動作）。
+4. **Phase 3（対話壁打ち・仕様確定）**:
+   - `agy` 本体が論点を構造化し、案 1（推奨）／案 2（代替）を提示してユーザーと合意形成する。
+5. **Phase 4（構造チェック・JEV 出口検問・`stage:ready` 昇格）**:
+   - `metadata/templates/issue_template.md` 準拠（0〜8 章）に本文を確定した上で、`tools/promote_issue.py` を通じて昇格する。
+
+#### 3. `tools/promote_issue.py` の母艦対応・構造チェック・JEV 出口検問契約
+1. **母艦リポジトリ解決の閉域化**:
+   - `metadata/.project-registry.json` に母艦を登録したり、サテライト判定として共用される `tools/workspace/metadata_store.py`（`resolve_project_from_cwd()`, `resolve_target_spec()`）を変更したりせず、母艦エイリアス（`second-brain-graph`, `xzyozi/second-brain-graph`, `SBOS`, および母艦配下かつ `projects/` 外 CWD フォールバック）の解決ロジックは `tools/promote_issue.py` 内に閉じて実装する。
+2. **Python 決定論的構造チェック**:
+   - 表記の軽微な揺れを許容しつつ、主要セクション（`## 1.`, `## 2.`, `## 3.`, `## 4.`, `## 8.`）の存在、`## 4. 編集対象ファイル` が空でないこと、およびテンプレート初期値（`path/to/file.py`, `〇〇`, `[最小限・安全な改修アプローチ` 等の未置換文字列）が残存していないことを検証する。
+3. **JEV 出口検問（`verify_plan_conformance()` 共用）**:
+   - **抽出マッピング**:
+     - `issue_id`: 母艦は `second-brain-graph#<num>`、サテライトは `{PROJECT_KEY}-{num:04d}`（キー未解決時は `{repo}#{num}`）
+     - `instruction`: `## 1. 概要・背景` ＋ `## 2.` の**採用案のみ**（非採用案や `## 7.` 退避内容を混入させない）
+     - `impl_plan`: `## 3. 段階的実装手順`（および存在する場合は `## 8. 完了定義`）
+     - `target_files`: `## 4. 編集対象ファイル` から抽出した実パス一覧
+   - **ソフトゲート契約**:
+     - デフォルトでは `REJECTED` (`is_valid=False`) 時に昇格を中断し、JEV に渡した要約（抽出 `target_files` および手順プレビュー）と `--skip-jev` による上書き手段をエラーログへ出力する。
+     - `--skip-jev` 指定時は JEV 検問をスキップして昇格を許可する（構造チェックは維持）。
+     - `--dry-run` 実行時も構造チェックと JEV 出口検問を実施し、判定結果（PASSED / REJECTED / bypassed）を事前確認できるようにする（GitHub Issue の実更新は行わない）。
+     - Ollama 不在・接続失敗・`INCONCLUSIVE` 時は既存の fail-open 契約を維持し、作業をブロックしない。
+
 ---
 
 ## 4. 改訂履歴 (Change Log)
@@ -188,3 +230,4 @@ Issue の状態を以下の 4 つの `stage:*` ラベルと Open/Closed 状態�
 | Rev.1.2 | 2026-11-04 | xzyozi               | Epic #116 (agy移行) との関係、JEVスクリーニング据え置き方針を追記 (3.5節)                                                                                                                                                  |
 | Rev.1.3 | 2026-11-06 | xzyozi               | Issue #70 実装完了確認: `issue_spec_manager.py`、`promote_issue.py`、`periodic_review_runner.py`、`orchestrator_graph.py` の動作検証・テスト全件合格(23件)および関連Issueを反映                                             |
 | Rev.1.4 | 2026-11-14 | xzyozi               | Epic #179 (#191〜#194) 完了に伴い、`tasks.md` / `docs/issues/<TASK_ID>.md` 二元管理・`issue_spec_manager.py` を廃止し、GitHub Issues SSOT・決定論的タスク ID 規則 `{PROJECT_KEY}-{issue_number:04d}` へ整合改訂              |
+| Rev.1.5 | 2026-11-16 | xzyozi               | Issue #203 に対応: `.agents/skills/issue-refinement/SKILL.md`（対話型壁打ち・段階的 `docs/` 読込・JEV 入口/出口検問）仕様と `tools/promote_issue.py` の母艦対応・構造チェック・`--skip-jev` 契約を追記、実パス整合 |

@@ -4,7 +4,8 @@ from typing import List, Optional
 
 import pytest
 
-from tools.config_loader import (
+from tools.core.prompt_harness import build_coder_instruction, engine_for_backend, resolve_prompt
+from tools.workspace.config_loader import (
     AdvisorPromptConfig,
     CoderPromptConfig,
     PlannerPromptConfig,
@@ -12,7 +13,6 @@ from tools.config_loader import (
     ReviewerPromptConfig,
     load_prompt_config,
 )
-from tools.prompt_harness import build_coder_instruction, engine_for_backend, resolve_prompt
 
 
 def make_prompt_config() -> PromptConfig:

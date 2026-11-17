@@ -44,7 +44,7 @@
 
 ## 2. モデル配置管理仕様 (`config/models.yaml`)
 
-> **訂正（Rev.4.8）**: Rev.4.7 までは SSOT を `config/models.json` と記載していたが、`tools/config_loader.py` が読み込むのは **`config/models.yaml` のみ**である（SBOS-DD-005 §2）。`models.json` は旧版のコピーであり、扱いは Issue #128 で決める。以下の §2.2 の JSON 例は、構造の説明用の旧形式であり、実際の設定の書式は `models.yaml`（`backend_execution.profiles` / `routes`）を正とする。
+> **訂正（Rev.4.8）**: Rev.4.7 までは SSOT を `config/models.json` と記載していたが、`tools/workspace/config_loader.py` が読み込むのは **`config/models.yaml` のみ**である（SBOS-DD-005 §2）。`models.json` は旧版のコピーであり、扱いは Issue #128 で決める。以下の §2.2 の JSON 例は、構造の説明用の旧形式であり、実際の設定の書式は `models.yaml`（`backend_execution.profiles` / `routes`）を正とする。
 
 ### 2.1 一元管理モデル設定方針
 本システムでは、ドキュメントやモジュールコード内に具体的なモデル名を直接記述・ハードコードせず、すべて **`config/models.yaml`** にて一元管理（Single Source of Truth: SSOT）する。
@@ -84,7 +84,7 @@ agyへの移行後は、LLMの実行先を `backend_execution.routes` が指すp
 }
 ```
 
-各モジュール（`tools/llm_client.py`、`tools/agy_runner.py`等）は `tools/config_loader.py` 経由で設定を参照する。Aiderの旧CLI設定はlegacy/archiveの資産としてのみ保持する。
+各モジュール（`tools/backends/llm_client.py`、`tools/backends/agy_runner.py`等）は `tools/workspace/config_loader.py` 経由で設定を参照する。Aiderの旧CLI設定はlegacy/archiveの資産としてのみ保持する。
 
 ---
 

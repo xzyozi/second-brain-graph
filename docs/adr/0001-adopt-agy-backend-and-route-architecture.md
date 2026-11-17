@@ -21,7 +21,7 @@
    - **planner / reviewer (`call_llm`)**: agy を純粋な「テキスト応答器」として使用する。副作用を防止するため、空の一時ディレクトリ（`tempfile.TemporaryDirectory`）を cwd に指定して起動し、リポジトリの読み書きを行わせない。
 
 3. **プロンプトの扱い (Q9)**:
-   - coder 向けプロンプトからは Aider 専用の `[STRICT AIDER OUTPUT FORMAT RULES]` を除去し、直接編集用の指示のみを渡す（`tools/prompt_harness.py` で SSOT 管理）。
+   - coder 向けプロンプトからは Aider 専用の `[STRICT AIDER OUTPUT FORMAT RULES]` を除去し、直接編集用の指示のみを渡す（`tools/core/prompt_harness.py` で SSOT 管理）。
    - planner / reviewer では既存のプロンプトをそのまま活用し、`expect_json=True` の場合のみ「JSON オブジェクトのみを出力」する旨の制約を末尾に付与する。
 
 4. **プロセスツリー終了と入力長 (Q14)**:

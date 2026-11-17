@@ -38,12 +38,12 @@ $$\text{Score} = \frac{\text{Total}}{42.5} \times 100$$
 
 ### 1.2 LangGraph CLI による計画承認と Issue 実行 (`orchestrator_graph.py`)
 
-Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリポイント `tools/orchestrator_graph.py` を用いて日次運用を起動する。
+Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリポイント `tools/core/orchestrator_graph.py` を用いて日次運用を起動する。
 
 1. **実行計画の呼び出し:**
    ターミナルで以下のコマンドを実行する。システムはバッチが計算したキャッシュ（`priority-cache.json`）を読み込み、実行可能な上位3件を提示する。
    ```bash
-   uv run python tools/orchestrator_graph.py orchestrate
+   uv run python tools/core/orchestrator_graph.py orchestrate
    ```
    ```text
    【本日の実行計画 (推奨上位3件)】
@@ -52,13 +52,13 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    2位: [FX-005]「LightGBMバックテスト指標推移表の追加」（スコア: 88.0）
    3位: [EC-015]「ユーザープロファイルアイコンのS3アップロード」（スコア: 81.5）
 
-   実行するには: uv run python tools/orchestrator_graph.py execute --issue-id EC-012
+   実行するには: uv run python tools/core/orchestrator_graph.py execute --issue-id EC-012
    ```
 
 2. **自律グラフの起動 (`execute` コマンド):**
    運用者が以下のコマンドを実行すると、`orchestrator_graph.py` (StateGraph) が起動し、自動的にノード間を遷移する。
    ```bash
-   uv run python tools/orchestrator_graph.py execute --issue-id EC-012
+   uv run python tools/core/orchestrator_graph.py execute --issue-id EC-012
    ```
    - ① `plan_node` (LiteLLM / Planner による要件指示書生成)
    - ② `code_node`（agyによる衛星コード編集。edit_guard適用）
@@ -119,7 +119,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
   2. `state.json` 内の該当 Issue のステータスを `"PENDING"` または初期状態に戻し、`review_round`, `lint_round`, `test_round`, `llm_timeout_count` カウンタをすべて `0` にリセットする。連続 `FAILED_B7` で自動 Resume が拒否された場合（`consecutive_b7` が 2 以上）は、原因を修復したうえで `--resume`（継続）または `--fresh`（作り直し）を明示して再実行する。
-  3. `uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
+  3. `uv run python tools/core/orchestrator_graph.py execute --issue-id <ISSUE_ID>` を再実行する。
 
 ### ケース6: agy経路の障害と、旧資産からの復旧
 > 本ケースはagy routesが現行の環境に適用される。Aiderへ戻す場合は、単純なroute変更ではなく、退避資産の復元を伴う別作業になる。
@@ -138,7 +138,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 ## 4. 中長期メンテナンス・モデル定期更新ランブック
 
 ### 4.1 新モデルベンチマーク評価プロセス
-1. `uv run python tools/orchestrator_graph.py` によるダミー指示書テスト。
+1. `uv run python tools/core/orchestrator_graph.py` によるダミー指示書テスト。
 2. agy実行環境でのサンドボックス実行・JSON契約確認。
 3. Reviewerによる監査厳密性テスト。
 
@@ -146,7 +146,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 > agy 経路から旧経路へ戻す手順は、§3 ケース6 を参照すること。以下は、ローカルモデルを更新して不安定だった場合の手順である。
 
 ```bash
-# 1. tools/llm_client.py のモデル指定を安定版へ戻す
+# 1. tools/backends/llm_client.py のモデル指定を安定版へ戻す
 git checkout ~/second-brain/tools/llm_client.py
 
 # 2. 不安定モデルの削除とキャッシュクリア
