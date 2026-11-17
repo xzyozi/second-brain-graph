@@ -23,14 +23,14 @@ _mother_root = Path(__file__).resolve().parents[4]
 if str(_mother_root) not in sys.path:
     sys.path.insert(0, str(_mother_root))
 
-from tools.agy_client import (  # noqa: E402
+from tools.backends.agy_client import (  # noqa: E402
     AgyError,
     AgyTimeoutError,
     resolve_agy_executable,
     run_agy_in_workdir,
 )
-from tools.agy_policy import AgyPolicyDeniedError, authorize_agy_execution  # noqa: E402
-from tools.metadata_store import resolve_project_from_cwd  # noqa: E402
+from tools.backends.agy_policy import AgyPolicyDeniedError, authorize_agy_execution  # noqa: E402
+from tools.workspace.metadata_store import resolve_project_from_cwd  # noqa: E402
 
 # ロガー設定: 標準出力を汚さないよう sys.stderr に出力（ユーザーグローバルルール準拠）
 logger = logging.getLogger("satellite_reviewer")

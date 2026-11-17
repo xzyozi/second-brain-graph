@@ -2,11 +2,11 @@
 
 ## 目的
 
-`tools/register_ollama_model.py` は、独立したGGUFファイルをOllamaのローカルモデルタグとして登録するツールです。`tools/` は本リポジトリの実装層でもあるため、CLIの処理は再利用可能な `register_gguf_model()` に集約しています。
+`tools/models/register_ollama_model.py` は、独立したGGUFファイルをOllamaのローカルモデルタグとして登録するツールです。`tools/` は本リポジトリの実装層でもあるため、CLIの処理は再利用可能な `register_gguf_model()` に集約しています。
 
 登録操作と実行設定は分離します。このツールは `config/models.json` を変更しません。登録済みモデルをオーケストレータで使う場合だけ、利用者がOllama profileとrouteを設定してください。
 
-ハードウェア・推論パラメータ、Qwenテンプレート、SYSTEMプロンプトを含む永続Modelfileを生成する場合は、[`ollama_modelfile_profile_management.md`](../features/ollama_modelfile_profile_management.md) と `tools/build_modelfile.py` を使用します。
+ハードウェア・推論パラメータ、Qwenテンプレート、SYSTEMプロンプトを含む永続Modelfileを生成する場合は、[`ollama_modelfile_profile_management.md`](../features/ollama_modelfile_profile_management.md) と `tools/models/build_modelfile.py` を使用します。
 
 ## 前提条件
 
@@ -19,25 +19,25 @@
 最初に副作用なしで入力を確認します。
 
 ```powershell
-uv run python tools/register_ollama_model.py .\models\example.gguf local-example:latest --dry-run
+uv run python tools/models/register_ollama_model.py .\models\example.gguf local-example:latest --dry-run
 ```
 
 問題がなければ登録します。
 
 ```powershell
-uv run python tools/register_ollama_model.py .\models\example.gguf local-example:latest
+uv run python tools/models/register_ollama_model.py .\models\example.gguf local-example:latest
 ```
 
 同名タグが登録済みの場合、意図しない置換を防ぐため処理は失敗します。置換する場合だけ `--force` を指定します。
 
 ```powershell
-uv run python tools/register_ollama_model.py .\models\example.gguf local-example:latest --force
+uv run python tools/models/register_ollama_model.py .\models\example.gguf local-example:latest --force
 ```
 
 Ollamaの実行ファイルがPATHにない場合は、`--ollama-command` で明示できます。
 
 ```powershell
-uv run python tools/register_ollama_model.py .\models\example.gguf local-example:latest --ollama-command C:\tools\ollama.exe
+uv run python tools/models/register_ollama_model.py .\models\example.gguf local-example:latest --ollama-command C:\tools\ollama.exe
 ```
 
 ## 処理内容

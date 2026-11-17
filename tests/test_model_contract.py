@@ -18,8 +18,8 @@ import urllib.request
 
 import pytest
 
-from tools.config_loader import get_backend_execution_config
-from tools.llm_client import call_llm
+from tools.backends.llm_client import call_llm
+from tools.workspace.config_loader import get_backend_execution_config
 
 pytestmark = pytest.mark.integration
 

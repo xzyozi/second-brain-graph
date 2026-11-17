@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from tools.agy_policy import AgyOperation, AgyPolicyDeniedError, authorize_agy_execution
-from tools.config_loader import AgyExternalSendConfig
+from tools.backends.agy_policy import AgyOperation, AgyPolicyDeniedError, authorize_agy_execution
+from tools.workspace.config_loader import AgyExternalSendConfig
 
 
 def test_allow_all_mode_preserves_migration_compatibility(tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_allowlist_rejects_project_cwd_mismatch(
 ) -> None:
     """編集時、cwdから解決したproject keyと指定keyが異なる場合は拒否する。"""
     policy = AgyExternalSendConfig(mode="allowlist", allowed_project_keys=["TFG", "OTHER"])
-    monkeypatch.setattr("tools.agy_policy.resolve_project_from_cwd", lambda cwd: "OTHER")
+    monkeypatch.setattr("tools.backends.agy_policy.resolve_project_from_cwd", lambda cwd: "OTHER")
 
     with pytest.raises(AgyPolicyDeniedError, match="cwd does not match project key"):
         authorize_agy_execution(
@@ -77,7 +77,7 @@ def test_allowlist_rejects_unregistered_edit_cwd(
 ) -> None:
     """allowlist編集ではproject keyを解決できないcwdも拒否する。"""
     policy = AgyExternalSendConfig(mode="allowlist", allowed_project_keys=["TFG"])
-    monkeypatch.setattr("tools.agy_policy.resolve_project_from_cwd", lambda cwd: None)
+    monkeypatch.setattr("tools.backends.agy_policy.resolve_project_from_cwd", lambda cwd: None)
 
     with pytest.raises(AgyPolicyDeniedError, match="cwd is not registered"):
         authorize_agy_execution(
@@ -92,7 +92,9 @@ def test_allowlist_permits_authorized_project_key_for_all_operations(
     policy = AgyExternalSendConfig(
         mode="allowlist", allowed_project_keys=["PROJECT_A"], reject_secret_files=True
     )
-    monkeypatch.setattr("tools.agy_policy.resolve_project_from_cwd", lambda cwd: "PROJECT_A")
+    monkeypatch.setattr(
+        "tools.backends.agy_policy.resolve_project_from_cwd", lambda cwd: "PROJECT_A"
+    )
 
     operations: list[AgyOperation] = ["text", "edit", "review"]
     for op in operations:

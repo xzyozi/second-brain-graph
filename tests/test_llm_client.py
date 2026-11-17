@@ -1,10 +1,10 @@
-"""Tests for tools/llm_client.py and config_loader parameters integration."""
+"""Tests for tools/backends/llm_client.py and config_loader parameters integration."""
 
 import os
 from unittest.mock import MagicMock, patch
 
-from tools.config_loader import ProfileConfig, get_model_params
-from tools.llm_client import call_llm
+from tools.backends.llm_client import call_llm
+from tools.workspace.config_loader import ProfileConfig, get_model_params
 
 
 def test_get_model_params() -> None:
@@ -16,14 +16,14 @@ def test_get_model_params() -> None:
     assert coder_params["max_tokens"] == 35000
 
 
-@patch("tools.llm_client.OpenAI")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.OpenAI")
+@patch("tools.backends.llm_client.get_coordinator")
 @patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
 def test_call_llm_with_dynamic_params(
     mock_get_coordinator: MagicMock, mock_openai_class: MagicMock
 ) -> None:
     mock_coordinator = MagicMock()
-    from tools.config_loader import ProfileConfig
+    from tools.workspace.config_loader import ProfileConfig
 
     dummy_profile = ProfileConfig(
         backend="ollama",
@@ -51,14 +51,14 @@ def test_call_llm_with_dynamic_params(
     assert kwargs["temperature"] == 0.2
 
 
-@patch("tools.llm_client.OpenAI")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.OpenAI")
+@patch("tools.backends.llm_client.get_coordinator")
 @patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
 def test_call_llm_fallback_intent(
     mock_get_coordinator: MagicMock, mock_openai_class: MagicMock
 ) -> None:
     mock_coordinator = MagicMock()
-    from tools.config_loader import ProfileConfig
+    from tools.workspace.config_loader import ProfileConfig
 
     dummy_profile = ProfileConfig(
         backend="ollama",
@@ -92,8 +92,8 @@ def test_call_llm_fallback_intent(
 def _run_call_llm_with_content(raw_content: str, expect_json: bool = True) -> dict:
     """指定した生出力を返す OpenAI をモックし、call_llm の戻り値を得るヘルパー。"""
     with (
-        patch("tools.llm_client.OpenAI") as mock_openai_class,
-        patch("tools.llm_client.get_coordinator") as mock_get_coordinator,
+        patch("tools.backends.llm_client.OpenAI") as mock_openai_class,
+        patch("tools.backends.llm_client.get_coordinator") as mock_get_coordinator,
         patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"}),
     ):
         dummy_profile = ProfileConfig(
@@ -152,8 +152,8 @@ def test_call_llm_returns_raw_when_expect_json_false() -> None:
     assert result == {"raw": raw}
 
 
-@patch("tools.llm_client.OpenAI")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.OpenAI")
+@patch("tools.backends.llm_client.get_coordinator")
 @patch.dict(os.environ, {"OPENAI_API_BASE": "http://localhost:11434"})
 def test_call_llm_sanitizes_prompts(
     mock_get_coordinator: MagicMock, mock_openai_class: MagicMock
@@ -202,7 +202,7 @@ def test_call_llm_sanitizes_prompts(
 
 # ---------------------------------------------------------------------------
 # agy 経路 (profile.backend == "agy")
-# 実 agy バイナリは使用せず、tools.llm_client.run_agy_text をモックして検証する。
+# 実 agy バイナリは使用せず、tools.backends.llm_client.run_agy_text をモックして検証する。
 # ---------------------------------------------------------------------------
 def _make_agy_coordinator(dummy_profile: ProfileConfig) -> MagicMock:
     coordinator = MagicMock()
@@ -210,9 +210,9 @@ def _make_agy_coordinator(dummy_profile: ProfileConfig) -> MagicMock:
     return coordinator
 
 
-@patch("tools.llm_client.OpenAI")
-@patch("tools.llm_client.run_agy_text")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.OpenAI")
+@patch("tools.backends.llm_client.run_agy_text")
+@patch("tools.backends.llm_client.get_coordinator")
 def test_call_llm_uses_agy_when_profile_backend_is_agy(
     mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock, mock_openai_class: MagicMock
 ) -> None:
@@ -232,8 +232,8 @@ def test_call_llm_uses_agy_when_profile_backend_is_agy(
     assert mock_run_agy_text.call_args.kwargs["timeout"] == 1200
 
 
-@patch("tools.llm_client.run_agy_text")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.run_agy_text")
+@patch("tools.backends.llm_client.get_coordinator")
 def test_call_llm_agy_adds_json_only_instruction_when_expect_json(
     mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
 ) -> None:
@@ -250,8 +250,8 @@ def test_call_llm_agy_adds_json_only_instruction_when_expect_json(
     assert "JSON object" in prompt
 
 
-@patch("tools.llm_client.run_agy_text")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.run_agy_text")
+@patch("tools.backends.llm_client.get_coordinator")
 def test_call_llm_agy_omits_json_instruction_when_expect_json_false(
     mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
 ) -> None:
@@ -266,8 +266,8 @@ def test_call_llm_agy_omits_json_instruction_when_expect_json_false(
     assert "[OUTPUT FORMAT]" not in prompt
 
 
-@patch("tools.llm_client.run_agy_text")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.run_agy_text")
+@patch("tools.backends.llm_client.get_coordinator")
 def test_call_llm_agy_sanitizes_prompts(
     mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
 ) -> None:
@@ -284,8 +284,8 @@ def test_call_llm_agy_sanitizes_prompts(
     assert "password='[REDACTED]'" in prompt
 
 
-@patch("tools.llm_client.run_agy_text")
-@patch("tools.llm_client.get_coordinator")
+@patch("tools.backends.llm_client.run_agy_text")
+@patch("tools.backends.llm_client.get_coordinator")
 def test_call_llm_agy_falls_back_to_call_timeout_when_profile_timeout_unset(
     mock_get_coordinator: MagicMock, mock_run_agy_text: MagicMock
 ) -> None:

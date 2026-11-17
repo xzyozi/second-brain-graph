@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/backend_coordinator.py - LLMバックエンドのルーティングおよび実行を管理するCoordinator."""
+"""tools/backends/backend_coordinator.py - LLMバックエンドのルーティングおよび実行を管理するCoordinator."""
 
 from __future__ import annotations
 

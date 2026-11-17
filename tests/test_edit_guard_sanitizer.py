@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.edit_guard import cleanup_unauthorized_aider_artifacts, warn_if_working_tree_dirty
+from tools.core.edit_guard import cleanup_unauthorized_aider_artifacts, warn_if_working_tree_dirty
 
 GIT_ENV = {
     **os.environ,

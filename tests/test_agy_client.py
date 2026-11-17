@@ -1,5 +1,5 @@
 """
-Unit tests for tools/agy_client.py
+Unit tests for tools/backends/agy_client.py
 
 agy (Antigravity CLI) の実行ファイルはこの環境・CI には存在しないため、
 subprocess.Popen をすべてモックして単体テストを行う。
