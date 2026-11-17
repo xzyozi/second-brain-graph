@@ -224,7 +224,8 @@ def test_record_execution_history_and_safe_wrapper(tmp_path: Path) -> None:
 
     # safe ラッパーで例外が起きてもクラッシュしないこと
     with patch(
-        "tools.workspace.metadata_store.record_execution_history", side_effect=Exception("Disk error")
+        "tools.workspace.metadata_store.record_execution_history",
+        side_effect=Exception("Disk error"),
     ):
         safe_record_execution_history(state, final_status="FAILED", history_file=history_file)
 

@@ -55,8 +55,12 @@ def test_process_stale_issues_dry_run() -> None:
 
     now_dt = datetime(2026, 9, 25, 0, 0, 0, tzinfo=timezone.utc)
 
-    with patch("tools.lifecycle.close_stale_issues.fetch_ideation_issues", return_value=mock_issues):
-        with patch("tools.lifecycle.close_stale_issues.close_issue", return_value=True) as mock_close:
+    with patch(
+        "tools.lifecycle.close_stale_issues.fetch_ideation_issues", return_value=mock_issues
+    ):
+        with patch(
+            "tools.lifecycle.close_stale_issues.close_issue", return_value=True
+        ) as mock_close:
             closed = process_stale_issues(days_threshold=30, dry_run=True, now_dt=now_dt)
             assert closed == [101]
             mock_close.assert_called_once_with(101, 55, dry_run=True, repo=None)

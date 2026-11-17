@@ -42,7 +42,9 @@ def _state() -> GraphState:
 
 def _run_review(which_result: str | None, run_cmd_mock: MagicMock) -> GraphState:
     with (
-        patch("tools.backends.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []}),
+        patch(
+            "tools.backends.llm_client.call_llm", return_value={"verdict": "LGTM", "comments": []}
+        ),
         patch("tools.core.orchestrator_graph.get_git_diff", return_value="diff text"),
         patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
         patch("tools.core.orchestrator_graph.shutil.which", return_value=which_result),

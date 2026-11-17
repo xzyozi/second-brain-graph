@@ -92,7 +92,9 @@ def test_allowlist_permits_authorized_project_key_for_all_operations(
     policy = AgyExternalSendConfig(
         mode="allowlist", allowed_project_keys=["PROJECT_A"], reject_secret_files=True
     )
-    monkeypatch.setattr("tools.backends.agy_policy.resolve_project_from_cwd", lambda cwd: "PROJECT_A")
+    monkeypatch.setattr(
+        "tools.backends.agy_policy.resolve_project_from_cwd", lambda cwd: "PROJECT_A"
+    )
 
     operations: list[AgyOperation] = ["text", "edit", "review"]
     for op in operations:
