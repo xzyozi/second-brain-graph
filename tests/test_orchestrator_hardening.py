@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from langgraph.errors import GraphRecursionError
 
-from tools.orchestrator_graph import (
+from tools.core.orchestrator_graph import (
     GraphState,
     ProjectLockManager,
     _fail_system,
@@ -28,8 +28,8 @@ def test_route_unknown_status_goes_to_escalate() -> None:
 def test_fail_system_records_state_and_history() -> None:
     """error 指定時は state.json と実行履歴の両方を更新する (Issue #88)。"""
     with (
-        patch("tools.orchestrator_graph.update_task_state") as mock_update,
-        patch("tools.orchestrator_graph.safe_record_execution_history") as mock_history,
+        patch("tools.core.orchestrator_graph.update_task_state") as mock_update,
+        patch("tools.core.orchestrator_graph.safe_record_execution_history") as mock_history,
     ):
         _fail_system(
             "TFG",
@@ -52,8 +52,8 @@ def test_fail_system_records_state_and_history() -> None:
 def test_fail_system_without_error_skips_history() -> None:
     """error が None の場合は state.json のみ更新する (auto-stash 失敗時の従来挙動)。"""
     with (
-        patch("tools.orchestrator_graph.update_task_state") as mock_update,
-        patch("tools.orchestrator_graph.safe_record_execution_history") as mock_history,
+        patch("tools.core.orchestrator_graph.update_task_state") as mock_update,
+        patch("tools.core.orchestrator_graph.safe_record_execution_history") as mock_history,
     ):
         _fail_system(
             "TFG",
@@ -119,9 +119,9 @@ def _run_fresh_execute(tmp_path: Path, unmerged_stdout: str, branch_mv_rc: int =
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=True),
-        patch("tools.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
-        patch("tools.orchestrator_graph.StateGraph") as mock_state_graph,
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=True),
+        patch("tools.core.orchestrator_graph.run_cmd", side_effect=mock_run_cmd),
+        patch("tools.core.orchestrator_graph.StateGraph") as mock_state_graph,
     ):
         mock_app = MagicMock()
         mock_app.invoke.return_value = {"status": "COMPLETED"}
@@ -181,9 +181,9 @@ def _run_execute_with_invoke(
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=False),
-        patch("tools.orchestrator_graph.escalate_node", side_effect=lambda s: s),
-        patch("tools.orchestrator_graph.StateGraph") as mock_state_graph,
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=False),
+        patch("tools.core.orchestrator_graph.escalate_node", side_effect=lambda s: s),
+        patch("tools.core.orchestrator_graph.StateGraph") as mock_state_graph,
     ):
         mock_app = MagicMock()
         if invoke_side_effect is not None:

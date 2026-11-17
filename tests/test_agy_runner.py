@@ -1,4 +1,4 @@
-"""Unit tests for tools/agy_runner.py"""
+"""Unit tests for tools/backends/agy_runner.py"""
 
 from unittest.mock import MagicMock, patch
 

@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from tools.agy_runner import AgyRunError
-from tools.config_loader import ProfileConfig
-from tools.orchestrator_graph import GraphState, code_node
+from tools.backends.agy_runner import AgyRunError
+from tools.core.orchestrator_graph import GraphState, code_node
+from tools.workspace.config_loader import ProfileConfig
 
 
 def _make_agy_coordinator(dummy_profile: ProfileConfig) -> MagicMock:
@@ -19,8 +19,8 @@ def _make_agy_coordinator(dummy_profile: ProfileConfig) -> MagicMock:
     return coordinator
 
 
-@patch("tools.agy_runner.run_agy_edit", return_value=True)
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit", return_value=True)
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_dispatches_to_agy_when_profile_backend_is_agy(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
 ) -> None:
@@ -45,8 +45,8 @@ def test_code_node_dispatches_to_agy_when_profile_backend_is_agy(
     assert result["status"] == "code_completed"
 
 
-@patch("tools.agy_runner.run_agy_edit")
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit")
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_uses_default_timeout_when_profile_timeout_unset(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
 ) -> None:
@@ -66,8 +66,8 @@ def test_code_node_uses_default_timeout_when_profile_timeout_unset(
     assert mock_run_agy_edit.call_args.kwargs["timeout"] == 1200
 
 
-@patch("tools.agy_runner.run_agy_edit")
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit")
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_handles_agy_timeout_retry_and_escalation(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
 ) -> None:
@@ -94,8 +94,8 @@ def test_code_node_handles_agy_timeout_retry_and_escalation(
     assert second["status"] == "FAILED_SYSTEM"
 
 
-@patch("tools.agy_runner.run_agy_edit")
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit")
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_handles_agy_nonzero_exit_as_failed_system(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
 ) -> None:
@@ -116,8 +116,8 @@ def test_code_node_handles_agy_nonzero_exit_as_failed_system(
     assert result["error_category"] == "SYSTEM_ERROR"
 
 
-@patch("tools.agy_runner.run_agy_edit")
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit")
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_handles_agy_auth_error_as_agy_auth(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
 ) -> None:
@@ -140,8 +140,8 @@ def test_code_node_handles_agy_auth_error_as_agy_auth(
     assert result["error_category"] == "AGY_AUTH"
 
 
-@patch("tools.agy_runner.run_agy_edit")
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit")
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_handles_agy_quota_error_as_agy_quota(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
 ) -> None:
@@ -164,8 +164,8 @@ def test_code_node_handles_agy_quota_error_as_agy_quota(
     assert result["error_category"] == "AGY_QUOTA"
 
 
-@patch("tools.agy_runner.run_agy_edit")
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit")
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_handles_agy_policy_denied_as_failed_system(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock
 ) -> None:
@@ -188,8 +188,8 @@ def test_code_node_handles_agy_policy_denied_as_failed_system(
     assert result["error_category"] == "AGY_POLICY_DENIED"
 
 
-@patch("tools.agy_runner.run_agy_edit")
-@patch("tools.orchestrator_graph.get_coordinator")
+@patch("tools.backends.agy_runner.run_agy_edit")
+@patch("tools.core.orchestrator_graph.get_coordinator")
 def test_code_node_does_not_dynamically_register_new_files(
     mock_get_coordinator: MagicMock, mock_run_agy_edit: MagicMock, tmp_path: Path
 ) -> None:

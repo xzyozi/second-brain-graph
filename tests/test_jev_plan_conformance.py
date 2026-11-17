@@ -2,12 +2,12 @@
 
 from unittest.mock import MagicMock, patch
 
-from tools.jev_adapter import (
+from tools.backends.jev_adapter import (
     _JEV_SRC,
     is_jev_available,
     verify_plan_conformance,
 )
-from tools.orchestrator_graph import GraphState, spec_draft_node
+from tools.core.orchestrator_graph import GraphState, spec_draft_node
 
 
 def test_jev_available() -> None:
@@ -97,8 +97,8 @@ def test_verify_plan_conformance_fail_open_on_exception() -> None:
     assert "bypassed" in detail
 
 
-@patch("tools.llm_client.call_llm")
-@patch("tools.jev_adapter.verify_plan_conformance")
+@patch("tools.backends.llm_client.call_llm")
+@patch("tools.backends.jev_adapter.verify_plan_conformance")
 def test_spec_draft_node_conformance_passed(mock_verify: MagicMock, mock_llm: MagicMock) -> None:
     """spec_draft_node: 計画が適合した場合、running ステータスで通過すること。"""
     mock_llm.return_value = {"content": "1. Minimal fix in src/calc.py"}
@@ -119,8 +119,8 @@ def test_spec_draft_node_conformance_passed(mock_verify: MagicMock, mock_llm: Ma
     assert "impl_plan" in new_state
 
 
-@patch("tools.llm_client.call_llm")
-@patch("tools.jev_adapter.verify_plan_conformance")
+@patch("tools.backends.llm_client.call_llm")
+@patch("tools.backends.jev_adapter.verify_plan_conformance")
 def test_spec_draft_node_conformance_retry_and_b7(
     mock_verify: MagicMock, mock_llm: MagicMock
 ) -> None:

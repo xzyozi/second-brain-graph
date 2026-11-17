@@ -8,8 +8,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.test_orchestrator_hardening import _setup_satellite
-from tools.metadata_store import MAX_CONSECUTIVE_B7, next_consecutive_b7, update_task_state
-from tools.orchestrator_graph import ProjectLockManager, execute_issue
+from tools.core.orchestrator_graph import ProjectLockManager, execute_issue
+from tools.workspace.metadata_store import (
+    MAX_CONSECUTIVE_B7,
+    next_consecutive_b7,
+    update_task_state,
+)
 
 ISSUE_ID = "TFG-0004"
 
@@ -81,8 +85,8 @@ def _run(tmp_path: Path, final_status: str = "COMPLETED", **kwargs: Any) -> Magi
     with (
         patch.object(ProjectLockManager, "_acquire_lock"),
         patch.object(ProjectLockManager, "_release_lock"),
-        patch("tools.orchestrator_graph.is_in_git_workspace", return_value=False),
-        patch("tools.orchestrator_graph.StateGraph") as mock_state_graph,
+        patch("tools.core.orchestrator_graph.is_in_git_workspace", return_value=False),
+        patch("tools.core.orchestrator_graph.StateGraph") as mock_state_graph,
     ):
         mock_app = MagicMock()
         mock_app.invoke.return_value = {"status": final_status}

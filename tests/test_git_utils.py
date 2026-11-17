@@ -1,10 +1,10 @@
-"""Unit tests for tools/git_utils.py."""
+"""Unit tests for tools/workspace/git_utils.py."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.git_utils import GitDiffError, get_current_branch, get_git_diff
+from tools.workspace.git_utils import GitDiffError, get_current_branch, get_git_diff
 
 
 def test_get_git_diff_success() -> None:

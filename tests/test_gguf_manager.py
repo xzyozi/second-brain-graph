@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""tests/test_gguf_manager.py - tools/gguf_manager.py の単体テスト."""
+"""tests/test_gguf_manager.py - tools/models/gguf_manager.py の単体テスト."""
 
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from tools.gguf_manager import (
+from tools.models.gguf_manager import (
     GgufFileNotFoundError,
     ensure_models_dir,
     get_models_dir,
@@ -23,7 +23,7 @@ def test_get_models_dir() -> None:
 
 
 def test_ensure_models_dir(tmp_path: Path) -> None:
-    with patch("tools.gguf_manager.get_models_dir", return_value=tmp_path / "models"):
+    with patch("tools.models.gguf_manager.get_models_dir", return_value=tmp_path / "models"):
         res = ensure_models_dir()
         assert res.exists()
         assert res.is_dir()
@@ -64,7 +64,7 @@ def test_list_gguf_models(tmp_path: Path) -> None:
     (models_dir / "a_model.gguf").touch()
     (models_dir / "not_gguf.txt").touch()
 
-    with patch("tools.gguf_manager.get_models_dir", return_value=models_dir):
+    with patch("tools.models.gguf_manager.get_models_dir", return_value=models_dir):
         models = list_gguf_models()
         assert len(models) == 2
         assert models[0].name == "a_model.gguf"

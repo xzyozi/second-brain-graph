@@ -146,7 +146,7 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 > agy 経路から旧経路へ戻す手順は、§3 ケース6 を参照すること。以下は、ローカルモデルを更新して不安定だった場合の手順である。
 
 ```bash
-# 1. tools/llm_client.py のモデル指定を安定版へ戻す
+# 1. tools/backends/llm_client.py のモデル指定を安定版へ戻す
 git checkout ~/second-brain/tools/llm_client.py
 
 # 2. 不安定モデルの削除とキャッシュクリア

@@ -86,7 +86,7 @@ JEVを除くLLM使用箇所は、`intent → routes → profile → agy backend`
 
 - **agy client**: `agy --dangerously-skip-permissions -p <prompt>` を非対話subprocessとして起動する。テキスト応答は空の一時ディレクトリ、コード編集は解決済み衛星cwdで実行する。
 - **実行入口**: `orchestrator_graph.py execute` が標準入口、`run_task.py` がクリーンアップ付きラッパー、`nightly_task_worker.py` が夜間反復実行を担当する。
-- **prompt SSOT**: `config/prompt.yaml` を `tools/prompt_harness.py` が role・intent別に解決し、coder指示にはengine固有の安全規則を追加する。
+- **prompt SSOT**: `config/prompt.yaml` を `tools/core/prompt_harness.py` が role・intent別に解決し、coder指示にはengine固有の安全規則を追加する。
 
 👉 **[SBOS-DD-005_Backend_GPUリース仕様.md](SBOS-DD-005_Backend_GPUリース仕様.md)**
 
@@ -121,7 +121,7 @@ Fresh モードで既存の作業ブランチに未マージコミットがあ�
 
 **Resume の Git 安全性（Issue #92）**:
 
-- **WIP コミットの対象**: dirty な作業ツリーは、生成物を除外して `git add -A -- . ':(exclude,glob)…'` でステージし、`wip: preserve uncommitted changes for <ISSUE_ID> before resume` でコミットする。除外対象は `tools/metadata_store.py` の定数 `GENERATED_ARTIFACT_GITIGNORE_ENTRIES`（`.aider*`、`.pytest_cache/`、`__pycache__/`、`.venv/`、`*.pyc`、`.ruff_cache/`、`.mypy_cache/`）から導出した `GENERATED_ARTIFACT_PATTERNS` で、dirty 判定と WIP の pathspec が共有する。同じ定義を `doctor.py` の `.gitignore` チェックと `ensure_satellite_gitignore` も使い、衛星の `.gitignore` に不足があれば警告・追記する（`.gitignore` が存在しない場合は新規作成しない）。照合はパスの要素単位で行い、`my.aider_notes.md` のような部分一致は除外しない。
+- **WIP コミットの対象**: dirty な作業ツリーは、生成物を除外して `git add -A -- . ':(exclude,glob)…'` でステージし、`wip: preserve uncommitted changes for <ISSUE_ID> before resume` でコミットする。除外対象は `tools/workspace/metadata_store.py` の定数 `GENERATED_ARTIFACT_GITIGNORE_ENTRIES`（`.aider*`、`.pytest_cache/`、`__pycache__/`、`.venv/`、`*.pyc`、`.ruff_cache/`、`.mypy_cache/`）から導出した `GENERATED_ARTIFACT_PATTERNS` で、dirty 判定と WIP の pathspec が共有する。同じ定義を `doctor.py` の `.gitignore` チェックと `ensure_satellite_gitignore` も使い、衛星の `.gitignore` に不足があれば警告・追記する（`.gitignore` が存在しない場合は新規作成しない）。照合はパスの要素単位で行い、`my.aider_notes.md` のような部分一致は除外しない。
 - **WIP コミットの失敗**: `git add` の失敗、またはステージ済みの変更があるのに `git commit` が失敗した場合は、`FAILED_SYSTEM` で中断する。ステージ済みの変更が無い場合（除外後に何も残らない等）は、コミットを飛ばして続行する。
 - **rebase の失敗**: base branch への rebase に失敗した場合は `rebase --abort` で元に戻し、衝突内容を記録して `FAILED_SYSTEM` で中断する。人が手動で解決するか、`--fresh` で作り直す。`FAILED_SYSTEM` は `consecutive_b7` を増やさず、自動 Resume の対象にもならない。
 
@@ -308,8 +308,8 @@ Ruff (lint)、pytest (test)、LLM レビューおよび Reviewdog の詳細仕�
 ### 8.1 オーケストレーター CLI
 
 ```text
-uv run python tools/orchestrator_graph.py orchestrate [--project-key <PROJECT_KEY>]
-uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--project-key <PROJECT_KEY>] [--resume] [--fresh]
+uv run python tools/core/orchestrator_graph.py orchestrate [--project-key <PROJECT_KEY>]
+uv run python tools/core/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--project-key <PROJECT_KEY>] [--resume] [--fresh]
 ```
 
 | コマンド      | 契約                                                                                                                                                          |
@@ -373,12 +373,12 @@ uv run python tools/orchestrator_graph.py execute --issue-id <ISSUE_ID> [--proje
 3. **`GraphState` の `test_feedback_instruction` の初期値**
    - 型定義上必須だが初期 state では未設定である。各 node は `.get()` を使用するため実行時には支障ない。
 4. **`status` の Enum / Literal 化および Metadata モジュールの独立分離【Rev.6.1 で改修済み (Issue #22)】**
-   - `tools/metadata_store.py` を新設し、`TaskStatus` / `ErrorCategory` Enum & Literal を導入して型安全性を担保。
+   - `tools/workspace/metadata_store.py` を新設し、`TaskStatus` / `ErrorCategory` Enum & Literal を導入して型安全性を担保。
    - プロジェクト台帳、タスク状態（`state.json`）、実行履歴（`execution_history.json`）、排他ロック管理（`ProjectLockManager`）を独立分離。
-5. **機密情報マスキング・サニタイズ共通モジュール `tools/sanitizer.py` の導入【Rev.6.2 で改修済み (Issue #20)】**
-   - `tools/sanitizer.py`（`sanitize_text`, `sanitize_data`）を新設。
+5. **機密情報マスキング・サニタイズ共通モジュール `tools/core/sanitizer.py` の導入【Rev.6.2 で改修済み (Issue #20)】**
+   - `tools/core/sanitizer.py`（`sanitize_text`, `sanitize_data`）を新設。
    - APIキー、アクセストークン、秘密鍵、Basic認証URL、Key-Valueシークレット、メールアドレス（RFC 2606テストドメイン除外）等のマスキング基盤を確立。
-   - `tools/llm_client.py`（プロンプト送信直前）、`tools/metadata_store.py`（履歴・イベント保存直前）、`orchestrator_graph.py`（Failure Report出力時）の全境界へ統合完了。
+   - `tools/backends/llm_client.py`（プロンプト送信直前）、`tools/workspace/metadata_store.py`（履歴・イベント保存直前）、`orchestrator_graph.py`（Failure Report出力時）の全境界へ統合完了。
 
 ### 10.3 未確認事項（実機環境が必要）
 

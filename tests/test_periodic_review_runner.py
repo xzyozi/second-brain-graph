@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import periodic_review_runner
+from tools.lifecycle import periodic_review_runner
 
 
 def test_detect_code_diff_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

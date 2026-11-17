@@ -32,7 +32,7 @@ coder
   -> agy_client.run_agy_in_workdir
 
 JEV
-  -> tools/jev_adapter.py
+  -> tools/backends/jev_adapter.py
   -> Ollama (agy移行対象外)
 ```
 
@@ -91,18 +91,18 @@ JEV
 
 | ID     | 確認項目                                       | 合格条件                                                 | 実施状態                 | 証跡                                   |
 | :----- | :--------------------------------------------- | :------------------------------------------------------- | :----------------------- | :------------------------------------- |
-| L0-001 | `tools/agy_client.py` / `agy_runner.py` の存在 | 両ファイルが存在しimport可能                             | 確認済み                 | `f3a7aff`                              |
+| L0-001 | `tools/backends/agy_client.py` / `agy_runner.py` の存在 | 両ファイルが存在しimport可能                             | 確認済み                 | `f3a7aff`                              |
 | L0-002 | `config/models.yaml` の routes                 | 対象intentが `agy_default` を指す                        | 確認済み                 | `config/models.yaml`                   |
 | L0-003 | `agy_default` profile                          | `backend: agy`、接続不要、timeoutあり                    | 確認済み                 | `config/models.yaml`                   |
 | L0-004 | Aider runtime の退役                           | `tools/aider_runner.py` がruntimeに無く、legacyに保存    | 確認済み                 | `legacy/local_llm/` / #128             |
-| L0-005 | JEV の据え置き                                 | `jev_adapter.py` とJEV submoduleが残り、Ollama接続を維持 | 確認済み                 | `tools/jev_adapter.py` / `.gitmodules` |
+| L0-005 | JEV の据え置き                                 | `jev_adapter.py` とJEV submoduleが残り、Ollama接続を維持 | 確認済み                 | `tools/backends/jev_adapter.py` / `.gitmodules` |
 | L0-006 | Python構文                                     | `python -m py_compile` が成功                            | 確認済み                 | ローカル実行                           |
 | L0-007 | CI静的検査                                     | ruff / mypy が成功                                       | 確認済み                 | ruff 0 err / mypy 0 issues             |
 
 実行例:
 
 ```powershell
-python -m py_compile tools/agy_client.py tools/agy_runner.py tools/llm_client.py tools/orchestrator_graph.py
+python -m py_compile tools/backends/agy_client.py tools/backends/agy_runner.py tools/backends/llm_client.py tools/core/orchestrator_graph.py
 uv run ruff check tools tests
 uv run ruff format --check tools tests
 uv run mypy tools
@@ -230,7 +230,7 @@ uv run python -m pytest -m integration tests/test_coder_practical_gui_agy.py
 ### L0: 静的・構文確認
 
 ```powershell
-python -m py_compile tools/agy_client.py tools/agy_runner.py tools/llm_client.py tools/orchestrator_graph.py
+python -m py_compile tools/backends/agy_client.py tools/backends/agy_runner.py tools/backends/llm_client.py tools/core/orchestrator_graph.py
 ```
 
 CIで実施する検査:
@@ -383,7 +383,7 @@ docs/test/evidence/agy/<YYYYMMDD-HHMMSS>/<TEST_ID>/
 ### 実機なしでの現在地点
 
 - routes は全て `agy_default` に切り替え済み
-- `tools/agy_client.py`、`tools/agy_runner.py`、`tools/edit_guard.py`、`tools/agy_policy.py` が現行 runtime に存在する
+- `tools/backends/agy_client.py`、`tools/backends/agy_runner.py`、`tools/core/edit_guard.py`、`tools/backends/agy_policy.py` が現行 runtime に存在する
 - Aider runtime は退役済みで、不要パッケージパージ完了（Issue #128 / PR #144）
 - L0/L1/L2 全件（429 passed）、ruff/mypy All Green を確認済み
 - B1 外部送信ポリシー認可の単体・プロセス境界契約テストを完了（ADR 0004 検証完了）

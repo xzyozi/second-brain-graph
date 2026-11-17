@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/jev_adapter.py - JEV (Judge & Evaluation via Vectorized-logits) 連携アダプター (PM-053, DD-006 §1.1).
+"""tools/backends/jev_adapter.py - JEV (Judge & Evaluation via Vectorized-logits) 連携アダプター (PM-053, DD-006 §1.1).
 
 submodules/jev-localsystem を内部モジュールとしてロードし、
 Zero-Decode（1トークン推論 ＋ Logprobs抽出）による超高速規程適合判定を提供します。
