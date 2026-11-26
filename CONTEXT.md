@@ -9,12 +9,12 @@
 ### agy
 - **定義**: Google Antigravity CLI の実行可能バイナリ (`agy` / `agy.exe`)、またはその CLI プロセスインターフェース。
 - **役割**:
-  1. **テキスト応答器**: `spec_draft`, `test_feedback`, `code_review`, `failure_analysis` などの推論インテントにおいて、空の一時ディレクトリを cwd として副作用なく高速にプロンプト応答・JSON応答を生成する (`tools/agy_client.py:run_agy_text`)。
-  2. **コード編集器**: `code_node` (`code_edit` / `aider_edit`) において、サテライトの作業ツリーに入り非対話的かつ自律的にコード編集・新規作成を実行する (`tools/agy_runner.py:run_agy_edit`)。
+  1. **テキスト応答器**: `spec_draft`, `test_feedback`, `code_review`, `failure_analysis` などの推論インテントにおいて、空の一時ディレクトリを cwd として副作用なく高速にプロンプト応答・JSON応答を生成する (`tools/backends/agy_client.py:run_agy_text`)。
+  2. **コード編集器**: `code_node` (`code_edit` / `aider_edit`) において、サテライトの作業ツリーに入り非対話的かつ自律的にコード編集・新規作成を実行する (`tools/backends/agy_runner.py:run_agy_edit`)。
 
 ### agys
 - **定義**: Antigravity Skills (または Antigravity System 内蔵のスキル群)。
-- **補足**: `agy`（CLIバイナリ本体）と混同しないこと。本プロジェクトでは、コード自動生成やレビュー巡回を担う専用スキル（例: `satellite-ideation-reviewer`）を指す際に用いられる。
+- **補足**: `agy`（CLIバイナリ本体）と混同しないこと。本プロジェクトでは、コード自動生成やレビュー巡回を担う専用スキル（例: `.gemini/skills/satellite-ideation-reviewer/`, `.agents/skills/issue-refinement/`）を指す際に用いられる。
 
 ### backend
 - **定義**: LLM 推論またはコード編集を実行するエンジンの種別・実行基盤。
@@ -35,12 +35,12 @@
 - **定義**: 母艦から独立して開発・運用される個別プロダクトのリポジトリ（`projects/<name>/` 配下、または外部リポジトリ）。
 - **特徴**:
   - 自身で独立した Git リポジトリ（`.git`）を持つ。
-  - プロダクトコード（`src/`, `tests/` 等）のほか、自律運用の正本メタデータ（`docs/project.json`, `docs/tasks.md`, `docs/issues/*.md`）を内包する。
+  - プロダクトコード（`src/`, `tests/` 等）および構成定義（`docs/project.json`）を保持する。タスク・仕様・ステータスの正本は GitHub Issues（`stage:*` ラベル）に一元化されており、旧 `docs/tasks.md` / `docs/issues/*.md` は廃止済み（Epic #179）。
 
 ### mother (母艦)
 - **定義**: `second-brain-graph` リポジトリ本体。
-- **役割**: サテライト台帳（`.project-registry.json`）、全体のタスクスコアリング、夜間バッチワーカー、品質ゲート、JEV 判定エンジンを中央集約管理する。
-- **保護**: `tools/edit_guard.py` により、コード編集エンジンが母艦領域を直接編集することは厳格に遮断・保護される（`MotherRepositoryProtectionError`）。
+- **役割**: サテライト台帳（`metadata/.project-registry.json`）、全体のタスクスコアリング、夜間バッチワーカー、品質ゲート、JEV 判定エンジンを中央集約管理する。
+- **保護**: `tools/core/edit_guard.py` により、コード編集エンジンが母艦領域を直接編集することは厳格に遮断・保護される（`MotherRepositoryProtectionError`）。
 
 ### coder
 - **定義**: LangGraph オーケストレーターの `code_node` で動作する自律コーディング役割。

@@ -57,7 +57,7 @@
 
 ## 3. GitHub CI PR Fixer 独立モジュール設計
 
-> **補足（実装状況）**: 本節に記載の `tools/github_ci_pr_fixer.py` は構想・設計段階の独立CLIスクリプトである。現状の運用では、エージェントスキル `github-pr-ci-fixer`（`SKILL.md`）が GitHub CLI (`gh`) とローカル Git/pytest コマンドを直動制御して CI 修正を自律完結させており、専用 Python スクリプトは未実装（必要に応じて将来作成）となっている。
+> **補足（実装状況）**: 本節に記載の独立CLIスクリプト `tools/github_ci_pr_fixer.py` は未実装（構想）のままだが、PR 起票後の CI 監視・失敗ログ取得（`gh run view --log-failed`）・`code_node` 差し戻し修復ループ自体は、Issue #171 により [`orchestrator_graph.py`](../../tools/core/orchestrator_graph.py) の `ci_watch_node` として本体グラフへ統合実装済みである（`--watch-ci` / `project.json.watch_ci` で有効化）。外部 PR 単体を対象とする `github-pr-ci-fixer` スキル運用向け独立 CLI は必要時に別途作成する位置付けとなっている。
 
 ### 3.1 独立分離の理由 (Single Responsibility Principle)
 - メインの [orchestrator_graph.py](../../tools/core/orchestrator_graph.py) は Issue 全体の計画・分解・タスク制御に集中させる。

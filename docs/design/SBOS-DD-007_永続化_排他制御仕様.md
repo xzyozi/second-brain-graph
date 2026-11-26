@@ -2,22 +2,25 @@
 
 | 項目               | 内容                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| 文書番号           | SBOS-DD-007（注: リンク互換性維持のため `SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md` と番号を共有）     |
 | 文書名             | Second Brain OS - メタデータ永続化および排他制御仕様                                                          |
-| 版数               | Rev.2.0（サテライト仕様帰属化・ランタイムデータ完全隔離版）                                                   |
-| 改訂日             | 2026年9月20日                                                                                                 |
-| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（オーケストレーター統合設計）、SBOS-MULTI-001（複数リポジトリ設計書）  |
-| 対象コンポーネント | `state.json`、`execution_history.json`、`ProjectLockManager`、`write_event`                                   |
-| 役割               | サテライト仕様・タスク資産の帰属、ランタイム動的データの隔離、永続化（fsync＋原子置換）の契約、および排他制御 |
+| 版数               | Rev.3.0（Epic #179: GitHub Issues SSOT 化に伴う `tasks.md` / `docs/issues/` 廃止、多言語・CI監視設定反映）    |
+| 改訂日             | 2026年11月27日                                                                                                |
+| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-007（Issue壁打ちライフサイクル）、SBOS-MULTI-001 |
+| 対象コンポーネント | `tools/workspace/metadata_store.py`、`state.json`、`execution_history.json`、`ProjectLockManager`、`write_event` |
+| 役割               | サテライト構成定義の帰属、ランタイム動的データの隔離、永続化（fsync＋原子置換）の契約、および排他制御       |
 
 ---
 
 ## 1. 概要と基本方針
 
-本仕様は、オーケストレーター母艦（Second Brain OS）の純化とサテライトリポジトリへの仕様・タスク帰属化（Issue #45）に伴い、
-1. サテライトプロジェクト資産（仕様・タスク一覧・構成定義）の正本管理
+本仕様は、オーケストレーター母艦（Second Brain OS）の純化、サテライトリポジトリへの構成定義帰属化（Issue #45）、および **GitHub Issues SSOT 化（Epic #179）** に伴い、
+1. サテライト構成定義（`docs/project.json`）と GitHub Issues SSOT（タスク仕様・状態）の責務分離
 2. 実行時動的データ（排他ロック・実行ステータス・時系列ログ）の Git 完全隔離（`tools/.cache/`）
 3. 並行実行時の排他制御（プロジェクトロック）および永続化契約
 について定義する。
+
+> **GitHub Issues SSOT 移行（Epic #179）**: 旧仕様で用いていたサテライト配下の `docs/tasks.md` および `docs/issues/<ISSUE_ID>.md` によるローカル二元管理は廃止された。タスク仕様・ステータス（`stage:*` ラベル）・優先度メタデータの正本は **GitHub Issues** に一元化され、タスク ID は `{PROJECT_KEY}-{issue_number:04d}` として決定論的に解決される（詳細は [`SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md`](SBOS-DD-007_Issue壁打ちライフサイクルとJEV検問.md)）。
 
 ## 2. ディレクトリ構成とデータ配置
 
@@ -26,16 +29,17 @@
 母艦リポジトリの Git 汚染を物理的に防ぎ、かつサテライト単体でのポータビリティを確保するため、以下の3層分離を行う。
 
 ```text
+[GitHub Issues (SSOT)]
+└── Issue 本文（0〜8章テンプレート）・ラベル（stage:* / priority:*）・Open/Closed 状態
+
 [サテライト側] projects/<name>/
 └── docs/
-    ├── project.json                       # 【正本】当該衛星の構成・ブランチ設定
-    ├── tasks.md                           # 【正本】人間向けのタスク一覧・インデックス
-    └── issues/<ISSUE_ID>.md               # 【正本】各 Issue の詳細・Target Files・DoD
+    └── project.json                       # 【正本】当該衛星の構成・ブランチ・言語・CI監視設定
 
 [母艦エンジン] second-brain-graph/
 ├── metadata/
-│   ├── .project-registry.json             # 全衛星プロジェクトの中央台帳
-│   └── projects/<PROJECT_KEY>/            # （後方互換・旧環境用フォールバック）
+│   ├── .project-registry.json             # 全衛星プロジェクトの中央台帳 (github_repo マッピング含む)
+│   └── projects/<PROJECT_KEY>/            # FAILURE_REPORT_<ISSUE_ID>.md 隔離出力先 / 旧環境フォールバック
 └── tools/.cache/                          # 【Git完全隔離領域】ランタイム動的データ
     └── projects/<PROJECT_KEY>/
         ├── .lock                          # プロジェクト実行時の排他ロックファイル
@@ -45,15 +49,14 @@
 
 ### 2.2 データ形式と解決優先順位
 
-| ファイル                 | 主な項目                                                                                                | 配置場所                  | 解決優先順位                                |
-| :----------------------- | :------------------------------------------------------------------------------------------------------ | :------------------------ | :------------------------------------------ |
-| `.project-registry.json` | `projects.<key>.dir`、`meta`                                                                            | 母艦 `metadata/`          | 母艦中央台帳（SSOT）                        |
-| `project.json`           | `key`、`base_branch`、`work_branch_prefix`、`target_files`、`exclude_files`、`allowed_new_file_globs` | サテライト `docs/`        | **1. サテライト docs/** → 2. 母艦 metadata/ |
-| `tasks.md`               | Issue ID・タイトル・優先度・依存関係（blockedby）                                                       | サテライト `docs/`        | **1. サテライト docs/** → 2. 母艦 metadata/ |
-| `issues/<ISSUE_ID>.md`   | Target Files、制約、Non-goals、DoD                                                                      | サテライト `docs/issues/` | **1. サテライト docs/** → 2. 母艦 metadata/ |
-| `state.json`             | Issue ID ごとの `status`、`review_round`、`max_round`、`error_category`、`consecutive_b7`、`updated_at` | 母艦 `tools/.cache/`      | ランタイムキャッシュ（Git隔離）             |
-| `.lock`                  | プロセス排他ロック                                                                                      | 母艦 `tools/.cache/`      | ランタイムキャッシュ（Git隔離）             |
-| `events/*.json`          | `execution_id`、イベント種別、タイムスタンプ                                                            | 母艦 `tools/.cache/`      | ランタイムキャッシュ（Git隔離）             |
+| ファイル / 情報源        | 主な項目                                                                                                                                      | 配置場所             | 解決優先順位                                |
+| :----------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------- | :------------------- | :------------------------------------------ |
+| GitHub Issues            | Issue 番号・タイトル・0〜8章本文・`stage:*` / `priority:*` ラベル・Open/Closed 状態                                                           | GitHub リポジトリ    | **唯一の正本（SSOT）**（Epic #179）         |
+| `.project-registry.json` | `projects.<key>.dir`、`meta`、`github_repo`                                                                                                   | 母艦 `metadata/`     | 母艦中央台帳（SSOT）                        |
+| `project.json`           | `key`、`base_branch`、`work_branch_prefix`、`language`、`test_command`、`watch_ci`、`target_files`、`exclude_files`、`allowed_new_file_globs` | サテライト `docs/`   | **1. サテライト docs/** → 2. 母艦 metadata/ |
+| `state.json`             | Issue ID ごとの `status`（`FAILED_CI` 含む）、`review_round`、`max_round`、`error_category`（`CI_ERROR` / `AGY_*` 含む）、`consecutive_b7`、`updated_at` | 母艦 `tools/.cache/` | ランタイムキャッシュ（Git隔離）             |
+| `.lock`                  | プロセス排他ロック                                                                                                                            | 母艦 `tools/.cache/` | ランタイムキャッシュ（Git隔離）             |
+| `events/*.json`          | `execution_id`、イベント種別、タイムスタンプ                                                                                                  | 母艦 `tools/.cache/` | ランタイムキャッシュ（Git隔離）             |
 
 ## 3. 永続化（データの保存契約）
 

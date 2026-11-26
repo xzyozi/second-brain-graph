@@ -1,13 +1,13 @@
 # 基本設計書（基本仕様・システム全体アーキテクチャ定義）
-**実在 OSS スタック統合による Second Brain OS 再設計（LangGraph / OpenAI 互換 API・agy / Ruff / Reviewdog）**
+**実在 OSS スタック統合による Second Brain OS 再設計（LangGraph / agy / Ruff / Tree-sitter / Reviewdog）**
 
 | 項目     | 内容                                                                                                                                                                                                                                                          |
 | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 文書番号 | SBOS-BD-002                                                                                                                                                                                                                                                   |
-| 版数     | Rev.5.3（Epic #116: LLM 実行基盤の方針を「ローカル完結」から「agy 移行（JEV 据え置き）」へ改訂）                                                                                                                                                              |
-| 改訂日   | 2026年11月4日                                                                                                                                                                                                                                                 |
+| 版数     | Rev.5.4（GitHub Issues SSOT・多言語検証基盤・`ci_watch_node`・`agy` 専業化を反映）                                                                                                                                                                           |
+| 改訂日   | 2026年11月27日                                                                                                                                                                                                                                                |
 | 作成日   | 2026年7月28日                                                                                                                                                                                                                                                 |
-| 関連文書 | SBOS-DD-003（詳細設計書）、SBOS-DD-004（Aider統合仕様）、SBOS-DD-005（Backend仕様）、SBOS-DD-006（品質仕様）、SBOS-DD-007（永続化仕様）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
+| 関連文書 | SBOS-DD-003（詳細設計書）、SBOS-DD-004（コード編集統合仕様）、SBOS-DD-005（Backend仕様）、SBOS-DD-006（品質仕様）、SBOS-DD-007（永続化仕様・Issue壁打ち仕様）、SBOS-MULTI-001（差分設計書）、SBOS-OP-001（運用詳細設計書）、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
 | 対象読者 | システムアーキテクト／リード開発エンジニア／ナレッジマネジメント運用者／DevOps エンジニア                                                                                                                                                                     |
 
 ---
@@ -58,31 +58,36 @@
 ```text
 [ tools/core/orchestrator_graph.py ]  ← LangGraph StateGraph（母艦）
 
-  メタデータ検証・文脈解決・プロジェクトロック取得
+  メタデータ検証・GitHub Issues SSOT 解決・プロジェクトロック取得
          │
          ▼
-  spec_draft_node（Planner による実装計画生成）
+  spec_draft_node（Planner + JEV 計画適合性ゲート）── 不適合上限時は escalate_node
          │
          ▼
-  code_node（agyによる衛星コード編集）
+  code_node（agy による衛星コード編集 + edit_guard）
          │
          ▼
-  lint_node（Ruff 高速静的解析・自動修正） ── 失敗時は code_node へ
+  lint_node（Ruff / Tree-sitter 多言語構文検証） ── 失敗時は code_node へ
          │
          ▼
-  run_pytest_node（pytest 単体テスト） ── 失敗時は test_feedback_node を経て code_node へ
+  run_pytest_node（pytest / npm / cargo / カスタムテスト） ── 失敗時は test_feedback_node を経て code_node へ
          │
          ▼
-  review_node（Reviewer LLM ＋ Reviewdog 出力）
-         ├─ LGTM ─► done_node（Git 操作・PR 作成）
+  review_node（Reviewer LLM + JEV 二次検問 + Reviewdog 出力）
+         ├─ LGTM ─► done_node（Git 操作・PR 作成・既済判定）
+         │            ├─ watch_ci=False / 既済 ─► 完了 (COMPLETED)
+         │            └─ watch_ci=True ─► ci_watch_node（GitHub Actions CI 監視）
+         │                                  ├─ All Green ─► 完了 (COMPLETED)
+         │                                  ├─ Fail (上限内) ─► code_node へ
+         │                                  └─ Timeout / 上限到達 ─► escalate_node
          └─ changes_requested ─► code_node または上限到達時に escalate_node
 ```
 
-> **リトライ安全回路:** lint、test、review の各修正ループは上限試行回数（`max_round`）を持つ。LLM / コード編集エンジンのタイムアウトは全体で共有カウントし、超過時は `FAILED_SYSTEM` として安全停止する。状態遷移や例外分類の厳密な定義は DD-003 を正本とする。
+> **リトライ安全回路:** lint、test、review、CI監視の各修正ループは上限試行回数（`max_round` / `max_ci_round`）を持つ。LLM / コード編集エンジンのタイムアウトは全体で共有カウントし、超過時は `FAILED_SYSTEM` として安全停止する。状態遷移や例外分類の厳密な定義は DD-003 を正本とする。
 
 ### 3.1 LLM バックエンドの責務分離
 
-`tools/backends/llm_client.py` は role・intent を解決し、agyのテキスト応答を既存の返却形式へ変換する。`BackendExecutionCoordinator` は `config/models.yaml` の intent route に従い、agy backendをGPUリースなしで実行する。JEVはこの経路を通らずOllamaへ直接接続する。具象的なルーティング状態やバックエンド制限事項は DD-003 §2.2 と DD-005 を正本として一元管理する。（loader が読むのは `models.yaml` のみ）
+`tools/backends/llm_client.py` は role・intent を解決し、agy のテキスト応答を既存の返却形式へ変換する。`BackendExecutionCoordinator` は `config/models.yaml` の intent route に従い、agy backend を GPU リースなしで実行する（非 agy バックエンドは Issue #128 で退役済み）。JEV はこの経路を通らず Ollama へ直接接続する。具象的なルーティング状態やバックエンド制限事項は DD-003 §2.2 と DD-005 を正本として一元管理する。（loader が読むのは `models.yaml` のみ）
 
 ---
 
@@ -99,7 +104,7 @@
 
 - **基本動作環境:** Linux、macOS、Windows Native。依存パッケージは `pyproject.toml` にて管理する。
 - **文字コード・改行方針:** 差分の意図しない増大や表示文字化けを防ぐため、リポジトリ単位の改行コード方針および標準 UTF-8 入出力を適用する。
-- **品質・監査ツール:** Ruff、pytest、Reviewdog を品質ゲートおよび視覚的フィードバックとして利用する。
+- **品質・監査ツール:** Ruff（Python）、Tree-sitter（`tools/lang/` による TypeScript / JavaScript / Rust 構文検証）、pytest / 各言語テストコマンド（`npm test`, `cargo test` 等）、GitHub Actions CI 監視（`ci_watch_node`）、Reviewdog を品質ゲートおよび視覚的フィードバックとして利用する。
 
 ### 5.1 運用インターフェースと将来構想
 

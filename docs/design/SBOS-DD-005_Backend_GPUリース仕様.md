@@ -4,10 +4,10 @@
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号           | SBOS-DD-005                                                                                                                        |
 | 文書名             | Second Brain OS - Backend LLM 制御・GPU リース仕様                                                                                 |
-| 版数               | Rev.2.1（agy外部送信ポリシーとproject key allowlistを追記）                                                                        |
-| 改訂日             | 2026年11月4日                                                                                                                      |
-| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-004（コード編集エンジン統合）、Issue #39、Epic #116                  |
-| 対象コンポーネント | `tools/backends/backend_coordinator.py`、`tools/llama_backend.py`、`tools/models/gguf_manager.py`、`tools/workspace/config_loader.py`、`tools/backends/llm_client.py` |
+| 版数               | Rev.2.2（Issue #128: `BackendExecutionCoordinator` での非 agy バックエンド退役実装を反映）                                         |
+| 改訂日             | 2026年11月27日                                                                                                                     |
+| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-004（コード編集エンジン統合）、Issue #39、Epic #116、Issue #128      |
+| 対象コンポーネント | `tools/backends/backend_coordinator.py`、`tools/models/gguf_manager.py`、`tools/workspace/config_loader.py`、`tools/backends/llm_client.py` |
 | 役割               | LLMプロファイル検証、agy backendの実行、JEV用Ollamaの据え置き、GPUリース管理、外部送信ポリシーの適用                               |
 
 > **現行構成**: JEVを除くLLM処理はagy backendへルーティングする。JEV（`tools/backends/jev_adapter.py`、`submodules/jev-localsystem`、`tools/screen_issues.py`）だけは本書のroutes/profilesを経由せず、Ollama（既定モデル `qwen2.5:0.5b`）へ直接接続する。Aiderとllama-serverはruntimeから退役し、旧資産はlegacy/archiveに保存する。
@@ -41,11 +41,11 @@ Epic #116のagy移行は実装済みである。`intent → routes → profile �
 
 ### 2.1 profile の必須項目
 
-| backend        | 必須項目                                                 | 状態     |
-| :------------- | :------------------------------------------------------- | :------- |
-| `ollama`       | `model`、`openai_endpoint`、`ollama_management_endpoint` | 【現行】 |
-| `llama_server` | `model`、`openai_endpoint`、`port`、`model_path`         | 【現行】 |
-| `agy`          | `model`（識別ラベル）。`timeout`（任意、秒）             | 現行     |
+| backend        | 必須項目                                                 | 状態                                                       |
+| :------------- | :------------------------------------------------------- | :--------------------------------------------------------- |
+| `ollama`       | `model`、`openai_endpoint`、`ollama_management_endpoint` | 【スキーマ互換のみ／Coordinator 実行は退役済み (Issue #128)】 |
+| `llama_server` | `model`、`openai_endpoint`、`port`、`model_path`         | 【スキーマ互換のみ／Coordinator 実行は退役済み (Issue #128)】 |
+| `agy`          | `model`（識別ラベル）。`timeout`（任意、秒）             | **【現行・唯一の実行可能バックエンド】**                   |
 
 ### 2.1 agy profileの現行契約
 
@@ -121,21 +121,15 @@ backend_execution:
 
 ## 5. Backend Coordinator と GPU リース管理
 
-`BackendExecutionCoordinator.execute(intent, {"action": callable})` は route を profile に解決し、`GpuLeaseAdapter` のコンテキスト内で該当 Adapter を実行する。未定義 intent、未定義 profile、`action` の欠落は例外とする。
+`BackendExecutionCoordinator.execute(intent, {"action": callable})` は route を profile に解決し、バックエンドに応じた実行を行う。未定義 intent、未定義 profile、`action` の欠落は例外とする。
 
-### 5.1 GPUリース機構（現行）
-* GPU リースは `metadata/.gpu_lease.lock` を利用し、待機時間は `gpu_lease_timeout` を使用する。取得できない場合は `TimeoutError` を送出する。
-* **排他性**: `mode` は `exclusive` のみを許容し、複数 backend の同時 GPU 利用は行わない。
-* 現行の実装では、**全 backend の実行が `with self.gpu_lease:` で包まれる**。
-
-agyはGPUを使わないため、`backend == "agy"` のときはGPUリースを取得せずに実行する。これにより、agyの実行がOllama側の実行（JEVを含む）を待たせず、また待たされない。
+### 5.1 GPUリース機構（ローカル利用時互換）
+* `GpuLeaseAdapter` は `metadata/.gpu_lease.lock` を利用し、待機時間は `gpu_lease_timeout` を使用する。取得できない場合は `TimeoutError` を送出する。
+* **agy 非取得**: agy は GPU を使わないため、`backend == "agy"` のときは `AgyBackendAdapter` により GPU リースを取得せずに実行する。これにより、agy の実行が JEV 用 Ollama 側の実行を待たせず、また待たされない。
 
 ### 5.2 各 Backend Adapter の挙動
-* **Ollama Adapter【現行】**: action 実行中のみ OpenAI 互換 endpoint と Ollama 管理 endpoint を環境変数へ設定し、終了後に復元する。実行前に、ロード済みの別モデルを Ollama から解放する。
-* **llama-server Adapter【現行】**: Ollama profile がある場合はロード済みモデルの解放を試み、`managed_llama_server()` 内で action を実行する。**Ollama 管理 API に到達できない場合は VRAM の状態が不明のため、環境変数 `SBOS_ALLOW_LLAMA_ON_UNKNOWN_VRAM` が `1` / `true` / `yes` でない限り、llama-server の起動を拒否して `RuntimeError` とする**（Issue #25）。許可されている場合のみ、警告を出して起動を続行する。
-* **agy Adapter（現行）**: 環境変数のパッチを行わず、`request["action"]`を`action(profile)`として呼ぶだけの薄いAdapterとする。agyの起動処理は`agy_client`が持ち、Adapterは持たない。
-
-> **訂正（Rev.2.0）**: Rev.1.1 は llama-server Adapter について「Ollama API 到達不能時は VRAM 解放済みと判定して処理を継続する」と記載していたが、実装は逆で、既定で起動を拒否する（Issue #25）。
+* **agy Adapter（現行）**: 環境変数のパッチを行わず、`request["action"]` を `action(profile)` として呼ぶだけの薄い Adapter とする。agy の起動処理は `agy_client` が持ち、Adapter は持たない。
+* **Ollama / llama-server Adapter（退役済み / Issue #128）**: `BackendExecutionCoordinator` からは削除されており、`backend != "agy"` のプロファイルが指定された場合は `ValueError`（`Backend '...' is retired/unsupported. Only 'agy' is supported`）を送出する。なお、JEV（`tools/backends/jev_adapter.py`, `tools/screen_issues.py`）は Coordinator を経由せず Ollama へ直接接続するため引き続き稼働する。
 
 ## 6. GGUFモデル管理仕様 (`tools/models/gguf_manager.py`)【現行】
 
@@ -159,4 +153,4 @@ agyはGPUを使わないため、`backend == "agy"` のときはGPUリースを�
 | agy の認証・クォータ障害分類と夜間バッチ安全中断ガード                  | **実装完了** (`tools/backends/agy_client.py` 等)                                                                                                         | PR #139 (#126)  |
 | agy のモデル指定オプション、`temperature` / `max_tokens` 相当の指定手段 | agy 側の設定に委譲（CLI側パラメータ指定なし）                                                                                                   | ADR 0001 (#117) |
 | 外部送信の方針（agy 経路は `sanitize_text` の対象外の情報も送りうる）   | `backend_execution.agy_external_send` で認可。既定は移行互換の `allow_all`、実業務運用前に `allowlist` へ切り替える。秘密ファイル拒否も設定可能 | #124            |
-| 旧 profile・llama-server 基盤・`openai` 依存の退役と後始末              | 未実施（JEV のため Ollama 環境は残る）                                                                                                          | #128            |
+| 旧 profile・llama-server 基盤の退役と後始末                            | **Coordinator の非 agy バックエンド拒否・`llama_backend.py` 削除は実装済み**（`ProfileConfig` 互換定義・JEV 用 Ollama 環境・`openai` 依存は残存） | #128            |

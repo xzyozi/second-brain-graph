@@ -4,8 +4,8 @@
 | 項目     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-ENV-001                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 版数     | Rev.4.9（agy現行runtime、Aider退役、実機未確認範囲を反映）                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 改訂日   | 2026年11月4日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 版数     | Rev.5.0（`pyproject.toml` / `uv sync`・`tools/doctor.py`・`config/prompt.yaml`・GitHub CLI・多言語ツール要件へ整合）                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 改訂日   | 2026年11月27日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 作成日   | 2026年7月27日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 対象読者 | インフラエンジニア / システム管理者 / 開発環境構築担当エンジニア                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-OP-001（運用詳細設計書）、SBOS-PM-005（課題一覧） |
@@ -20,8 +20,8 @@
 
 本システムは、現行はローカルマシンの計算リソースで稼働する。以下のハードウェア・ソフトウェア要件を満たす必要がある。
 
-### 1.1 推奨ハードウェア要件（GPU VRAM 割り当て）【現行】
-ローカルLLMを並列あるいは高速ロードして稼働させるため、特に NVIDIA GPU または Apple Silicon (Mシリーズ) Unified Memory の VRAM 容量が極めて重要となる。
+### 1.1 推奨ハードウェア要件（GPU VRAM 割り当て）【JEV / 旧ローカル構成向け参考】
+現行の planner / coder / reviewer は `agy` を利用するためローカル GPU VRAM を必要としない。以下の GPU 要件は JEV（軽量モデル `qwen2.5:0.5b` 程度）のみであれば最小要件以下でも稼働可能であり、旧ローカル LLM 資産を復元・比較検証する場合の参考値として保持する。
 
 | パターン     | システム構成・GPUスペック                                                    | 稼働可能なモデル構成                                                          | 想定パフォーマンス                                                                             |
 | :----------- | :--------------------------------------------------------------------------- | :---------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------- |
@@ -34,11 +34,11 @@
 - **Python:** Version 3.10 以上 (推奨: Python 3.11 または 3.12)
 - **パッケージマネージャー:** `uv` (Astral製 - 依存関係の確定的かつ高速な解決のために必須)
 - **Git:** Version 2.30 以上
-- **Ollama:** JEVを使う場合のみ必要。Version 0.3.0 以上（OpenAI互換REST API `/v1` が `localhost:11434` で有効）
+- **GitHub CLI (`gh`):** GitHub Issues SSOT 取得、ラベル同期、PR 作成および `ci_watch_node` による CI 監視のために必須（`gh auth status` で認証済みであること）
+- **Ollama:** JEV（`tools/backends/jev_adapter.py`, `tools/screen_issues.py`）を使う場合のみ必要。Version 0.3.0 以上（OpenAI互換REST API `/v1` が `localhost:11434` で有効）
 - **agy（Antigravity CLI）:** 現行LLM runtime。非対話（ヘッドレス）実行、認証済み、PATHまたは `agy_client` の既知パスから解決可能であること。認証情報の中身は記録しない。
+- **Node.js / npm・Rust / cargo（任意）:** TypeScript / JavaScript または Rust サテライトで `npm test` / `cargo test` や Mermaid CI 検証（`.github/scripts/validateMermaidMarkdown.mjs`）を実行する場合に必要。
 - **Aider CLI:** runtimeには不要。旧資産の復旧・比較検証を行う場合だけ `legacy/local_llm/` または archive tag から別途復元する。
-  - **確認項目（Issue #117 で確定し、本節へ反映する）**: 導入手順、認証方式、非対話での編集実行の可否、モデル指定オプションの有無、入力長の上限、作業ディレクトリに作られる成果物の名前。
-  - **現時点の確認状況**: 調査時点の開発環境では、`agy` が PATH にも上記の既知の配置先にも見つからなかった。夜間 worker を動かす機器（導入済みか）を、移行の前に確認すること。
 
 ---
 
@@ -144,40 +144,28 @@ git add .gitignore metadata/ projects/.gitkeep
 git commit -m "chore: initialize second-brain OS base structure"
 ```
 
-### Step 3: Python 仮想環境・新OSSスタックおよび Reviewdog の構築
+### Step 3: Python 仮想環境・依存スタック (`uv sync`) および Reviewdog の構築
 
 ```bash
-cd ~/second-brain
+cd ~/second-brain-graph
 
-# 1. uv による Python 仮想環境の初期化と新OSSスタックの導入
-uv venv
-source .venv/bin/activate  # Windows (PowerShell) の場合: .venv\Scripts\Activate.ps1
-uv pip install langgraph litellm ruff pytest pytest-json-report
+# 1. pyproject.toml / uv.lock に基づく Python 仮想環境と開発用依存の同期
+uv sync --extra dev
 
-# 2. Reviewdog のインストール
+# 2. Reviewdog のインストール (任意依存: 未導入時はスキップ)
 # Linux / macOS の場合:
 bash scripts/linux/setup_reviewdog.sh
 tools/bin/reviewdog -version
 
 # Windows Native の場合 (PowerShell):
 .\scripts\windows\setup_reviewdog.ps1
-
-# 3. ruff 設定ファイル (ruff.toml) の配置
-cat << 'EOF' > ruff.toml
-line-length = 100
-target-version = "py310"
-
-[lint]
-select = ["E", "F", "W", "I", "N", "B"]
-ignore = ["E501"]
-EOF
 ```
 
-### Step 4: プロンプトテンプレートの配置確認
+### Step 4: プロンプト SSOT および設定ファイルの確認
 ```bash
-# プロンプトテンプレートの配置確認
-ls -l tools/templates/
-# -> planner.md, coder.md, reviewer.md が存在することを確認
+# プロンプト SSOT とモデル・ワーカー設定の確認
+ls -l config/models.yaml config/prompt.yaml config/nightly_worker.toml
+# -> tools/core/prompt_harness.py が config/prompt.yaml を解決する
 ```
 
 ---
@@ -186,19 +174,21 @@ ls -l tools/templates/
 
 構築完了後、環境全体が正常に機能しているかを検証するための診断テストを実行する。
 
-### 4.1 モジュールインポートおよび単体スクリプト健全性テスト
+### 4.1 モジュールインポートおよび健全性テスト
 ```bash
-cd ~/second-brain
-source .venv/bin/activate
+cd ~/second-brain-graph
 
-# 1. LangGraph / LiteLLM / agy コンポーネントインポートテスト
-python -c "import langgraph; import litellm; print('✓ LangGraph & LiteLLM loaded successfully')"
-python -c "from tools.backends.llm_client import call_llm; print('✓ llm_client.py initialized')"
-python -c "from tools.backends.agy_runner import run_agy_edit; print('✓ agy_runner.py loaded')"
+# 1. LangGraph / agy / 多言語検証基盤のインポートテスト
+uv run python -c "import langgraph; from tools.backends.llm_client import call_llm; from tools.backends.agy_runner import run_agy_edit; from tools.lang import get_verifier; print('✓ Core modules loaded successfully')"
 
-# 2. スコアリングとブロッカー検知スクリプトのドライラン
-python tools/score-issues.py
-python tools/check-blockers.py
+# 2. サテライト受入態勢・環境診断とスコアリングの実行
+uv run python tools/doctor.py --all
+uv run python tools/score_issues.py
+
+# 3. 静的解析・型検査・単体テスト
+uv run ruff check .
+uv run mypy .
+uv run pytest
 ```
 
 ---
@@ -250,93 +240,25 @@ WSL2 環境で構築する場合は、NTFS クロスアクセスによる速度�
 `~/.config/systemd/user/second-brain-batch.service` およびタイマーユニットを作成し、`systemctl --user enable --now second-brain-batch.timer` を実行する。
 
 ### 6.2 Windows Native 環境向け (Task Scheduler)
-Windows Native 環境では PowerShell から `Register-ScheduledTask` コマンドを用いて日次ジョブを登録する。
+Windows Native 環境では PowerShell から `Register-ScheduledTask` コマンドを用いて日次ジョブを登録する（または `tools/nightly_task_worker.py --loop` の常駐ループを利用する）。
 
 ```powershell
-# 毎朝 07:00 に score-issues.py と check-blockers.py を自動実行するタスク登録
-$Action = New-ScheduledTaskAction -Execute "uv" -Argument "run python tools/score-issues.py" -WorkingDirectory "$Home\second-brain"
+# 毎朝 07:00 に tools/score_issues.py を自動実行するタスク登録
+$Action = New-ScheduledTaskAction -Execute "uv" -Argument "run python tools/score_issues.py" -WorkingDirectory "$Home\second-brain-graph"
 $Trigger = New-ScheduledTaskTrigger -Daily -At 7:00AM
 Register-ScheduledTask -TaskName "SecondBrainDailyScoring" -Action $Action -Trigger $Trigger -Description "Second Brain OS Daily Scoring Job"
 ```
 
 ---
 
-## 7. 全環境診断・健全性検証スクリプト (`verify_environment.py`)
+## 7. 全環境診断・健全性検証 (`tools/doctor.py`)
 
-構築作業完了後、agy CLI、JEV用Ollama、Reviewdog、Ruff、Pytest、LangGraphの動作状況を一括診断するスクリプトの実装仕様である。
+環境および登録済みサテライトの受入態勢（`metadata/.project-registry.json`, `docs/project.json`, レガシー `tasks.md` / `docs/issues/` 不在確認, 言語別実行環境, `.gitignore`, GitHub Issues SSOT 疎通, 標準ラベル, Reviewdog）は、実装済みの [`tools/doctor.py`](../../tools/doctor.py) を用いて一括診断・自動修復する。
 
-> **現行注記**: Ollama APIはJEV用に確認し、agyの実行ファイル解決と認証状態を確認する。agy未導入時は他の診断結果を隠さず、agy項目をWARNとして報告する。実機品質は試験書L3〜L5で確認する。
+```bash
+# 全登録サテライトを一括診断
+uv run python tools/doctor.py --all
 
-```python
-#!/usr/bin/env python3
-"""Second Brain OS (Rev.4.3) 環境健全性診断スクリプト"""
-
-import os
-import sys
-import subprocess
-import urllib.request
-import json
-
-
-def print_result(check_name: str, passed: bool, msg: str = ""):
-    icon = "✓" if passed else "✗"
-    status = "PASS" if passed else "FAIL"
-    print(f"[{icon}] {status} | {check_name} {': ' + msg if msg else ''}")
-    if not passed:
-        sys.exit(1)
-
-
-def main():
-    print("=== Second Brain OS Full Environment Diagnostic ===")
-
-    # 1. Python バージョンチェック
-    py_ver = sys.version_info
-    print_result(
-        "Python Version >= 3.10",
-        py_ver.major == 3 and py_ver.minor >= 10,
-        f"{py_ver.major}.{py_ver.minor}",
-    )
-
-    # 2. Ollama API アクセスチェック
-    try:
-        with urllib.request.urlopen("http://localhost:11434/api/version", timeout=3) as res:
-            data = json.loads(res.read().decode())
-            print_result("Ollama API Server Running", True, f"v{data.get('version')}")
-    except Exception as e:
-        print_result("Ollama API Server Running", False, str(e))
-
-    # 3. 新OSSスタック (Aider, Reviewdog, Ruff, Pytest) コマンドチェック
-    for tool, cmd_flag in [
-        ("aider", "--version"),
-        ("reviewdog", "-version"),
-        ("ruff", "--version"),
-        ("pytest", "--version"),
-    ]:
-        try:
-            out = subprocess.check_output([tool, cmd_flag], stderr=subprocess.STDOUT, text=True)
-            print_result(f"Tool '{tool}' Available", True, out.splitlines()[0].strip())
-        except Exception as e:
-            print_result(f"Tool '{tool}' Available", False, str(e))
-
-    # 4. LangGraph / LiteLLM Python パッケージインポートチェック
-    try:
-        import langgraph
-        import litellm
-        import pytest_jsonreport
-
-        print_result(
-            "Python OSS Packages (LangGraph, LiteLLM, etc.)", True, "Imported successfully"
-        )
-    except ImportError as e:
-        print_result("Python OSS Packages", False, f"ImportError: {e}")
-
-    # 5. 台帳インデックス構造チェック
-    reg_path = "metadata/.project-registry.json"
-    print_result("Project Registry File Exists", os.path.exists(reg_path), reg_path)
-
-    print("=== All Diagnostics Passed Successfully! ===")
-
-
-if __name__ == "__main__":
-    main()
+# 特定サテライトを診断し不足設定を自動修復
+uv run python tools/doctor.py <PROJECT_KEY> --fix
 ```
