@@ -1,20 +1,20 @@
 # 詳細設計書（品質ゲート・レビュー仕様）
 
-| 項目               | 内容                                                                                                                                                          |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 文書名             | Second Brain OS - 品質ゲートおよびレビュー制御仕様                                                                                                            |
-| 版数               | Rev.1.3（Epic #116: planner / reviewer LLM の agy 移行に伴う記述の一般化と、JEV 据え置きの明記）                                                              |
-| 改訂日             | 2026年11月4日                                                                                                                                                 |
-| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-005（Backend 仕様）、PM-053、PM-054、Epic #116                                                  |
-| 対象コンポーネント | `spec_draft_node (JEV 計画適合性ゲート)`、`lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node (JEV レビュー合否二次ゲート)`、`reviewdog`       |
-| 役割               | 計画段階のYAGNI検問、コード生成後の静的解析、自動テスト、LLMによるコードレビューとJEV決定論的二次検問、およびRDJSONフォーマットへの変換とエスカレーション処理 |
+| 項目               | 内容                                                                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文書名             | Second Brain OS - 品質ゲートおよびレビュー制御仕様                                                                                                                              |
+| 版数               | Rev.1.4（多言語静的検証 `tools/lang/`・`test_command` 対応、PR後 CI 監視 `ci_watch_node` を反映）                                                                               |
+| 改訂日             | 2026年11月27日                                                                                                                                                                  |
+| 関連文書           | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、SBOS-DD-005（Backend 仕様）、PM-053、PM-054、Epic #116、#167、#171                                                       |
+| 対象コンポーネント | `spec_draft_node (JEV 計画適合性ゲート)`、`lint_node`、`run_pytest_node`、`test_feedback_node`、`review_node (JEV レビュー合否二次ゲート)`、`ci_watch_node`、`reviewdog`       |
+| 役割               | 計画段階のYAGNI検問、コード生成後の多言語静的解析、自動テスト、LLMによるコードレビューとJEV決定論的二次検問、RDJSON変換、PR後CI監視およびエスカレーション処理                  |
 
 ---
 
 ## 1. 概要と基本方針
 
 本仕様は、エージェントの自律実行ループにおける「多層防衛品質ゲート」を定義する。
-品質ゲートは、コード生成前の「計画適合性検問（Defense 0: JEV Plan Conformance）」、生成直後の「Ruff 静的解析（Defense 1）」、「pytest 自動テスト（Defense 2）」、および「LLM 静的コードレビュー ＋ JEV 決定論的二次検問（Defense 3: JEV Review Conformance）」の多層防衛で構成される。
+品質ゲートは、コード生成前の「計画適合性検問（Defense 0: JEV Plan Conformance）」、生成直後の「多言語静的解析・構文検証（Defense 1: Ruff / Tree-sitter）」、「自動テスト（Defense 2: pytest / 言語別・カスタムコマンド）」、および「LLM 静的コードレビュー ＋ JEV 決定論的二次検問（Defense 3: JEV Review Conformance）」、さらに PR 起票後の「GitHub Actions CI 監視・修復ループ（Defense 4: `ci_watch_node`）」の多層防衛で構成される。
 
 ### 1.0 Epic #116（agy 移行）との関係
 
@@ -25,7 +25,7 @@
 
 ### 1.1 計画適合性検問ゲート (`spec_draft_node` / Defense 0: JEV Plan Conformance)
 
-* **目的**: コード編集エンジン（現行 Aider、移行後 agy）による本格的なコード生成に入る前に、Planner LLM が策定した `impl_plan`（Definition of Done / 実装方針計画）が Issue の要求仕様を逸脱・肥大化（YAGNI 違反・勝手な機能追加）させていないかを水際で検証し、計算資源（現行はローカル GPU、移行後は agy の利用枠）の無駄な浪費と後段の失敗を未然に防止する。
+* **目的**: コード編集エンジン（現行 agy）による本格的なコード生成に入る前に、Planner LLM が策定した `impl_plan`（Definition of Done / 実装方針計画）が Issue の要求仕様を逸脱・肥大化（YAGNI 違反・勝手な機能追加）させていないかを水際で検証し、計算資源（agy の利用枠）の無駄な浪費と後段の失敗を未然に防止する。
 * **判定方式**: Zero-Decode 高速判定基盤 JEV (`submodules/jev-localsystem`) の `NoulTask`（規程適合判定）による 39ms 1トークン推論。
 * **入力パラメータ**:
   1. `instruction`: Issue 本文および要求仕様
@@ -40,25 +40,35 @@
 
 ## 2. 品質 Adapter (`lint_node` / `run_pytest_node`)
 
-### 2.1 Ruff 実行仕様
-* **実行内容**: 
-  1. `ruff format` 
-  2. `ruff check --fix --unsafe-fixes --ignore E501` 
+### 2.1 多言語静的解析・構文検証仕様 (`lint_node`)
+`target_files` の拡張子に応じて言語別に検証を実行する（Issue #169、詳細 API は `docs/features/multi_language_verifiers.md` 参照）。
+* **Python (`.py`)**:
+  1. `ruff format`
+  2. `ruff check --fix --unsafe-fixes --ignore E501`
   3. 最終チェックとして `ruff check --ignore E501` を実行する。
-* **副作用・失敗契約**: 
-  * lintは単なる検査専用ではなく、対象ファイルを直接自動修正する（`--unsafe-fixes`）。
-  * 最終チェックが非ゼロ終了となった場合、`LINT_ERROR` として扱い、`lint_round` を加算する。累積失敗が `max_round`（3回）に達した時点（3回目の失敗）で `FAILED_B7` にエスカレーションされる。
+* **TypeScript / JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`)**:
+  * `tools/lang`（`get_verifier("typescript")`）の Tree-sitter パーサーによる構文検証を実施する。
+* **Rust (`.rs`)**:
+  * `tools/lang`（`get_verifier("rust")`）の Tree-sitter パーサーによる構文検証を実施する。
+* **対象言語ファイルが 0 件の場合**:
+  * `lint_passed` として次工程へ進む。
+* **副作用・失敗契約**:
+  * Python の lint は検査専用ではなく、対象ファイルを直接自動修正する（`--unsafe-fixes`）。
+  * いずれかの言語で失敗した場合は `LINT_ERROR` として `lint_round` を加算し、修正指針を付与して `retry_code` へ差し戻す。累積失敗が `max_round`（3回）に達した時点（3回目の失敗）で `FAILED_B7` にエスカレーションされる。
 
-### 2.2 pytest 実行仕様
-* **実行内容**: 
-  * 関連テスト、または `tests/test_*.py` を `python -m pytest --json-report` で実行する。
-  * `ui` や `gui` を含む名前のフォールバックテストは実行対象から除外する。
-* **副作用・失敗契約**: 
-  * JSONレポートは `.report.json` に一時保存され、処理終了時に `finally` ブロックで確実に削除される。
+### 2.2 テスト実行仕様 (`run_pytest_node`)
+`project.json`（`GraphState`）の `language` および `test_command` に応じてテストコマンドを選択実行する（Issue #170）。
+* **実行内容**:
+  * **カスタム `test_command` 指定時**: 指定コマンドを優先実行する。
+  * **Python（`test_command` 未指定）**: 関連テスト、または `tests/test_*.py`（`ui` / `gui` を含むフォールバックテスト除外）を `python -m pytest --json-report` で実行する。
+  * **TypeScript / JavaScript**: `npm test` を実行する（PATH に `npm` が無い場合は警告を出してスキップし `test_passed`）。
+  * **Rust**: `cargo test` を実行する（PATH に `cargo` が無い場合は警告を出してスキップし `test_passed`）。
+* **副作用・失敗契約**:
+  * Python の JSON レポートは `.report.json` に一時保存され、処理終了時に `finally` ブロックで確実に削除される。
   * テストが失敗した場合、`TEST_ERROR` として `test_round` を加算し、累積失敗が `max_round`（3回）に達した時点（3回目の失敗）で `FAILED_B7` にエスカレーションされる。
 
 ### 2.3 テスト助言 (`test_feedback_node`)
-* **実行内容**: テストが失敗した場合、`test_feedback` intent を用いて Planner LLM に失敗ログを渡し、修正のための助言を生成させる（`call_llm` 経由。実行基盤は移行後 agy、SBOS-DD-005 §4.1）。
+* **実行内容**: テストが失敗した場合、`test_feedback` intent を用いて Planner LLM に失敗ログを渡し、修正のための助言を生成させる（`call_llm` 経由。実行基盤は agy、SBOS-DD-005 §4.1）。
 * **副作用・失敗契約**: 助言生成自体がLLMエラー等で失敗した場合でも、テスト失敗の事実（rawテスト出力）は維持し、そのまま修正ループ（`retry_code`）へ継続させる。
 
 ## 3. Review Adapter (`review_node` / Reviewdog)
@@ -88,15 +98,24 @@
 * **状態遷移契約**:
   * **実行契機**: Reviewer LLM が `verdict == "LGTM"` を返した場合のみ実行（LLM が既に `changes_requested` とした場合は JEV をスキップしてそのまま差し戻す）。
   * **適合 (`is_valid == True`)**: `state["review_lgtm"] = True` を確定し、`done_node` へ進行。
-  * **不適合 (`is_valid == False`)**: `verdict` を `"changes_requested"` に強制上書き。Aider への次回復帰メッセージ（`aider_message`）に `【JEV REVIEW REJECTED】JEV二次検問により不適合と判定されました: <理由>` を注入し、`retry_code` で差し戻す。
+  * **不適合 (`is_valid == False`)**: `verdict` を `"changes_requested"` に強制上書き。コード編集エンジンへの次回復帰メッセージ（`aider_message`）に `【JEV REVIEW REJECTED】JEV二次検問により不適合と判定されました: <理由>` を注入し、`retry_code` で差し戻す。
   * **フェイルオープン契約**: JEV 未展開、初期化例外、モデル通信エラー等の異常時は安全にバイパス（`True`）し、Reviewer LLM の判定をそのまま採用してシステム停止を防ぐ。
-  * **Ollama 停止時の注意【Epic #116 後】**: JEV は Ollama に依存するため、Ollama を停止すると二次検問は無言でバイパスされ、Reviewer LLM（移行後は agy）の判定のみが採用される。agy 移行後の E2E 検証（Issue #123）は、Ollama を起動したまま行い、JEV を含めた動作を確認する。
+  * **Ollama 停止時の注意**: JEV は Ollama に依存するため、Ollama を停止すると二次検問は無言でバイパスされ、Reviewer LLM（agy）の判定のみが採用される。E2E 検証時は Ollama を起動したまま行い、JEV を含めた動作を確認する。
   * **監査ログ**: JEV の判定確信度（`confidence`）、レイテンシ、判定ステータスを `review_rounds` 履歴オブジェクトに記録する。
 
 ### 3.2 Reviewdog によるアノテーション
 * **実行内容**: 構造化されたLLMレビューコメントを RDJSON 形式に変換し、それを標準入力で渡して `reviewdog -f=rdjson -diff="git diff HEAD"` を実行する。
 * **副作用・失敗契約**: Reviewdogは補助的な表示機能（CLIやPR上のコメント用）であり、Reviewdog自体の非ゼロ終了や実行例外はログに記録するが、LLMレビュー結果（`review_verdict`）を無効化・中断させることはない。
 * **未導入時の扱い（Issue #106）**: 実行前に `shutil.which("reviewdog")` で存在を確認し、PATH に無い場合は実行せずスキップする（INFO ログ1行）。`reviewdog_result` には `{"returncode": null, "skipped": "not_installed"}` を記録し、導入済みで失敗した場合（`returncode` が数値）と区別できるようにする。`tools/doctor.py` の `check_reviewdog` が未導入を `WARN`（任意の依存）として報告する。
+
+### 3.3 PR 後 CI 監視・自律修復ゲート (`ci_watch_node` / Defense 4: Issue #171)
+
+* **目的**: `done_node` での PR 起票後、`watch_ci=True`（CLI `--watch-ci` または `project.json` の `watch_ci`）が指定されている場合に GitHub Actions の実行完了を監視し、CI 失敗時の自動修復ループを実現する。
+* **実行内容**:
+  * `gh pr list` / `gh pr checks --json name,state,bucket,link` をポーリング間隔 `ci_poll_interval`（既定 15 秒）、タイムアウト `ci_timeout_seconds`（既定 600 秒）で監視する。
+  * **All Green**: `status = "COMPLETED"` として正常終了する。
+  * **Fail**: `gh run list` / `gh run view --log-failed` で失敗ログ（最大 3000 文字）を抽出し、`ci_round` を加算・`error_category = "CI_ERROR"` を設定する。`ci_round < max_ci_round`（既定 2）であれば復旧指示を `aider_message` に注入して `retry_code`（`code_node`）へ差し戻す。上限到達時は `FAILED_CI` とする。
+  * **Timeout**: 制限時間超過時は `status = "FAILED_CI"`, `error_category = "CI_ERROR"` としてエスカレーションする。
 
 ## 4. エスカレーション (`escalate_node`)
 

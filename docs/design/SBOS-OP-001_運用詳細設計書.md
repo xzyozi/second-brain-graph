@@ -4,8 +4,8 @@
 | 項目     | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | :------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 文書番号 | SBOS-OP-001                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 版数     | Rev.4.8（Epic #116: agy 移行に伴う障害対応・ロールバック手順の追記）                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 改訂日   | 2026年11月4日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 版数     | Rev.4.9（GitHub Issues SSOT・`ci_watch_node`・多言語検証・現行ツールパス整合）                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 改訂日   | 2026年11月27日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 作成日   | 2026年7月27日                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 対象読者 | 運用エンジニア / プロジェクトリード / DevOpsエンジニア                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 関連文書 | SBOS-BD-002（基本設計書）、SBOS-DD-003（詳細設計書）、[SBOS-DD-004](SBOS-DD-004_Aider%E7%B5%B1%E5%90%88%E4%BB%95%E6%A7%98.md)、[SBOS-DD-005](SBOS-DD-005_Backend_GPU%E3%83%AA%E3%83%BC%E3%82%B9%E4%BB%95%E6%A7%98.md)、[SBOS-DD-006](SBOS-DD-006_%E5%93%81%E8%B3%AA%E3%82%B2%E3%83%BC%E3%83%88_%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E4%BB%95%E6%A7%98.md)、[SBOS-DD-007](SBOS-DD-007_%E6%B0%B8%E7%B6%9A%E5%8C%96_%E6%8E%92%E4%BB%96%E5%88%B6%E5%BE%A1%E4%BB%95%E6%A7%98.md)、SBOS-ENV-001（環境構築仕様書）、SBOS-PM-005（課題一覧） |
@@ -16,16 +16,19 @@
 
 本システムの強みは、夜間や朝のバッチ処理による自動優先度計算と、人間の対話承認を組み合わせたハイブリッド運用にある。以下に標準的な日次運用サイクルを規定する。
 
-### 1.1 朝の自動評価バッチ（cron / Task Scheduler 連携）
-毎朝 07:00 JST に、母艦から全衛星のタスクを自動スキャンしてスコアリングおよびブロッカー検出を行うバッチジョブを実行する。
+### 1.1 定期評価バッチ（スコアリング ＆ 夜間ワーカー）
+母艦から全衛星の GitHub Issues（SSOT）を自動スキャンし、ブロッカー除外（PM-039）・優先度スコアリングおよび自律実行を行う。
 
-#### crontab 設定例 (Linux / macOS)
+#### バッチ実行コマンド例 (Linux / macOS)
 ```bash
-# m h  dom mon dow   command
-0 7 * * * cd ~/second-brain && /home/user/.local/bin/uv run python tools/score-issues.py && /home/user/.local/bin/uv run python tools/check-blockers.py && /home/user/.local/bin/uv run python tools/notify.py --event daily_summary > ~/second-brain/tools/.cache/daily_batch.log 2>&1
+# 優先度スコアリングキャッシュ生成 (GitHub Issues SSOT 取得 + ブロッカー除外)
+uv run python tools/score_issues.py > tools/.cache/daily_batch.log 2>&1
+
+# 夜間自律ワーカーの起動 (config/nightly_worker.toml に準拠、--loop で常駐実行も可)
+uv run python tools/nightly_task_worker.py --config config/nightly_worker.toml
 ```
 
-#### スコアリング計算数式と判定根拠 (`score-issues.py`)
+#### スコアリング計算数式と判定根拠 (`tools/score_issues.py`)
 全 Issue に対し、以下の4軸数式を適用して 0〜100点 のスコアを算出する。
 $$\text{Total} = (P \times 3.0) + (F \times 2.0) + (E \times 1.5) + (D \times 2.0)$$
 $$\text{Score} = \frac{\text{Total}}{42.5} \times 100$$
@@ -60,12 +63,13 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
    ```bash
    uv run python tools/core/orchestrator_graph.py execute --issue-id EC-012
    ```
-   - ① `plan_node` (LiteLLM / Planner による要件指示書生成)
-   - ② `code_node`（agyによる衛星コード編集。edit_guard適用）
-   - ③ `lint_node`（Ruff高速静的解析、失敗時はエラーログを蓄積し `code_node` へ復帰）
-   - ④ `test_node`（pytest実行、失敗時はエラーログを蓄積し `code_node` へ復帰）
-   - ⑤ `review_node`（agy Reviewer監査、JEV二次検問、Reviewdogアノテーション表示）
-   - ⑥ `done_node` (LGTMは完了ではなく遷移条件。PR作成を行い、成功時は `state.json` を `COMPLETED` に、失敗時は `PR_FAILED` に更新。`execution_history.json` へ成果記録、ロック解放)
+   - ① `spec_draft_node`（Planner LLM による実装方針策定 ＋ JEV 計画適合性検問）
+   - ② `code_node`（agy による衛星コード編集。`edit_guard` 適用）
+   - ③ `lint_node`（Python は Ruff、TS/JS/Rust は `tools/lang` Tree-sitter 構文検証。失敗時はエラーログを蓄積し `code_node` へ復帰）
+   - ④ `test_node`（`pytest` / `npm test` / `cargo test` / カスタム `test_command` 実行。失敗時は `test_feedback_node` を経て `code_node` へ復帰）
+   - ⑤ `review_node`（agy Reviewer 監査、JEV 二次検問、Reviewdog アノテーション表示）
+   - ⑥ `done_node`（LGTM は完了ではなく遷移条件。PR 作成を行い、成功時は `state.json` を `COMPLETED` に、失敗時は `PR_FAILED` に更新。`execution_history.json` へ成果記録、ロック解放）
+   - ⑦ `ci_watch_node`（`--watch-ci` または `project.json.watch_ci=true` 時のみ実行。GitHub Actions CI を監視し、失敗時はログを抽出して `code_node` へ差し戻し、上限到達時は `FAILED_CI`）
    
    > **注意:** `orchestrator_graph.py` は作業ブランチでPRを自動作成して終了する。成果物の最終確認後、運用者が GitHub 等で PR をレビューし、問題なければマージを行う（PM-036）。手動での `git commit` は不要である。
 
@@ -85,9 +89,9 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 
 
 ### ケース1: LLM 応答パース失敗 (`JSON抽出失敗` / パースエラー)
-- **症状:** `llm_client.py` (LiteLLM) で `JSON抽出失敗` が出力され、`changes_requested` にフォールバックする。
+- **症状:** `tools/backends/llm_client.py` で `JSON抽出失敗` が出力され、`changes_requested` にフォールバックする。
 - **対処:**
-  - `rm -f tools/.cache/priority-cache.json tools/.cache/blocked.json` でキャッシュクリア。
+  - `rm -f tools/.cache/priority-cache.json` で優先度キャッシュをクリアし、`uv run python tools/score_issues.py` で再生成する。
   - 対象 Issue の説明文が長すぎる場合は、タスクを分割して指示文を簡潔にする。
 
 ### ケース2: テスト/静的解析の継続失敗 (`max_round` 到達)
@@ -112,9 +116,9 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
   - 差分に問題がない場合は手動でコミット・PR作成を引き継ぐ。破棄する場合は `git restore .` やブランチ削除等を行う。
 
 ### ケース5: レビュー/テスト/lint試行上限到達 (B7 ブロッカー)
-- **症状:** 朝の自動スキャンバッチで `tools/.cache/blocked.json` に `B7` ブロッカーとして登録される。
+- **症状:** `FAILED_B7` として実行が停止し、連続発生時は自動 Resume ガードが作動する。
 - **監査項目:**
-  - `metadata/projects/<project-key>/state.json` の該当 Issue における `"status": "FAILED_B7"` を確認。
+  - `tools/.cache/projects/<project-key>/state.json` の該当 Issue における `"status": "FAILED_B7"` および `consecutive_b7` を確認。
   - `tools/.cache/execution_history.json` を参照し、`lint_round` / `test_round` / `review_round` のどれで上限に達したかを特定する。過去の試行記録は時系列で監査・追跡する。
 - **復旧手順:**
   1. 人間が原因コード・要件定義・テストコードを修復する。
@@ -142,16 +146,16 @@ Rev.4.0 より OpenCode CLI は廃止され、LangGraph ベースのエントリ
 2. agy実行環境でのサンドボックス実行・JSON契約確認。
 3. Reviewerによる監査厳密性テスト。
 
-### 4.2 ロールバック（切り戻し）手順【現行・ローカルモデル更新時】
-> agy 経路から旧経路へ戻す手順は、§3 ケース6 を参照すること。以下は、ローカルモデルを更新して不安定だった場合の手順である。
+### 4.2 ロールバック（切り戻し）手順【設定・ローカルモデル更新時】
+> agy 経路から旧経路へ戻す手順は、§3 ケース6 を参照すること。以下は、JEV 用ローカルモデルや `config/models.yaml` を更新して不安定だった場合の手順である。
 
 ```bash
-# 1. tools/backends/llm_client.py のモデル指定を安定版へ戻す
-git checkout ~/second-brain/tools/llm_client.py
+# 1. config/models.yaml の設定を安定版へ戻す
+git checkout config/models.yaml
 
-# 2. 不安定モデルの削除とキャッシュクリア
+# 2. 不安定な JEV 用モデルの削除と優先度キャッシュクリア
 ollama rm <unstable-model-tag>
-rm -f tools/.cache/priority-cache.json tools/.cache/blocked.json
+rm -f tools/.cache/priority-cache.json
 ```
 
 ---
